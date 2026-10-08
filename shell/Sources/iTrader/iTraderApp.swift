@@ -5,6 +5,7 @@ import AppKit
 @main
 struct iTraderApp: App {
     @StateObject private var appState = AppState()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
         WindowGroup("iTrader 智能交易系统") {
@@ -36,6 +37,35 @@ struct iTraderApp: App {
             }
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+// MARK: - App Delegate to handle dock icon click
+class AppDelegate: NSObject, NSApplicationDelegate {
+    
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Handle application open events (like dock icon click when already running)
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLEvent(_:withReply:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+    }
+    
+    @objc func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReply reply: NSAppleEventDescriptor) {
+        // This gets called when dock icon is clicked
+        NSApp.windows.first?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+    
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // This gets called when dock icon is clicked and app is already running
+        if !flag {
+            NSApp.windows.first?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        return true
     }
 }
 
@@ -194,7 +224,7 @@ struct RootView: View {
     }
 }
 
-/// 侧边栏导航按钮（SidebarButton：高 44、圆角 8、文字左对齐）
+// MARK: - 侧边栏导航按钮（SidebarButton：高 44、圆角 8、文字左对齐）
 private struct SidebarNavButton: View {
     let title: String
     let isSelected: Bool
