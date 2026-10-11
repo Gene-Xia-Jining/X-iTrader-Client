@@ -67,44 +67,35 @@ jobs:
 
     strategy:
       fail-fast: false
+      # Windows 暂不发布：Qt 打包链已随架构切换移除，SwiftUI 壳仅支持 Apple 平台，
+      # 待 Windows 壳落地后恢复 matrix 与 Package 步骤
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [macos-latest]
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          # 与本地 .venv 一致（3.14），保证 CI 产物与本地验证过的打包结果同源
+          python-version: "3.14"
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # 建在仓库根的 .venv：build_app.sh 固定调用 .venv/bin/pyinstaller
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements.txt
 
       - name: Build (macOS)
         if: runner.os == 'macOS'
-        run: pyinstaller specs/mac.spec
-
-      - name: Build (Windows)
-        if: runner.os == 'Windows'
-        run: pyinstaller specs/windows.spec
+        run: ./build_app.sh
 
       - name: Package macOS
         if: runner.os == 'macOS'
         run: |
           cd dist
           zip -ry iTrader-${{ needs.version.outputs.version }}-macos.zip iTrader.app
-
-      - name: Package Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          cd dist
-          Compress-Archive `
-            -Path iTrader/* `
-            -DestinationPath iTrader-${{ needs.version.outputs.version }}-windows.zip `
-            -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -130,7 +121,6 @@ jobs:
           body: Automated GitHub release for iTrader Client
           files: |
             artifacts/itrader-macOS/*.zip
-            artifacts/itrader-Windows/*.zip
             artifacts/itrader-src-patch/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
