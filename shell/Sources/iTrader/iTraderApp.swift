@@ -13,38 +13,28 @@ struct iTraderApp: App {
                 .environmentObject(appState)
                 .environment(\.dynamicTypeSize, .xLarge)
                 .frame(minWidth: 960, minHeight: 620)
-                .onAppear { appState.start() }
+                .onAppear {
+                    appState.start()
+                    appDelegate.appState = appState
+                }
         }
         .defaultSize(width: 1180, height: 760)
         .windowResizability(.contentMinSize)
-
-        MenuBarExtra {
-            EmptyView()
-                .environmentObject(appState)
-                .environment(\.dynamicTypeSize, .xLarge)
-        } label: {
-            Button {
-                NSApplication.shared.windows.first?.makeKeyAndOrderFront(nil)
-            } label: {
-                Image(systemName: "gauge.with.dots.needle.bottom.50percent")
-                    .frame(width: 18, height: 18)
-            }
-            .buttonStyle(.plain)
-            .contextMenu {
-                MenuBarView()
-                    .environmentObject(appState)
-                    .environment(\.dynamicTypeSize, .xLarge)
-            }
-        }
-        .menuBarExtraStyle(.window)
     }
 }
 
-// MARK: - App Delegate to handle dock icon click
+// MARK: - App Delegate：菜单栏图标（左键唤回主窗口 / 右键菜单）+ Dock 图标点击唤回
+
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
-    
+
+    // RootView.onAppear 注入，"退出后端"菜单项复用 AppState 的 RPC 退出
+    weak var appState: AppState?
+
+    private var statusItem: NSStatusItem?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Handle application open events (like dock icon click when already running)
+        setupStatusItem()
         NSAppleEventManager.shared().setEventHandler(
             self,
             andSelector: #selector(handleGetURLEvent(_:withReply:)),
@@ -52,18 +42,79 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             andEventID: AEEventID(kAEGetURL)
         )
     }
-    
-    @objc func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReply reply: NSAppleEventDescriptor) {
-        // This gets called when dock icon is clicked
-        NSApp.windows.first?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+
+    // ---- 菜单栏图标 ----
+    // SwiftUI MenuBarExtra 点击图标只能 toggle 弹出内容、无法区分左右键，
+    // 故改用 NSStatusItem 自行分发：左键直接显示主窗口，右键弹出原生菜单。
+
+    private func setupStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item.button?.image = NSImage(systemSymbolName: "gauge.with.dots.needle.bottom.50percent",
+                                     accessibilityDescription: "iTrader")
+        // 左右键都触发同一 action，在 action 里按事件类型分发
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        item.button?.target = self
+        item.button?.action = #selector(statusItemClicked)
+        statusItem = item
     }
-    
+
+    @objc private func statusItemClicked() {
+        let isRightClick = NSApp.currentEvent.map {
+            $0.type == .rightMouseUp || $0.type == .otherMouseUp
+        } ?? false
+        if isRightClick {
+            // 右键：临时挂上菜单再触发一次点击使其弹出，弹完立即清掉，
+            // 保证左键仍走 action 而非 menu
+            statusItem?.menu = buildMenu()
+            statusItem?.button?.performClick(nil)
+            statusItem?.menu = nil
+        } else {
+            showMainWindow()
+        }
+    }
+
+    private func buildMenu() -> NSMenu {
+        let menu = NSMenu()
+        let show = NSMenuItem(title: "显示窗口", action: #selector(showMainWindowAction), keyEquivalent: "f")
+        show.keyEquivalentModifierMask = [.command]
+        let quitBackend = NSMenuItem(title: "退出后端", action: #selector(quitBackendAction), keyEquivalent: "q")
+        quitBackend.keyEquivalentModifierMask = [.command, .option]
+        let quit = NSMenuItem(title: "退出", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quit.keyEquivalentModifierMask = [.command]
+        menu.addItem(show)
+        menu.addItem(.separator())
+        menu.addItem(quitBackend)
+        menu.addItem(quit)
+        return menu
+    }
+
+    @objc private func showMainWindowAction() { showMainWindow() }
+
+    @objc private func quitBackendAction() {
+        appState?.quitBackend()
+    }
+
+    /// 唤回主窗口：最小化则还原，并置前激活。
+    /// macOS 14+ 收紧后台激活：activate 只有在真实用户点击的调用栈内才生效；
+    /// orderFrontRegardless 兜底保证即使激活被系统拒绝，窗口也强制排到最前可见。
+    func showMainWindow() {
+        // 排除 NSPanel 等辅助窗口，只找真正的业务主窗口
+        let window = NSApp.windows.first { !($0 is NSPanel) && $0.canBecomeKey }
+        window?.deminiaturize(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless()
+    }
+
+    // ---- Dock 图标点击（已在运行时再次点击 Dock / 通过 URL 唤起）----
+
+    @objc func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReply reply: NSAppleEventDescriptor) {
+        showMainWindow()
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        // This gets called when dock icon is clicked and app is already running
         if !flag {
-            NSApp.windows.first?.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            showMainWindow()
         }
         return true
     }
@@ -190,7 +241,7 @@ struct RootView: View {
     }
 
     private var serverConnected: Bool {
-        appState.engineStatus.accounts.contains { $0.serverConnected }
+        appState.engineStatus.serverOnline
     }
 
     private var statusBar: some View {

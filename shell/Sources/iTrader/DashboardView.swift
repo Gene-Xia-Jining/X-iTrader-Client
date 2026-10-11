@@ -75,7 +75,7 @@ struct DashboardView: View {
     // ---- 数据推导（对应 Qt MainViewModel / sync_accounts_to_dashboard）----
 
     private var serverConnected: Bool {
-        appState.engineStatus.accounts.contains { $0.serverConnected }
+        appState.engineStatus.serverOnline
     }
 
     private var tradingStatusText: String {

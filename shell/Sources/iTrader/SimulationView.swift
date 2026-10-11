@@ -9,10 +9,9 @@ struct SimulationView: View {
     @State private var phone = ""
     @State private var password = ""
     @State private var passwordVisible = false
-    // 品种单选（服务器品种 + 手动添加）
+    // 品种单选（服务器品种；已订阅但不在服务器列表的品种保留显示）
     @State private var selectedSymbol = ""
-    @State private var simManualSymbols: [String] = []
-    @State private var manualSymbol = ""
+    @State private var keptSymbols: [String] = []
     // 测试连接进行中（按钮置灰）
     @State private var testing = false
     // 弹窗（对应 Qt QMessageBox）
@@ -43,7 +42,6 @@ struct SimulationView: View {
 
                     guideLabel("4，选择交易品种：")
                     symbolPicker
-                    manualAddRow
                     hintLabel("提示：模拟帐户不支持组合/套利和期权交易，仅国内商品和股指国债。")
                 }
                 .padding(20)
@@ -163,15 +161,13 @@ struct SimulationView: View {
     private var symbolPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 8) {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 10)], alignment: .leading, spacing: 10) {
+                FlowLayout(spacing: 10) {
                     ForEach(simAllSymbols, id: \.self) { symbol in
-                        SymbolCapsule(symbol: symbol, isOn: Binding(
+                        SymbolCapsule(label: appState.displaySymbol(symbol), isOn: Binding(
                             get: { selectedSymbol == symbol },
                             set: { isOn in
-                                if isOn { selectedSymbol = symbol }
-                                if isOn && !simManualSymbols.contains(symbol) {
-                                    simManualSymbols.append(symbol)
-                                }
+                                selectedSymbol = isOn ? symbol : ""
+                                saveSymbolSelection()
                             }
                         ))
                     }
@@ -186,29 +182,10 @@ struct SimulationView: View {
         }
     }
 
-    /// 手动添加品种（SwiftUI 版保留的能力：获取失败时仍可选择品种）
-    private var manualAddRow: some View {
-        HStack(spacing: 8) {
-            TextField("手动添加品种（如 SHFE.cu2501）", text: $manualSymbol)
-                .textFieldStyle(.plain)
-                .font(AppTheme.dimFont)
-                .padding(.horizontal, 12)
-                .frame(width: 320, height: 30)
-                .background(AppTheme.inputBg(scheme))
-                .cornerRadius(8)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(AppTheme.hairline(scheme), lineWidth: 1)
-                )
-                .onSubmit(addManualSymbol)
-            AppButton("添加", variant: .secondary, size: .inline) { addManualSymbol() }
-        }
-    }
-
-    /// 模拟页可选品种：服务器品种在前，手动添加在后（不重复）
+    /// 模拟页可选品种：服务器品种在前；已订阅但不在服务器列表的品种保留显示（merge 规则）
     private var simAllSymbols: [String] {
         var result = appState.serverSymbols
-        for s in simManualSymbols where !result.contains(s) {
+        for s in keptSymbols where !result.contains(s) {
             result.append(s)
         }
         return result
@@ -221,17 +198,26 @@ struct SimulationView: View {
             return "获取品种失败: \(appState.symbolsMessage)"
         }
         if !appState.serverSymbols.isEmpty {
-            return "共 \(appState.serverSymbols.count) 个品种，选择一个订阅，保存后生效"
+            return "共 \(appState.serverSymbols.count) 个品种，选择一个订阅，选中即生效"
         }
         return "尚未获取品种"
     }
 
-    private func addManualSymbol() {
-        let symbol = manualSymbol.trimmingCharacters(in: .whitespaces)
-        guard !symbol.isEmpty else { return }
-        manualSymbol = ""
-        if !simManualSymbols.contains(symbol) { simManualSymbols.append(symbol) }
-        selectedSymbol = symbol
+    /// 品种选中/取消选中即生效：只提交订阅品种（取消时提交空列表），其余字段沿用已有值；
+    /// 账户尚未建立时仅本地选中，待「保存」随手机号/密码一并提交
+    private func saveSymbolSelection() {
+        guard let sim = appState.accounts.first(where: { $0.kind == "sim" }) else { return }
+        let symbols: [String] = selectedSymbol.isEmpty ? [] : [selectedSymbol]
+        Task {
+            await appState.runAction(method: "accounts.save", params: [
+                "kind": "sim",
+                "account_id": sim.id,
+                "symbols": symbols,
+            ])
+            if !appState.lastActionError.isEmpty {
+                alert = .inputError(appState.lastActionError)
+            }
+        }
     }
 
     // MARK: - 数据与动作
@@ -244,14 +230,14 @@ struct SimulationView: View {
         phone = sim.tqAccount
         if let first = sim.symbols.first {
             selectedSymbol = first
-            if !appState.serverSymbols.contains(first) && simManualSymbols.isEmpty {
-                simManualSymbols = [first]
+            if !appState.serverSymbols.contains(first) && keptSymbols.isEmpty {
+                keptSymbols = [first]
             }
         }
     }
 
     private var hasOptions: Bool {
-        !appState.serverSymbols.isEmpty || !simManualSymbols.isEmpty
+        !appState.serverSymbols.isEmpty || !keptSymbols.isEmpty
     }
 
     private func save() {
@@ -264,10 +250,6 @@ struct SimulationView: View {
         let isNew = !appState.accounts.contains { $0.kind == "sim" }
         guard !password.isEmpty || !isNew else {
             alert = .inputError("密码不能为空")
-            return
-        }
-        if hasOptions && selectedSymbol.isEmpty {
-            alert = .inputError("请选择一个交易品种")
             return
         }
 
@@ -350,6 +332,59 @@ enum ActiveAlert: Identifiable {
     }
 }
 
+// MARK: - 流式布局（胶囊自然跟随：按内容宽度从左到右排，放不下换行）
+
+/// 简单流式布局，代替按列的网格：子视图保持自然宽度依次排列，超出可用宽度时换行。
+struct FlowLayout: Layout {
+    /// 水平与垂直间距共用一个值
+    var spacing: CGFloat = 10
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = computeRows(proposal: proposal, subviews: subviews)
+        let height = rows.isEmpty ? 0
+            : rows.reduce(0) { $0 + $1.height } + CGFloat(rows.count - 1) * spacing
+        return CGSize(width: rows.map(\.width).max() ?? 0, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in computeRows(proposal: proposal, subviews: subviews) {
+            var x = bounds.minX
+            for index in row.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: .unspecified)
+                x += size.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private struct Row {
+        var indices: [Int] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func computeRows(proposal: ProposedViewSize, subviews: Subviews) -> [Row] {
+        let maxWidth = proposal.width ?? .infinity
+        var rows: [Row] = []
+        var current = Row()
+        for (index, view) in subviews.enumerated() {
+            let size = view.sizeThatFits(.unspecified)
+            let gap = current.indices.isEmpty ? 0 : spacing
+            if current.width > 0, current.width + gap + size.width > maxWidth {
+                rows.append(current)
+                current = Row()
+            }
+            current.indices.append(index)
+            current.width += (current.indices.count == 1 ? 0 : spacing) + size.width
+            current.height = max(current.height, size.height)
+        }
+        if !current.indices.isEmpty { rows.append(current) }
+        return rows
+    }
+}
+
 // MARK: - 单选 radio 行
 
 struct RadioRow: View {
@@ -384,18 +419,19 @@ struct RadioRow: View {
 
 // MARK: - 品种胶囊（单选，无 radio 圆点）
 
-/// 品种胶囊：选中态实心主题色、未选描边；整颗按钮可点，无原生 radio 圆点。
+/// 品种胶囊：选中态实心主题色、未选描边；整颗按钮可点，点击切换选中（再点已选中的取消）。
+/// label 为显示文本（如「沪铜｜CU」），选中语义仍由外层 symbol 比较决定。
 struct SymbolCapsule: View {
-    let symbol: String
+    let label: String
     @Binding var isOn: Bool
     @Environment(\.colorScheme) private var scheme
     @State private var hovering = false
 
     var body: some View {
         Button {
-            isOn = true
+            isOn.toggle()
         } label: {
-            Text(symbol)
+            Text(label)
                 .font(AppTheme.bodyFont.weight(.semibold))
                 .lineLimit(1)
                 .padding(.horizontal, 14)

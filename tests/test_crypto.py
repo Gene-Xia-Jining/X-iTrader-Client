@@ -5,10 +5,19 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet
 
-from src.domain.entities import Account
+from src.domain.entities import Account, TradingConfiguration
 from src.infrastructure.security.crypto import PasswordCipher, load_or_create_key
-from tests.test_simulation_page import _make_config
 from src.infrastructure.config.config_service import ConfigService
+
+
+def _make_config(**overrides):
+    fields = dict(
+        server_url="http://127.0.0.1:3080",
+        auto_trade=False,
+        database_path="data/client.db",
+    )
+    fields.update(overrides)
+    return TradingConfiguration(**fields)
 
 
 def _cipher(tmp: Path) -> PasswordCipher:

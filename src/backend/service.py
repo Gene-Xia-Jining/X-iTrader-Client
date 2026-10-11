@@ -66,6 +66,11 @@ class BackendService:
         self._engines: dict[str, TradingEngine] = {}
         self._engine_tasks: dict[str, asyncio.Task] = {}
         self._auto_trade = False
+        # 服务器连通性：常驻心跳任务周期探测 /api/health，启动即连、断线自动恢复
+        self._server_online = False
+        self._server_watch_task: Optional[asyncio.Task] = None
+        # save_config 置位后心跳立即探测一次（新地址即时生效，不等下个周期）
+        self._server_check_now = asyncio.Event()
         # 自动更新状态：已发现的版本 / 下载任务 / 暂存路径 / 包类型
         self._release: Optional[ReleaseInfo] = None
         self._update_task: Optional[asyncio.Task] = None
@@ -83,10 +88,52 @@ class BackendService:
         cleanup_stale_backups()
         self._apply_proxy_env(self.bootstrap.config)
         self._subscribe_events()
+        self._server_watch_task = asyncio.create_task(self._server_watch_loop())
 
     async def shutdown(self) -> None:
         await self.stop_engines()
+        if self._server_watch_task is not None:
+            self._server_watch_task.cancel()
+            try:
+                await self._server_watch_task
+            except asyncio.CancelledError:
+                pass
         await self.bootstrap.shutdown()
+
+    # -------- 服务器心跳 --------
+
+    async def _server_watch_loop(self) -> None:
+        """周期探测服务器连通性。状态变化时广播 status 事件并写日志。"""
+        while True:
+            try:
+                await self.probe_server()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self._log(f"服务器心跳异常: {e}", LogLevel.WARNING)
+            try:
+                await asyncio.wait_for(self._server_check_now.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                pass
+            self._server_check_now.clear()
+
+    async def probe_server(self) -> None:
+        server_url = self.bootstrap.config.server_url
+        online = False
+        if server_url:
+            try:
+                await check_server_health(server_url)
+                online = True
+            except Exception:
+                online = False
+        if online != self._server_online:
+            self._server_online = online
+            if server_url:
+                self._log(
+                    "服务器已连接" if online else f"服务器连接断开: {server_url}",
+                    LogLevel.INFO if online else LogLevel.WARNING,
+                )
+            self._broadcast("status", {"server_online": online})
 
     # -------- 查询 --------
 
@@ -124,6 +171,7 @@ class BackendService:
         return {
             "auto_trade": self._auto_trade,
             "trading_active": any(e.is_running for e in self._engines.values()),
+            "server_online": self._server_online,
             "accounts": accounts,
         }
 
@@ -147,6 +195,7 @@ class BackendService:
         )
         self.bootstrap.save_config(new_config)
         self._apply_proxy_env(new_config)
+        self._server_check_now.set()  # 新地址立即探测，不等下个心跳周期
         await self._on_accounts_changed()
         return {}
 

@@ -40,7 +40,7 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 | event | data | 说明 |
 |---|---|---|
 | `log` | `{message, level, timestamp}` | level: INFO/WARNING/ERROR/SUCCESS |
-| `status` | `{trading_active, server_connected, account_id}` | 引擎状态变化 |
+| `status` | `{trading_active, server_connected, account_id}` | 引擎状态变化；心跳探测到连通性变化时仅含 `{server_online}` |
 | `trading_started` / `trading_stopped` | `{account_id}` | |
 | `signal_received` | `{signal: {id, symbol, side, price, position, updated_at}}` | 服务器信号到达 |
 | `trade_executed` | `{symbol, target_position}` | 调仓指令已交付 |
@@ -62,13 +62,13 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 | `accounts.delete` | `{account_id}` | `{}` |
 | `accounts.test_tq_auth` | `{account, password}` | `{message}` 验证快期权限账户 |
 | `server.test` | `{server_url?}` | `{message}` 缺省用当前配置 |
-| `symbols.fetch` | - | `{symbols: [...], message}` 服务器品种列表 |
+| `symbols.fetch` | - | `{symbols: [...], message}` 服务器品种列表，元素为 `{symbol, name}`（name 为中文名，可能为空；旧版后端为纯代码字符串） |
 | `tokens.status` | - | `{status}` |
 | `tokens.request` | `{description?}` | `{status}` |
 | `engine.start` | - | engines 状态。先探测服务器，未连接则失败；等价 UI 的"自动交易"开 |
 | `engine.stop` | - | engines 状态。等价 UI 的"自动交易"关 |
 | `engine.set_auto_trade` | `{value}` | `{}` 只改自动执行标志，不动引擎 |
-| `engine.status` | - | `{auto_trade, trading_active, accounts: [{account_id, running, server_connected}]}` |
+| `engine.status` | - | `{auto_trade, trading_active, server_online, accounts: [{account_id, running, server_connected}]}`；`server_online` 为后端心跳探测的 iTrader 服务器连通性（启动即测、每 10s 周期、保存配置后立即重测），与引擎是否运行无关 |
 | `update.check` | `{silent?}` | `{status: "latest"\|"available"\|"none"\|"error"\|"skipped", message, version?, has_patch?}`；silent 尊重"跳过此版本" |
 | `update.download` | - | `{status: "downloading"}` 进度走 `update_progress` 事件 |
 | `update.cancel` | - | `{}` |

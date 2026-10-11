@@ -23,10 +23,22 @@ async def fetch_server_symbols(
     server_url: str,
     token_service: Optional["TokenApiService"] = None,
     timeout: float = 5.0,
-) -> list[str]:
-    """获取服务器支持的交易品种列表（/api/symbols），失败时抛出异常。"""
+) -> list[dict]:
+    """获取服务器支持的交易品种列表（/api/symbols），失败时抛出异常。
+
+    返回 [{"symbol": 代码, "name": 中文名(可能为空)}]；兼容旧版服务器的纯代码字符串列表。
+    """
     data = await _get_server_json(server_url, "/api/symbols", token_service, timeout)
-    return [str(s) for s in data.get("symbols", [])]
+    result: list[dict] = []
+    for item in data.get("symbols", []):
+        if isinstance(item, dict):
+            result.append({
+                "symbol": str(item.get("symbol", "")),
+                "name": str(item.get("name") or ""),
+            })
+        else:
+            result.append({"symbol": str(item), "name": ""})
+    return result
 
 
 async def fetch_server_exchanges(

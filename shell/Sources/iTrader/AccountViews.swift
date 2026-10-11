@@ -179,7 +179,7 @@ private struct AccountCardForm: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 10)], alignment: .leading, spacing: 10) {
                 ForEach(allSymbols, id: \.self) { symbol in
                     RadioRow(
-                        symbol: symbol,
+                        symbol: appState.displaySymbol(symbol),
                         isOn: Binding(
                             get: { selectedSymbol == symbol },
                             set: { if $0 { selectedSymbol = symbol } }

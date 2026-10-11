@@ -58,12 +58,15 @@ struct AccountRuntime: Identifiable {
 struct EngineStatus {
     var autoTrade = false
     var tradingActive = false
+    /// iTrader 服务器连通性（后端心跳常驻探测，与引擎是否运行无关）
+    var serverOnline = false
     var accounts: [AccountRuntime] = []
 
     static func from(_ dict: [String: Any]) -> EngineStatus {
         var s = EngineStatus()
         s.autoTrade = dict["auto_trade"] as? Bool ?? false
         s.tradingActive = dict["trading_active"] as? Bool ?? false
+        s.serverOnline = dict["server_online"] as? Bool ?? false
         s.accounts = (dict["accounts"] as? [[String: Any]] ?? []).compactMap { item in
             guard let id = item["account_id"] as? String else { return nil }
             return AccountRuntime(
@@ -118,6 +121,8 @@ final class AppState: ObservableObject {
     @Published var accounts: [AccountInfo] = []
     @Published var config = ConfigInfo()
     @Published var serverSymbols: [String] = []
+    /// 品种中文名映射（symbol -> name），来自服务器品种库；无名的品种不在表中
+    @Published var serverSymbolNames: [String: String] = [:]
     @Published var symbolsMessage = ""
     @Published var symbolsFetching = false
     @Published var tokenStatus = ""
@@ -253,6 +258,10 @@ final class AppState: ObservableObject {
             )
         case "status":
             engineStatus.tradingActive = data["trading_active"] as? Bool ?? engineStatus.tradingActive
+            // 心跳广播只带全局 server_online（无 account_id）；引擎广播两者都带
+            if let online = data["server_online"] as? Bool {
+                engineStatus.serverOnline = online
+            }
             if let accountID = data["account_id"] as? String,
                let idx = engineStatus.accounts.firstIndex(where: { $0.id == accountID }) {
                 engineStatus.accounts[idx].serverConnected = data["server_connected"] as? Bool ?? false
@@ -327,12 +336,35 @@ final class AppState: ObservableObject {
             do {
                 lastActionError = ""
                 let resp = try await call(method: "symbols.fetch")
-                serverSymbols = resp["symbols"] as? [String] ?? []
+                var symbols: [String] = []
+                var names: [String: String] = [:]
+                if let list = resp["symbols"] as? [[String: Any]] {
+                    for item in list {
+                        let symbol = item["symbol"] as? String ?? ""
+                        guard !symbol.isEmpty else { continue }
+                        symbols.append(symbol)
+                        if let name = item["name"] as? String, !name.isEmpty {
+                            names[symbol] = name
+                        }
+                    }
+                } else if let list = resp["symbols"] as? [String] {
+                    symbols = list  // 旧版后端：纯代码列表
+                }
+                serverSymbols = symbols
+                serverSymbolNames = names
                 symbolsMessage = resp["message"] as? String ?? ""
             } catch {
                 symbolsMessage = "获取失败: \(error.localizedDescription)"
             }
         }
+    }
+
+    /// 品种显示文本：有中文名时「中文｜代码」，否则纯代码（选中/保存仍用代码本身）
+    func displaySymbol(_ symbol: String) -> String {
+        if let name = serverSymbolNames[symbol], !name.isEmpty {
+            return "\(name)｜\(symbol)"
+        }
+        return symbol
     }
 
     func testTqAuth(account: String, password: String) async -> String {
