@@ -207,6 +207,7 @@ struct RootView: View {
                     // 切到模拟/实盘页时自动拉取品种（对应 Qt _switch_page 的 on_fetch_symbols）
                     if route == .sim || route == .live {
                         appState.fetchSymbols()
+                        appState.fetchStrategies()
                     }
                 }
             }

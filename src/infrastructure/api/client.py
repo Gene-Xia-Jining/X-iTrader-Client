@@ -51,6 +51,27 @@ async def fetch_server_exchanges(
     return data.get("exchanges", [])
 
 
+async def fetch_server_strategies(
+    server_url: str,
+    token_service: Optional["TokenApiService"] = None,
+    timeout: float = 5.0,
+) -> list[dict]:
+    """获取服务器支持的交易策略列表（/api/strategies），失败时抛出异常。
+
+    返回 [{"id": 策略标识, "name": 显示名, "description": 简介}]。
+    """
+    data = await _get_server_json(server_url, "/api/strategies", token_service, timeout)
+    result: list[dict] = []
+    for item in data.get("strategies", []):
+        if isinstance(item, dict):
+            result.append({
+                "id": str(item.get("id", "")),
+                "name": str(item.get("name") or ""),
+                "description": str(item.get("description") or ""),
+            })
+    return result
+
+
 async def submit_server_symbol(
     server_url: str,
     symbol: str,
@@ -161,14 +182,18 @@ class ServerStreamClient(StrategyStreamClient):
         server_url: str,
         symbols: list[str],
         token_service: Union[TokenApiService, None] = None,
+        strategy: str = "",
     ):
         self.server_url = server_url.rstrip("/")
         self.symbols = symbols
         self.token_service = token_service
+        self.strategy = strategy
 
     async def stream(self):
         symbols = ",".join(self.symbols)
         url = f"{self.server_url}/api/stream?symbols={symbols}"
+        if self.strategy:
+            url += f"&strategy={self.strategy}"
 
         headers = {"Accept": "text/event-stream"}
         if self.token_service is not None:

@@ -94,9 +94,15 @@ class ConfigService:
                     trade_account TEXT NOT NULL DEFAULT '',
                     trade_password TEXT NOT NULL DEFAULT '',
                     symbols TEXT NOT NULL DEFAULT '[]',
+                    strategy TEXT NOT NULL DEFAULT '',
                     enabled INTEGER NOT NULL DEFAULT 1
                 )
             """)
+            # 账户级交易策略选择（服务器 /api/strategies 的策略 id）
+            try:
+                db.execute("ALTER TABLE accounts ADD COLUMN strategy TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
             # 早版实现带 sim_number 列（TqKq 辅模拟账号编号）；模拟账户现固定单账户，删除
             try:
                 db.execute("ALTER TABLE accounts DROP COLUMN sim_number")
@@ -209,6 +215,7 @@ class ConfigService:
                 trade_account=row["trade_account"],
                 trade_password=self._cipher.decrypt(row["trade_password"]),
                 symbols=json.loads(row["symbols"]),
+                strategy=row["strategy"],
                 enabled=bool(row["enabled"]),
             )
             for row in rows
@@ -221,8 +228,8 @@ class ConfigService:
                 """
                 INSERT INTO accounts (
                     id, kind, label, tq_account, tq_password, broker,
-                    trade_account, trade_password, symbols, enabled
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    trade_account, trade_password, symbols, strategy, enabled
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     kind = excluded.kind,
                     label = excluded.label,
@@ -232,6 +239,7 @@ class ConfigService:
                     trade_account = excluded.trade_account,
                     trade_password = excluded.trade_password,
                     symbols = excluded.symbols,
+                    strategy = excluded.strategy,
                     enabled = excluded.enabled
                 """,
                 (
@@ -244,6 +252,7 @@ class ConfigService:
                     account.trade_account,
                     self._cipher.encrypt(account.trade_password),
                     json.dumps(account.symbols, ensure_ascii=False),
+                    account.strategy,
                     int(account.enabled),
                 ),
             )

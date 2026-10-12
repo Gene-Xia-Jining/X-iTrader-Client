@@ -32,7 +32,11 @@ from ..domain.events import (
     TradingStartedEvent,
     TradingStoppedEvent,
 )
-from ..infrastructure.api.client import check_server_health, fetch_server_symbols
+from ..infrastructure.api.client import (
+    check_server_health,
+    fetch_server_strategies,
+    fetch_server_symbols,
+)
 from ..infrastructure.proxy import apply_proxy_environment, server_host
 from ..infrastructure.trading.tqsdk_executor import test_tq_auth_connection
 from ..infrastructure.updater import (
@@ -215,6 +219,8 @@ class BackendService:
             symbols = [str(s) for s in symbols_raw]
         else:
             symbols = None  # 未提供时沿用已有账户的品种
+        strategy_raw = params.get("strategy")
+        strategy = strategy_raw.strip() if isinstance(strategy_raw, str) else None
 
         account_id = params.get("account_id") or ("legacy" if kind == "sim" else "legacy-live")
         existing = self.bootstrap.config_service.get_account(account_id)
@@ -228,6 +234,7 @@ class BackendService:
             trade_account=params.get("trade_account") or (existing.trade_account if existing else ""),
             trade_password=params.get("trade_password") or (existing.trade_password if existing else ""),
             symbols=symbols if symbols is not None else (list(existing.symbols) if existing else []),
+            strategy=strategy if strategy is not None else (existing.strategy if existing else ""),
             enabled=params.get("enabled", existing.enabled if existing else True),
         )
         self.bootstrap.save_account(account)
@@ -277,6 +284,15 @@ class BackendService:
             server_url, token_service=self.bootstrap.token_service
         )
         return {"symbols": symbols, "message": f"获取成功，共 {len(symbols)} 个品种"}
+
+    async def fetch_strategies(self, params: dict) -> dict:
+        server_url = self.bootstrap.config.server_url
+        if not server_url:
+            raise ValueError("未配置服务器地址")
+        strategies = await fetch_server_strategies(
+            server_url, token_service=self.bootstrap.token_service
+        )
+        return {"strategies": strategies, "message": f"获取成功，共 {len(strategies)} 个策略"}
 
     # -------- Token --------
 
@@ -521,6 +537,7 @@ def build_routes(service: BackendService) -> dict:
         "accounts.test_tq_auth": service.test_tq_auth,
         "server.test": service.test_server,
         "symbols.fetch": service.fetch_symbols,
+        "strategies.fetch": service.fetch_strategies,
         "tokens.status": service.token_status,
         "tokens.request": service.request_token,
         "engine.start": service.engine_start,

@@ -98,12 +98,13 @@ class Bootstrap:
         return self._trading_executor
 
     def build_stream_client(self, account) -> ServerStreamClient:
-        """每个账户独立订阅：symbols 取账户自己的品种。"""
+        """每个账户独立订阅：symbols 取账户自己的品种，strategy 取账户所选策略。"""
         if account.id not in self._stream_clients:
             self._stream_clients[account.id] = ServerStreamClient(
                 server_url=self.config.server_url,
                 symbols=account.symbols,
                 token_service=self.token_service,
+                strategy=account.strategy,
             )
         return self._stream_clients[account.id]
 

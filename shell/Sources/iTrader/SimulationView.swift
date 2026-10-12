@@ -12,6 +12,8 @@ struct SimulationView: View {
     // 品种单选（服务器品种；已订阅但不在服务器列表的品种保留显示）
     @State private var selectedSymbol = ""
     @State private var keptSymbols: [String] = []
+    // 交易策略单选（服务器策略目录）
+    @State private var selectedStrategy = ""
     // 测试连接进行中（按钮置灰）
     @State private var testing = false
     // 弹窗（对应 Qt QMessageBox）
@@ -43,6 +45,12 @@ struct SimulationView: View {
                     guideLabel("4，选择交易品种：")
                     symbolPicker
                     hintLabel("提示：模拟帐户不支持组合/套利和期权交易，仅国内商品和股指国债。")
+
+                    HairlineDivider()
+
+                    guideLabel("5，选择交易策略：")
+                    strategyPicker
+                    hintLabel("提示：策略由服务器计算交易信号，客户端按信号执行开仓 / 平仓。")
                 }
                 .padding(20)
             }
@@ -220,6 +228,56 @@ struct SimulationView: View {
         }
     }
 
+    // MARK: - 策略区（单选胶囊，对应品种区的胶囊样式）
+
+    private var strategyPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            FlowLayout(spacing: 10) {
+                ForEach(appState.serverStrategies) { strategy in
+                    SymbolCapsule(label: strategy.name, isOn: Binding(
+                        get: { selectedStrategy == strategy.id },
+                        set: { isOn in
+                            selectedStrategy = isOn ? strategy.id : ""
+                            saveStrategySelection()
+                        }
+                    ))
+                    .help(strategy.description)
+                }
+            }
+            Text(strategyHint)
+                .font(AppTheme.dimFont)
+                .foregroundColor(AppTheme.dim(scheme))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// 策略区状态行（对应品种区 hint 文案规则）
+    private var strategyHint: String {
+        if appState.strategiesFetching { return "正在获取策略..." }
+        if appState.strategiesMessage.hasPrefix("获取失败") {
+            return "获取策略失败: \(appState.strategiesMessage)"
+        }
+        if !appState.serverStrategies.isEmpty {
+            return "共 \(appState.serverStrategies.count) 个策略，选择一个，选中即生效"
+        }
+        return "尚未获取策略"
+    }
+
+    /// 策略选中/取消即生效：只提交 strategy（取消时传空串清除），symbols 等字段沿用已有值
+    private func saveStrategySelection() {
+        guard let sim = appState.accounts.first(where: { $0.kind == "sim" }) else { return }
+        Task {
+            await appState.runAction(method: "accounts.save", params: [
+                "kind": "sim",
+                "account_id": sim.id,
+                "strategy": selectedStrategy,
+            ])
+            if !appState.lastActionError.isEmpty {
+                alert = .inputError(appState.lastActionError)
+            }
+        }
+    }
+
     // MARK: - 数据与动作
 
     /// 用已存模拟账户回填（后端不回传密码，密码留空 = 沿用旧值）；
@@ -233,6 +291,9 @@ struct SimulationView: View {
             if !appState.serverSymbols.contains(first) && keptSymbols.isEmpty {
                 keptSymbols = [first]
             }
+        }
+        if !sim.strategy.isEmpty {
+            selectedStrategy = sim.strategy
         }
     }
 
@@ -264,6 +325,9 @@ struct SimulationView: View {
         if !password.isEmpty { params["tq_password"] = password }
         if hasOptions && !selectedSymbol.isEmpty {
             params["symbols"] = [selectedSymbol]
+        }
+        if !selectedStrategy.isEmpty {
+            params["strategy"] = selectedStrategy
         }
 
         Task {

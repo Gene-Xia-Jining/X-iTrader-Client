@@ -135,6 +135,30 @@ class ConfigServiceEncryptionTest(unittest.TestCase):
         self.assertEqual(self.service.load_accounts(), [])
         self.assertIsNone(self.service.get_account("acc-1"))
 
+    def test_strategy_roundtrip(self):
+        self.service.save_account(_make_account(strategy="turtle_trading"))
+        self.assertEqual(self.service.get_account("acc-1").strategy, "turtle_trading")
+        # 更新其他字段（带原 strategy 值）不清空选择
+        self.service.save_account(_make_account(tq_password="new-pwd", strategy="turtle_trading"))
+        self.assertEqual(self.service.get_account("acc-1").strategy, "turtle_trading")
+        # 显式传空字符串 = 清除选择
+        self.service.save_account(_make_account(strategy=""))
+        self.assertEqual(self.service.get_account("acc-1").strategy, "")
+
+    def test_legacy_db_without_strategy_column_upgrades(self):
+        # 旧库：accounts 表存在但没有 strategy 列，打开时应自动补列且旧数据可读
+        self.service.save_account(_make_account())
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("ALTER TABLE accounts DROP COLUMN strategy")
+        conn.commit()
+        conn.close()
+        reopened = ConfigService(str(self.db_path))
+        self.assertEqual(reopened.get_account("acc-1").strategy, "")
+        account = reopened.get_account("acc-1")
+        account.strategy = "ratio_reversion"
+        reopened.save_account(account)
+        self.assertEqual(reopened.get_account("acc-1").strategy, "ratio_reversion")
+
     def test_legacy_plaintext_db_loads_and_upgrades_on_save(self):
         # 模拟历史明文账户数据：accounts 表存在但密码列直接存明文（无 enc:v1: 前缀）
         self.service.save_account(_make_account())

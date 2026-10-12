@@ -30,6 +30,7 @@ struct AccountInfo: Identifiable, Equatable {
     let broker: String
     let tradeAccount: String
     let symbols: [String]
+    let strategy: String
     let enabled: Bool
 
     var isSim: Bool { kind == "sim" }
@@ -44,9 +45,17 @@ struct AccountInfo: Identifiable, Equatable {
             broker: dict["broker"] as? String ?? "",
             tradeAccount: dict["trade_account"] as? String ?? "",
             symbols: dict["symbols"] as? [String] ?? [],
+            strategy: dict["strategy"] as? String ?? "",
             enabled: dict["enabled"] as? Bool ?? true
         )
     }
+}
+
+/// 服务器提供的交易策略（/api/strategies 目录项）
+struct StrategyInfo: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let description: String
 }
 
 struct AccountRuntime: Identifiable {
@@ -125,6 +134,10 @@ final class AppState: ObservableObject {
     @Published var serverSymbolNames: [String: String] = [:]
     @Published var symbolsMessage = ""
     @Published var symbolsFetching = false
+    /// 服务器提供的交易策略（模拟/实盘页第 5 步单选）
+    @Published var serverStrategies: [StrategyInfo] = []
+    @Published var strategiesMessage = ""
+    @Published var strategiesFetching = false
     @Published var tokenStatus = ""
     @Published var updatePhase = UpdatePhase.idle
     @Published var lastActionError = ""
@@ -355,6 +368,31 @@ final class AppState: ObservableObject {
                 symbolsMessage = resp["message"] as? String ?? ""
             } catch {
                 symbolsMessage = "获取失败: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func fetchStrategies() {
+        guard !strategiesFetching else { return }
+        strategiesFetching = true
+        Task {
+            defer { strategiesFetching = false }
+            do {
+                lastActionError = ""
+                let resp = try await call(method: "strategies.fetch")
+                let list = (resp["strategies"] as? [[String: Any]] ?? []).compactMap { item -> StrategyInfo? in
+                    guard let id = item["id"] as? String, !id.isEmpty else { return nil }
+                    return StrategyInfo(
+                        id: id,
+                        name: item["name"] as? String ?? "",
+                        description: item["description"] as? String ?? ""
+                    )
+                }
+                serverStrategies = list
+                strategiesMessage = resp["message"] as? String ?? ""
+            } catch {
+                serverStrategies = []
+                strategiesMessage = "获取失败: \(error.localizedDescription)"
             }
         }
     }
