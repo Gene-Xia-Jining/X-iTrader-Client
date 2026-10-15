@@ -49,4 +49,4 @@
 ## 构建
 
 > * 可以运行 `./build_app.sh` 执行 macOS `.app` 打包（SwiftUI 壳 + PyInstaller onedir 后端组装）。
-> * 打包产物位于 `dist/X-iTrader-Client.app`。
+> * 打包产物位于仓库上一级目录：`../X-iTrader-Client.app`（即 `X-iTrader/X-iTrader-Client.app`）。

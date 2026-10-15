@@ -26,7 +26,10 @@ echo "==> pyinstaller backend (onedir)"
 [ -x dist/backend/backend ] || { echo "错误: 未找到后端产物 dist/backend/backend"; exit 1; }
 
 VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/__init__.py)"
-APP="dist/X-iTrader-Client.app"
+# 最终 .app 落到仓库上一级（X-iTrader/，与 X-iTrader-Server 等并列）便于分发；
+# PyInstaller 的 dist/ 中间产物仍留在仓库内（已被 .gitignore 忽略）。
+OUT_DIR="$(cd .. && pwd)"
+APP="$OUT_DIR/X-iTrader-Client.app"
 CONTENTS="$APP/Contents"
 
 echo "==> 组装 $APP (v$VERSION)"
@@ -64,4 +67,4 @@ find "$CONTENTS" -type f -print0 | while IFS= read -r -d '' f; do
 done
 codesign --force --sign - "$APP"
 
-echo "完成: $PWD/$APP"
+echo "完成: $APP"

@@ -94,8 +94,10 @@ jobs:
       - name: Package macOS
         if: runner.os == 'macOS'
         run: |
-          cd dist
-          zip -ry iTrader-${{ needs.version.outputs.version }}-macos.zip X-iTrader-Client.app
+          # build_app.sh 把 .app 输出到仓库上一级，zip 仍落在仓库 dist/ 供上传
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cd ..
+          zip -ry "$GITHUB_WORKSPACE/dist/iTrader-${{ needs.version.outputs.version }}-macos.zip" X-iTrader-Client.app
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Swift 壳打包（开发态 bundle）：swift build + 组装 dist/X-iTrader-Client.app
+# Swift 壳打包（开发态 bundle）：swift build + 组装 X-iTrader-Client.app（输出到仓库上一级）
 #
 # 开发态 bundle 直接复用仓库的 .venv 与 src/（Resources/backend_root.txt 指向仓库根），
 # 因此壳进程 spawn 的后端与 `python -m src.backend` 完全一致，data/ 共用仓库根。
@@ -17,7 +17,9 @@ BIN_PATH="$(cd shell && swift build -c "$CONFIG" --show-bin-path)/iTrader"
 [ -x "$BIN_PATH" ] || { echo "错误: 未找到编译产物 $BIN_PATH"; exit 1; }
 
 VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/__init__.py)"
-APP="dist/X-iTrader-Client.app"
+# 产物落到仓库上一级（X-iTrader/），与 build_app.sh 一致，便于直接分发
+OUT_DIR="$(cd .. && pwd)"
+APP="$OUT_DIR/X-iTrader-Client.app"
 CONTENTS="$APP/Contents"
 
 echo "==> 组装 $APP (v$VERSION)"
@@ -49,4 +51,4 @@ PLIST
 echo "==> ad-hoc 签名"
 codesign --force --sign - "$APP"
 
-echo "完成: $PWD/$APP"
+echo "完成: $APP"
