@@ -145,12 +145,12 @@ class ExtractUpdateTest(unittest.TestCase):
 
     def test_mac_full_zip(self):
         _make_zip(self.zip_path, {
-            "iTrader.app/Contents/Info.plist": b"plist",
-            "iTrader.app/Contents/MacOS/iTrader": b"MZ",
+            "X-iTrader-Client.app/Contents/Info.plist": b"plist",
+            "X-iTrader-Client.app/Contents/MacOS/X-iTrader-Client": b"MZ",
         })
         item = extract_update(self.zip_path, self.stage)
-        self.assertEqual(item, self.stage / "stage" / "iTrader.app")
-        self.assertTrue((item / "Contents" / "MacOS" / "iTrader").is_file())
+        self.assertEqual(item, self.stage / "stage" / "X-iTrader-Client.app")
+        self.assertTrue((item / "Contents" / "MacOS" / "X-iTrader-Client").is_file())
 
     def test_windows_full_zip(self):
         _make_zip(self.zip_path, {
@@ -177,7 +177,7 @@ class ExtractUpdateTest(unittest.TestCase):
 
     def test_zip_slip_rejected(self):
         _make_zip(self.zip_path, {
-            "iTrader.app/Contents/Info.plist": b"plist",
+            "X-iTrader-Client.app/Contents/Info.plist": b"plist",
             "../evil.txt": b"evil",
         })
         with self.assertRaises(ValueError) as cm:
@@ -186,9 +186,9 @@ class ExtractUpdateTest(unittest.TestCase):
 
     def test_symlink_entry_restored(self):
         _make_zip(self.zip_path, {
-            "iTrader.app/Contents/Info.plist": b"plist",
-            "iTrader.app/Contents/Resources/target.txt": b"data",
-            "iTrader.app/Contents/Resources/link": lambda: "target.txt",
+            "X-iTrader-Client.app/Contents/Info.plist": b"plist",
+            "X-iTrader-Client.app/Contents/Resources/target.txt": b"data",
+            "X-iTrader-Client.app/Contents/Resources/link": lambda: "target.txt",
         })
         item = extract_update(self.zip_path, self.stage)
         link = item / "Contents" / "Resources" / "link"
@@ -226,24 +226,24 @@ class ApplyUpdateTest(unittest.TestCase):
             apply_update_and_restart(item, "patch")
 
     def test_full_update_darwin(self):
-        app = self.dir / "Applications" / "iTrader.app"
-        exe = app / "Contents" / "MacOS" / "iTrader"
+        app = self.dir / "Applications" / "X-iTrader-Client.app"
+        exe = app / "Contents" / "MacOS" / "X-iTrader-Client"
         exe.parent.mkdir(parents=True)
         exe.write_text("old")
-        new_app = self.dir / "stage" / "iTrader.app"
+        new_app = self.dir / "stage" / "X-iTrader-Client.app"
         (new_app / "Contents" / "MacOS").mkdir(parents=True)
-        (new_app / "Contents" / "MacOS" / "iTrader").write_text("new")
+        (new_app / "Contents" / "MacOS" / "X-iTrader-Client").write_text("new")
 
         popen = self._frozen("darwin", exe)
         binary = apply_update_and_restart(new_app, "full")
 
         # macOS 的 /var 是 /private/var 符号链接，路径统一用 resolve 后比较
-        self.assertEqual(binary.resolve(), (app / "Contents" / "MacOS" / "iTrader").resolve())
-        self.assertEqual((app / "Contents" / "MacOS" / "iTrader").read_text(), "new")
+        self.assertEqual(binary.resolve(), (app / "Contents" / "MacOS" / "X-iTrader-Client").resolve())
+        self.assertEqual((app / "Contents" / "MacOS" / "X-iTrader-Client").read_text(), "new")
         # 旧 .app 改名让位保留，供新进程启动时清理
-        backups = list(self.dir.glob("Applications/iTrader.app.old-*"))
+        backups = list(self.dir.glob("Applications/X-iTrader-Client.app.old-*"))
         self.assertEqual(len(backups), 1)
-        self.assertEqual((backups[0] / "Contents" / "MacOS" / "iTrader").read_text(), "old")
+        self.assertEqual((backups[0] / "Contents" / "MacOS" / "X-iTrader-Client").read_text(), "old")
         popen.assert_called_once()
 
     def test_full_update_windows(self):
@@ -289,12 +289,12 @@ class ApplyUpdateTest(unittest.TestCase):
         popen.assert_called_once_with([str(exe)], cwd=str(exe.parent), close_fds=True)
 
     def test_swap_failure_rolls_back(self):
-        app = self.dir / "iTrader.app"
-        exe = app / "Contents" / "MacOS" / "iTrader"
+        app = self.dir / "X-iTrader-Client.app"
+        exe = app / "Contents" / "MacOS" / "X-iTrader-Client"
         exe.parent.mkdir(parents=True)
         exe.write_text("old")
-        # 新包缺 Contents/MacOS/iTrader 导致 _launch_binary_of 抛错，应回滚
-        new_app = self.dir / "stage" / "iTrader.app"
+        # 新包缺 Contents/MacOS/X-iTrader-Client 导致 _launch_binary_of 抛错，应回滚
+        new_app = self.dir / "stage" / "X-iTrader-Client.app"
         new_app.mkdir(parents=True)
 
         popen = self._frozen("darwin", exe)
@@ -311,9 +311,9 @@ class CleanupStaleBackupsTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name) / "Applications"
-        app = root / "iTrader.app"
+        app = root / "X-iTrader-Client.app"
         (app / "Contents").mkdir(parents=True)
-        stale = root / "iTrader.app.old-123"
+        stale = root / "X-iTrader-Client.app.old-123"
         stale.mkdir()
         (stale / "junk").write_text("x")
 
@@ -321,7 +321,7 @@ class CleanupStaleBackupsTest(unittest.TestCase):
         self.addCleanup(stack.close)
         stack.enter_context(mock.patch.object(sys, "platform", "darwin"))
         stack.enter_context(
-            mock.patch.object(sys, "executable", str(app / "Contents" / "MacOS" / "iTrader"))
+            mock.patch.object(sys, "executable", str(app / "Contents" / "MacOS" / "X-iTrader-Client"))
         )
         stack.enter_context(mock.patch.object(updater, "is_frozen", return_value=True))
         updater.cleanup_stale_backups()

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# 生产打包：Swift 壳（release）+ PyInstaller headless 后端，组装独立可分发的 iTrader.app。
+# 生产打包：Swift 壳（release）+ PyInstaller headless 后端，组装独立可分发
+# 的 X-iTrader-Client.app。
 # 与 build_shell.sh（开发态 bundle，复用仓库 .venv）不同，本脚本产物自包含：
 #
-#   Contents/MacOS/iTrader         Swift 壳（CFBundleExecutable）
-#   Contents/Resources/backend/    PyInstaller onedir 后端（backend 可执行 + 依赖）
+#   Contents/MacOS/X-iTrader-Client   Swift 壳（CFBundleExecutable）
+#   Contents/Resources/backend/       PyInstaller onedir 后端（backend 可执行 + 依赖）
 #
 # 后端放 Resources 而非 MacOS：codesign 把 MacOS/ 下的数据目录（*.dist-info、
 # 非 Mach-O 可执行位文件）误判为未签名嵌套代码导致无法签名；Resources 只做
@@ -25,13 +26,13 @@ echo "==> pyinstaller backend (onedir)"
 [ -x dist/backend/backend ] || { echo "错误: 未找到后端产物 dist/backend/backend"; exit 1; }
 
 VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/__init__.py)"
-APP="dist/iTrader.app"
+APP="dist/X-iTrader-Client.app"
 CONTENTS="$APP/Contents"
 
 echo "==> 组装 $APP (v$VERSION)"
 rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
-cp "$BIN_PATH" "$CONTENTS/MacOS/iTrader"
+cp "$BIN_PATH" "$CONTENTS/MacOS/X-iTrader-Client"
 cp -R dist/backend "$CONTENTS/Resources/backend"
 
 cat > "$CONTENTS/Info.plist" <<PLIST
@@ -39,10 +40,10 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>iTrader</string>
-    <key>CFBundleDisplayName</key><string>iTrader</string>
+    <key>CFBundleName</key><string>X-iTrader-Client</string>
+    <key>CFBundleDisplayName</key><string>X-iTrader-Client</string>
     <key>CFBundleIdentifier</key><string>com.itrader.shell</string>
-    <key>CFBundleExecutable</key><string>iTrader</string>
+    <key>CFBundleExecutable</key><string>X-iTrader-Client</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>$VERSION</string>

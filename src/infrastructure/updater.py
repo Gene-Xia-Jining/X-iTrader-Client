@@ -3,7 +3,7 @@
 更新源是本仓库的 GitHub Releases（CI 在 push main 时以 src/__init__.py 的
 __version__ 打 tag 并发布）：
 
-- iTrader-{version}-macos.zip    全量包（内含 iTrader.app）
+- iTrader-{version}-macos.zip    全量包（内含 X-iTrader-Client.app）
 - iTrader-{version}-windows.zip  全量包（内含 onedir 程序目录，根级 iTrader.exe）
 - iTrader-{version}-src.zip      补丁包（仅当相对上一版本只有 src/ 变化时发布，
                                   全平台共用；src 在打包时外置为普通目录，
@@ -142,18 +142,18 @@ async def download_release(url: str, dest_dir: Path, progress_cb=None) -> Path:
 
 
 def _is_mac_full_zip(names: list[str]) -> bool:
-    return any(name == "iTrader.app/" or name.startswith("iTrader.app/") for name in names)
+    return any(name == "X-iTrader-Client.app/" or name.startswith("X-iTrader-Client.app/") for name in names)
 
 
 def _is_patch_zip(names: list[str]) -> bool:
     top = {name.split("/")[0] for name in names}
-    return "src" in top and "iTrader.app" not in top and "iTrader.exe" not in top
+    return "src" in top and "X-iTrader-Client.app" not in top and "iTrader.exe" not in top
 
 
 def extract_update(zip_path: Path, stage_dir: Path) -> Path:
     """解压更新包到 stage_dir/stage，返回待安装物路径。
 
-    返回值按包类型分别是：mac 全量=iTrader.app 目录、win 全量=程序目录
+    返回值按包类型分别是：mac 全量=X-iTrader-Client.app 目录、win 全量=程序目录
     （根级含 iTrader.exe）、补丁包=src 目录。zipfile 自带 CRC 校验。
     """
     extract_root = stage_dir / "stage"
@@ -187,7 +187,7 @@ def extract_update(zip_path: Path, stage_dir: Path) -> Path:
                         pass
 
     if _is_mac_full_zip(names):
-        item = extract_root / "iTrader.app"
+        item = extract_root / "X-iTrader-Client.app"
     elif _is_patch_zip(names):
         item = extract_root / "src"
     else:
@@ -198,13 +198,13 @@ def extract_update(zip_path: Path, stage_dir: Path) -> Path:
 
 
 def app_install_root() -> Path | None:
-    """当前安装物的根路径（全量更新的替换对象）：mac=iTrader.app，win=程序目录。"""
+    """当前安装物的根路径（全量更新的替换对象）：mac=X-iTrader-Client.app，win=程序目录。"""
     if not is_frozen():
         return None
     exe = Path(sys.executable).resolve()
     if sys.platform == "darwin":
         for parent in exe.parents:
-            if parent.name == "iTrader.app":
+            if parent.name == "X-iTrader-Client.app":
                 return parent
         return None
     # windows onedir：exe 与 _internal 同级，所在目录即程序目录
@@ -246,7 +246,7 @@ def _swap_directory(new_item: Path, target: Path) -> None:
 
 def _launch_binary_of(install_root: Path) -> Path:
     if sys.platform == "darwin":
-        binary = install_root / "Contents" / "MacOS" / "iTrader"
+        binary = install_root / "Contents" / "MacOS" / "X-iTrader-Client"
     else:
         binary = install_root / "iTrader.exe"
     if not binary.is_file():
