@@ -146,3 +146,7 @@ class Bootstrap:
         if self._trading_executor is not None:
             self._trading_executor.close()
             self._trading_executor = None
+
+    def reset_token_service(self) -> None:
+        """服务器地址变更后重建 token 客户端（其 server_url 构造时固定）。"""
+        self._token_service = None

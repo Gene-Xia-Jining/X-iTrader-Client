@@ -58,6 +58,41 @@ struct StrategyInfo: Identifiable, Equatable {
     let description: String
 }
 
+/// token 申请记录（服务器 /api/tokens/requests 返回项）
+struct TokenRecord: Identifiable, Equatable {
+    let id: String
+    let description: String
+    let status: String
+    let createdAt: Date?
+    let expiresAt: Date?
+    let useCount: Int
+
+    /// 状态中文文案（对应服务器 status 字段）
+    var statusText: String {
+        switch status {
+        case "pending": return "待审核"
+        case "approved": return "已通过"
+        case "rejected": return "已拒绝"
+        default: return status
+        }
+    }
+
+    static func from(_ dict: [String: Any]) -> TokenRecord? {
+        guard let id = dict["token_id"] as? String else { return nil }
+        // JSONSerialization 把 JSON 数字解成 NSNumber，Int/Double 都经由它转换
+        let created = (dict["created_at"] as? NSNumber)?.doubleValue
+        let expires = (dict["expires_at"] as? NSNumber)?.doubleValue
+        return TokenRecord(
+            id: id,
+            description: dict["description"] as? String ?? "",
+            status: dict["status"] as? String ?? "pending",
+            createdAt: created.map { Date(timeIntervalSince1970: $0) },
+            expiresAt: expires.map { Date(timeIntervalSince1970: $0) },
+            useCount: (dict["use_count"] as? NSNumber)?.intValue ?? 0
+        )
+    }
+}
+
 struct AccountRuntime: Identifiable {
     let id: String
     var running: Bool
@@ -139,6 +174,8 @@ final class AppState: ObservableObject {
     @Published var strategiesMessage = ""
     @Published var strategiesFetching = false
     @Published var tokenStatus = ""
+    /// token 申请记录（服务器返回，倒序）
+    @Published var tokenRecords: [TokenRecord] = []
     @Published var updatePhase = UpdatePhase.idle
     @Published var lastActionError = ""
 
@@ -283,6 +320,8 @@ final class AppState: ObservableObject {
             Task { await refreshEngineOnly() }
         case "config_changed":
             Task { await refreshAll() }
+        case "token_status":
+            applyTokenStatus(data)
         case "signal_received":
             if let signal = data["signal"] as? [String: Any] {
                 appendLog(level: "INFO", message: "收到信号: \(signal["symbol"] ?? "?") 目标仓位 \(signal["position"] ?? "?")")
@@ -431,9 +470,15 @@ final class AppState: ObservableObject {
     func refreshTokenStatus() {
         Task {
             if let resp = try? await call(method: "tokens.status") {
-                tokenStatus = resp["status"] as? String ?? ""
+                applyTokenStatus(resp)
             }
         }
+    }
+
+    /// 后端 tokens.status / token_status 事件共用：更新状态文案与申请记录
+    private func applyTokenStatus(_ data: [String: Any]) {
+        tokenStatus = data["status"] as? String ?? ""
+        tokenRecords = (data["records"] as? [[String: Any]] ?? []).compactMap(TokenRecord.from)
     }
 
     func requestToken(description: String) {

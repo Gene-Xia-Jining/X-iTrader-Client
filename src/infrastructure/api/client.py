@@ -144,14 +144,24 @@ class TokenApiService:
             response.raise_for_status()
             return response.json()
 
-    async def load_approved_token(self, requests: dict) -> Optional[str]:
-        for request in requests.get("tokens", requests.get("requests", [])):
-            if request.get("status") == "approved" and request.get("token"):
-                self.token_store.save_token(request["token"])
-                return request["token"]
-        return None
+    async def list_token_requests(self) -> list[dict]:
+        """该客户端的 token 申请记录（供 UI 展示），失败时抛出异常。"""
+        data = await self.get_token_requests()
+        return data.get("tokens", data.get("requests", []))
 
-    approved_token = load_approved_token
+    async def claim_token(self) -> Optional[dict]:
+        """领取已批准且尚未领取的明文 token（一次性）。
+
+        服务器只在「批准 → 领取」窗口内保留明文，无待领取记录时返回 404，
+        此处映射为 None（未批准/已被取走都走同一分支）。
+        """
+        url = f"{self.server_url}/api/tokens/claim"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json={"client_id": self.client_id})
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            return response.json()
 
     async def validate_token(self, token: str) -> bool:
         url = f"{self.server_url}/api/tokens/validate"

@@ -75,6 +75,12 @@ class BackendService:
         self._server_watch_task: Optional[asyncio.Task] = None
         # save_config 置位后心跳立即探测一次（新地址即时生效，不等下个周期）
         self._server_check_now = asyncio.Event()
+        # token 领取：无本地 token 时周期轮询服务器，已批准则领取并加密落库
+        self._token_watch_task: Optional[asyncio.Task] = None
+        # 申请 token 后置位立即查一次，不等下个轮询周期
+        self._token_check_now = asyncio.Event()
+        # 已有本地 token 只需校验一次，避免每轮轮询都打服务器
+        self._token_validated = False
         # 自动更新状态：已发现的版本 / 下载任务 / 暂存路径 / 包类型
         self._release: Optional[ReleaseInfo] = None
         self._update_task: Optional[asyncio.Task] = None
@@ -93,13 +99,16 @@ class BackendService:
         self._apply_proxy_env(self.bootstrap.config)
         self._subscribe_events()
         self._server_watch_task = asyncio.create_task(self._server_watch_loop())
+        self._token_watch_task = asyncio.create_task(self._token_watch_loop())
 
     async def shutdown(self) -> None:
         await self.stop_engines()
-        if self._server_watch_task is not None:
-            self._server_watch_task.cancel()
+        for task in (self._server_watch_task, self._token_watch_task):
+            if task is None:
+                continue
+            task.cancel()
             try:
-                await self._server_watch_task
+                await task
             except asyncio.CancelledError:
                 pass
         await self.bootstrap.shutdown()
@@ -138,6 +147,100 @@ class BackendService:
                     LogLevel.INFO if online else LogLevel.WARNING,
                 )
             self._broadcast("status", {"server_online": online})
+
+    # -------- Token 领取 --------
+
+    async def _token_watch_loop(self) -> None:
+        """周期尝试领取已批准的 token，与心跳同构的常驻任务。"""
+        while True:
+            try:
+                await self._watch_token_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self._log(f"Token 轮询异常: {e}", LogLevel.WARNING)
+            try:
+                await asyncio.wait_for(self._token_check_now.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                pass
+            self._token_check_now.clear()
+
+    async def _watch_token_once(self) -> None:
+        """本地无 token 时尝试领取；领到即广播通知界面刷新。
+
+        本地已有 token 时只做一次启动校验（无效则清除，交给后续轮询重领），
+        之后不再打断，避免每轮都打服务器。
+        """
+        token_service = self.bootstrap.token_service
+        store = token_service.token_store
+
+        if store.have_token():
+            if self._token_validated:
+                return
+            self._token_validated = True
+            try:
+                valid = await token_service.validate_token(store.load_token())
+            except Exception:
+                # 网络异常不代表 token 失效，保留本地值，下次启动再校验
+                return
+            if valid:
+                return
+            store.delete_token()
+            self._log("本地 token 已失效，将重新领取", LogLevel.WARNING)
+            return
+
+        # 服务器不可达时静默跳过，交给心跳恢复后再领（避免每轮刷失败日志）
+        if not self._server_online:
+            return
+
+        if not await self._claim_and_save():
+            return
+        self._log("Token 审批已通过，已自动领取并保存", LogLevel.SUCCESS)
+        payload = await self._token_status_payload(try_claim=False)
+        self._broadcast("token_status", payload)
+
+    async def _claim_and_save(self) -> bool:
+        """领取已批准 token 并加密落库；无待领取记录返回 False。"""
+        if not self.bootstrap.config.server_url:
+            return False
+        token_service = self.bootstrap.token_service
+        try:
+            result = await token_service.claim_token()
+        except Exception as e:
+            self._log(f"Token 领取失败: {e}", LogLevel.WARNING)
+            return False
+        if not result or not result.get("token"):
+            return False
+        token_service.token_store.save_token(result["token"])
+        return True
+
+    async def _token_status_payload(self, try_claim: bool = True) -> dict:
+        """归纳审批状态文案并附带申请记录；已通过但无本地 token 时就地领取一次。"""
+        token_service = self.bootstrap.token_service
+        if not self.bootstrap.config.server_url:
+            return {"status": "未配置服务器", "records": []}
+
+        try:
+            records = await token_service.list_token_requests()
+        except Exception as e:
+            return {"status": f"查询失败: {e}", "records": []}
+
+        if token_service.token_store.have_token():
+            return {"status": "已通过，token 已加密保存", "records": records}
+        if not records:
+            return {"status": "未申请", "records": records}
+
+        # 记录按 created_at 倒序，首条即最新一次申请
+        state = records[0].get("status") or "pending"
+        if state == "pending":
+            return {"status": "待审核", "records": records}
+        if state == "rejected":
+            return {"status": "已拒绝", "records": records}
+
+        if try_claim and await self._claim_and_save():
+            self._log("Token 审批已通过，已自动领取并保存", LogLevel.SUCCESS)
+            return {"status": "已通过，token 已加密保存", "records": records}
+        return {"status": "已通过，但服务器未返回 token", "records": records}
 
     # -------- 查询 --------
 
@@ -200,6 +303,10 @@ class BackendService:
         self.bootstrap.save_config(new_config)
         self._apply_proxy_env(new_config)
         self._server_check_now.set()  # 新地址立即探测，不等下个心跳周期
+        # token 客户端与校验结果都绑定旧地址，换地址后重建/重校验
+        self.bootstrap.reset_token_service()
+        self._token_validated = False
+        self._token_check_now.set()
         await self._on_accounts_changed()
         return {}
 
@@ -297,23 +404,15 @@ class BackendService:
     # -------- Token --------
 
     async def token_status(self, params: dict) -> dict:
-        token_service = self.bootstrap.token_service
-        data = await token_service.get_token_requests()
-        status = "待审核"
-        for request in data.get("tokens", data.get("requests", [])):
-            if request.get("status") == "approved":
-                token = await token_service.load_approved_token(data)
-                if token:
-                    status = "已通过，token 已加密保存"
-                else:
-                    status = "已通过，但服务器未返回 token"
-                break
-        return {"status": status}
+        """审批状态文案 + 该客户端的申请记录列表（供 UI 展示）。"""
+        return await self._token_status_payload()
 
     async def request_token(self, params: dict) -> dict:
         await self.bootstrap.token_service.request_token(
             params.get("description") or "iTrader 智能交易系统"
         )
+        # 立即盯一次审批，不等下个轮询周期
+        self._token_check_now.set()
         return {"status": "已提交申请，等待服务器审核"}
 
     # -------- 引擎 --------

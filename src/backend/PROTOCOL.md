@@ -46,6 +46,7 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 | `trade_executed` | `{symbol, target_position}` | 调仓指令已交付 |
 | `trade_failed` | `{symbol, error}` | |
 | `config_changed` | `{}` | 配置/账户已保存（引擎运行中则下次启动生效） |
+| `token_status` | `{status, records: [...]}` | token 审批状态变化；后台轮询领取成功后广播，壳据此刷新 Token 页 |
 | `update_progress` | `{pct, received, total}` | pct=-1 表示总大小未知 |
 | `update_ready` | `{kind}` | "差量更新包"/"完整更新包" |
 | `update_failed` / `update_cancelled` | `{message}` / `{}` | |
@@ -64,8 +65,8 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 | `server.test` | `{server_url?}` | `{message}` 缺省用当前配置 |
 | `symbols.fetch` | - | `{symbols: [...], message}` 服务器品种列表，元素为 `{symbol, name}`（name 为中文名，可能为空；旧版后端为纯代码字符串） |
 | `strategies.fetch` | - | `{strategies: [...], message}` 服务器策略列表，元素为 `{id, name, description}`（id 用于 accounts.save 的 strategy 与订阅上报） |
-| `tokens.status` | - | `{status}` |
-| `tokens.request` | `{description?}` | `{status}` |
+| `tokens.status` | - | `{status, records: [...]}`；`records` 为申请记录，元素 `{token_id, description, status, created_at, expires_at, use_count}`（created_at/expires_at 为 Unix 秒），倒序；`status` 文案：未申请/待审核/已通过，token 已加密保存/已通过，但服务器未返回 token/已拒绝。已通过但本地无 token 时就地领取一次 |
+| `tokens.request` | `{description?}` | `{status}` 提交申请后立即触发一次后台领取轮询 |
 | `engine.start` | - | engines 状态。先探测服务器，未连接则失败；等价 UI 的"自动交易"开 |
 | `engine.stop` | - | engines 状态。等价 UI 的"自动交易"关 |
 | `engine.set_auto_trade` | `{value}` | `{}` 只改自动执行标志，不动引擎 |

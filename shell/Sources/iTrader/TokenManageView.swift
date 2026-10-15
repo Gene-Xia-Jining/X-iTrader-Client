@@ -50,6 +50,27 @@ struct TokenManageView: View {
                 }
                 .padding(20)
             }
+
+            AppCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("申请记录")
+                        .font(AppTheme.bodyFont.weight(.semibold))
+                        .foregroundColor(AppTheme.ink(scheme))
+
+                    if appState.tokenRecords.isEmpty {
+                        Text("暂无申请记录")
+                            .font(AppTheme.dimFont)
+                            .foregroundColor(AppTheme.dim(scheme))
+                    } else {
+                        recordHeader
+                        ForEach(appState.tokenRecords) { record in
+                            HairlineDivider()
+                            recordRow(record)
+                        }
+                    }
+                }
+                .padding(20)
+            }
         }
         .onAppear { appState.refreshTokenStatus() }
         .alert(
@@ -60,6 +81,51 @@ struct TokenManageView: View {
             Button("好") {}
         } message: { status in
             Text(status)
+        }
+    }
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        return f
+    }()
+
+    private var recordHeader: some View {
+        HStack(spacing: 12) {
+            Text("申请说明").frame(maxWidth: .infinity, alignment: .leading)
+            Text("状态").frame(maxWidth: .infinity, alignment: .leading)
+            Text("申请时间").frame(maxWidth: .infinity, alignment: .leading)
+            Text("过期时间").frame(maxWidth: .infinity, alignment: .leading)
+            Text("已使用").frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .font(AppTheme.dimFont.weight(.semibold))
+        .foregroundColor(AppTheme.dim(scheme))
+    }
+
+    private func recordRow(_ record: TokenRecord) -> some View {
+        HStack(spacing: 12) {
+            Text(record.description.isEmpty ? "—" : record.description)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(record.statusText)
+                .foregroundColor(recordColor(record.status))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(record.createdAt.map { Self.timeFormatter.string(from: $0) } ?? "—")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(record.expiresAt.map { Self.timeFormatter.string(from: $0) } ?? "—")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("\(record.useCount)")
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .font(AppTheme.dimFont)
+        .foregroundColor(AppTheme.ink(scheme))
+    }
+
+    /// 记录状态语义色（已通过绿 / 已拒绝红 / 待审核黄）
+    private func recordColor(_ status: String) -> Color {
+        switch status {
+        case "approved": return AppTheme.success(scheme)
+        case "rejected": return AppTheme.danger(scheme)
+        default: return AppTheme.warning(scheme)
         }
     }
 
