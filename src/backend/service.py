@@ -536,8 +536,8 @@ class BackendService:
                     last_pct = pct
                     self._broadcast("update_progress", {"pct": pct, "received": received, "total": total})
 
-            zip_path = await download_release(url, stage_dir, progress_cb=progress)
-            self._staged_item = await asyncio.to_thread(extract_update, zip_path, stage_dir)
+            archive_path = await download_release(url, stage_dir, progress_cb=progress)
+            self._staged_item = await asyncio.to_thread(extract_update, archive_path, stage_dir)
         except asyncio.CancelledError:
             self._clear_stage_dir()
             self._broadcast("update_cancelled", {})

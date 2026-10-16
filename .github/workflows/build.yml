@@ -89,21 +89,24 @@ jobs:
 
       - name: Build (macOS)
         if: runner.os == 'macOS'
-        run: ./build_app.sh
+        run: |
+          # build_app.sh 产出 .app（含 PyInstaller 后端），build_dmg.sh 再封装成
+          # dmg；两者都落在仓库上一级。
+          ./build_app.sh
+          ./build_dmg.sh
 
       - name: Package macOS
         if: runner.os == 'macOS'
         run: |
-          # build_app.sh 把 .app 输出到仓库上一级，zip 仍落在仓库 dist/ 供上传
+          # dmg 已在仓库上一级生成，移入仓库 dist/ 供 upload-artifact 收集
           mkdir -p "$GITHUB_WORKSPACE/dist"
-          cd ..
-          zip -ry "$GITHUB_WORKSPACE/dist/iTrader-${{ needs.version.outputs.version }}-macos.zip" X-iTrader-Client.app
+          mv ../iTrader-${{ needs.version.outputs.version }}-macos.dmg "$GITHUB_WORKSPACE/dist/"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: itrader-${{ runner.os }}
-          path: dist/iTrader-${{ needs.version.outputs.version }}-*.zip
+          path: dist/iTrader-${{ needs.version.outputs.version }}-*.dmg
 
   release:
     needs: [version, build]
@@ -122,7 +125,7 @@ jobs:
           name: Release ${{ needs.version.outputs.version }}
           body: Automated GitHub release for iTrader Client
           files: |
-            artifacts/itrader-macOS/*.zip
+            artifacts/itrader-macOS/*.dmg
             artifacts/itrader-src-patch/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

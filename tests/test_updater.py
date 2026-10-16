@@ -1,7 +1,9 @@
 import asyncio
 import contextlib
 import os
+import plistlib
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -61,18 +63,18 @@ class VersionCompareTest(unittest.TestCase):
 
 class SelectAssetsTest(unittest.TestCase):
     ASSETS = [
-        {"name": "iTrader-0.0.3-macos.zip", "browser_download_url": "https://x/macos.zip"},
+        {"name": "iTrader-0.0.3-macos.dmg", "browser_download_url": "https://x/macos.dmg"},
         {"name": "iTrader-0.0.3-windows.zip", "browser_download_url": "https://x/win.zip"},
         {"name": "iTrader-0.0.3-src.zip", "browser_download_url": "https://x/src.zip"},
     ]
 
-    def test_darwin_selects_macos_full_and_patch(self):
+    def test_darwin_selects_macos_dmg_and_patch(self):
         with mock.patch.object(sys, "platform", "darwin"):
             full, patch = updater._select_assets(self.ASSETS)
-        self.assertEqual(full, "https://x/macos.zip")
+        self.assertEqual(full, "https://x/macos.dmg")
         self.assertEqual(patch, "https://x/src.zip")
 
-    def test_windows_selects_windows_full_and_patch(self):
+    def test_windows_selects_windows_zip_and_patch(self):
         with mock.patch.object(sys, "platform", "win32"):
             full, patch = updater._select_assets(self.ASSETS)
         self.assertEqual(full, "https://x/win.zip")
@@ -84,6 +86,16 @@ class SelectAssetsTest(unittest.TestCase):
         self.assertEqual(full, "")
         self.assertEqual(patch, "https://x/src.zip")
 
+    def test_darwin_does_not_treat_zip_full_as_patch(self):
+        # 若 Release 只有 zip 全量包（旧命名），darwin 不应把它当成补丁包
+        assets = [
+            {"name": "iTrader-0.0.3-macos.zip", "browser_download_url": "https://x/macos.zip"},
+        ]
+        with mock.patch.object(sys, "platform", "darwin"):
+            full, patch = updater._select_assets(assets)
+        self.assertEqual(full, "")
+        self.assertEqual(patch, "")
+
 
 class FetchLatestReleaseTest(unittest.TestCase):
     @staticmethod
@@ -94,7 +106,7 @@ class FetchLatestReleaseTest(unittest.TestCase):
             "assets": assets
             if assets is not None
             else [
-                {"name": "iTrader-0.0.3-macos.zip", "browser_download_url": "https://x/macos.zip"},
+                {"name": "iTrader-0.0.3-macos.dmg", "browser_download_url": "https://x/macos.dmg"},
                 {"name": "iTrader-0.0.3-windows.zip", "browser_download_url": "https://x/win.zip"},
                 {"name": "iTrader-0.0.3-src.zip", "browser_download_url": "https://x/src.zip"},
             ],
@@ -113,7 +125,7 @@ class FetchLatestReleaseTest(unittest.TestCase):
         self.assertIsInstance(release, ReleaseInfo)
         self.assertEqual(release.version, "0.0.3")
         self.assertEqual(release.notes, "release notes")
-        self.assertEqual(release.full_url, "https://x/macos.zip")
+        self.assertEqual(release.full_url, "https://x/macos.dmg")
         self.assertTrue(release.has_patch)
         self.assertEqual(release.patch_url, "https://x/src.zip")
 
@@ -194,6 +206,70 @@ class ExtractUpdateTest(unittest.TestCase):
         link = item / "Contents" / "Resources" / "link"
         self.assertTrue(link.is_symlink())
         self.assertEqual(os.readlink(link), "target.txt")
+
+
+class ExtractDmgTest(unittest.TestCase):
+    """dmg 分派：mock hdiutil/ditto，验证挂载→复制→卸载的调用与错误处理。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.stage = self.dir / "update"
+        self.dmg_path = self.dir / "iTrader-0.0.3-macos.dmg"
+        self.dmg_path.write_bytes(b"dmg")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _attach_stdout(self, mount_point: str) -> bytes:
+        return plistlib.dumps({
+            "system-entities": [
+                {"mount-point": mount_point},
+            ]
+        })
+
+    def test_dmg_routes_to_hdiutil_and_ditto(self):
+        mount = self.dir / "vol"
+        # 真实 dmg 挂载点内含 X-iTrader-Client.app（加 Applications 快捷方式）
+        (mount / "X-iTrader-Client.app").mkdir(parents=True)
+
+        def fake_run(cmd, **kwargs):
+            if cmd[0] == "hdiutil" and cmd[1] == "attach":
+                return subprocess.CompletedProcess(cmd, 0, self._attach_stdout(str(mount)), "")
+            if cmd[0] == "ditto":
+                # 模拟 ditto 复制出 .app
+                (Path(cmd[2]) / "Contents").mkdir(parents=True)
+                (Path(cmd[2]) / "Contents" / "Info.plist").write_text("plist")
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            if cmd[0] == "hdiutil" and cmd[1] == "detach":
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            raise AssertionError(f"未预期的命令: {cmd}")
+
+        with mock.patch.object(updater.subprocess, "run", side_effect=fake_run):
+            item = extract_update(self.dmg_path, self.stage)
+
+        self.assertEqual(item, self.stage / "stage" / "X-iTrader-Client.app")
+        self.assertTrue((item / "Contents" / "Info.plist").is_file())
+
+    def test_dmg_detaches_even_when_app_missing(self):
+        mount = self.dir / "vol"
+        mount.mkdir()  # 挂载点内没有 .app
+        detach_calls = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd[0] == "hdiutil" and cmd[1] == "attach":
+                return subprocess.CompletedProcess(cmd, 0, self._attach_stdout(str(mount)), "")
+            if cmd[0] == "hdiutil" and cmd[1] == "detach":
+                detach_calls.append(cmd)
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            raise AssertionError(f"未预期的命令: {cmd}")
+
+        with mock.patch.object(updater.subprocess, "run", side_effect=fake_run):
+            with self.assertRaises(ValueError):
+                extract_update(self.dmg_path, self.stage)
+
+        # 异常路径也必须卸载，避免残留挂载
+        self.assertEqual(len(detach_calls), 1)
 
 
 class ApplyUpdateTest(unittest.TestCase):

@@ -3,18 +3,20 @@
 更新源是本仓库的 GitHub Releases（CI 在 push main 时以 src/__init__.py 的
 __version__ 打 tag 并发布）：
 
-- iTrader-{version}-macos.zip    全量包（内含 X-iTrader-Client.app）
+- iTrader-{version}-macos.dmg    全量包（内含 X-iTrader-Client.app，拖拽安装）
 - iTrader-{version}-windows.zip  全量包（内含 onedir 程序目录，根级 iTrader.exe）
 - iTrader-{version}-src.zip      补丁包（仅当相对上一版本只有 src/ 变化时发布，
                                   全平台共用；src 在打包时外置为普通目录，
                                   替换该目录即完成差量更新）
 
-替换采用 rename→move→Popen→退出 模式：旧安装物整体改名让位，新安装物移入
-原位置，启动新进程后旧进程退出；新进程启动时调用 cleanup_stale_backups()
-清理 .old-* 残留。开发态（非 frozen）不做任何文件替换。
+全量包两种格式都可解：macOS 用 dmg（hdiutil 挂载后复制 .app），Windows 用 zip；
+补丁包恒为 zip。替换采用 rename→move→Popen→退出 模式：旧安装物整体改名让位，
+新安装物移入原位置，启动新进程后旧进程退出；新进程启动时调用
+cleanup_stale_backups() 清理 .old-* 残留。开发态（非 frozen）不做任何文件替换。
 """
 
 import os
+import plistlib
 import shutil
 import stat
 import subprocess
@@ -29,9 +31,10 @@ GITHUB_REPO = "Gene-Xia-Jining/iTrader"
 RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 RELEASE_PAGE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 
-# 当前平台的全量包 asset 名关键字（CI 产物命名 iTrader-{version}-{平台}.zip）
-_FULL_ASSET_KEYWORDS = {"darwin": "macos", "win32": "windows"}
-# 补丁包 asset 名关键字（iTrader-{version}-src.zip）
+# 当前平台全量包的 asset 名关键字与扩展名（CI 产物 iTrader-{version}-{平台}.dmg/.zip）。
+# macOS 分发 dmg、Windows 分发 zip；扩展名参与匹配，避免把 .zip 全量包误当补丁包。
+_FULL_ASSET_KEYWORDS = {"darwin": ("macos", ".dmg"), "win32": ("windows", ".zip")}
+# 补丁包 asset 名关键字（iTrader-{version}-src.zip，恒为 zip）
 _PATCH_ASSET_KEYWORD = "src"
 
 
@@ -72,18 +75,24 @@ def is_newer(remote: str, current: str) -> bool:
 
 
 def _select_assets(assets: list[dict]) -> tuple[str, str]:
-    """从 Release assets 中选出当前平台全量包与补丁包的下载地址。"""
-    keyword = _FULL_ASSET_KEYWORDS.get(sys.platform, "")
+    """从 Release assets 中选出当前平台全量包与补丁包的下载地址。
+
+    全量包按 (关键字, 扩展名) 匹配（macOS=dmg / Windows=zip）；补丁包恒为 zip。
+    扩展名过滤避免把全量包误判为补丁包（两者都含平台/版本片段）。
+    """
+    keyword, ext = _FULL_ASSET_KEYWORDS.get(sys.platform, ("", ""))
     full_url = ""
     patch_url = ""
     for asset in assets:
         name = str(asset.get("name", "")).lower()
         url = str(asset.get("browser_download_url", ""))
-        if not name or not url or not name.endswith(".zip"):
+        is_zip = name.endswith(".zip")
+        is_dmg = name.endswith(".dmg")
+        if not name or not url or not (is_zip or is_dmg):
             continue
-        if keyword and keyword in name:
+        if keyword and ext and name.endswith(ext) and keyword in name:
             full_url = url
-        elif _PATCH_ASSET_KEYWORD in name:
+        elif is_zip and _PATCH_ASSET_KEYWORD in name:
             patch_url = url
     return full_url, patch_url
 
@@ -118,13 +127,16 @@ async def fetch_latest_release(timeout: float = 10.0, transport=None) -> Release
 
 
 async def download_release(url: str, dest_dir: Path, progress_cb=None) -> Path:
-    """流式下载更新包到 dest_dir/update.zip，progress_cb(received, total) 汇报进度。
+    """流式下载更新包到 dest_dir/update.<ext>，progress_cb(received, total) 汇报进度。
 
-    取消由调用方取消协程实现：CancelledError 会在 await 点抛出，
+    扩展名取自 URL 路径（.dmg/.zip），使 extract_update 能按格式分派；无法识别
+    时按 .zip 处理。取消由调用方取消协程实现：CancelledError 会在 await 点抛出，
     文件句柄随 with 块关闭，半成品由调用方清理暂存目录。
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = dest_dir / "update.zip"
+    url_path = url.split("?", 1)[0]
+    ext = ".dmg" if url_path.lower().endswith(".dmg") else ".zip"
+    archive_path = dest_dir / f"update{ext}"
     # 下载大文件：connect/pool 短超时，read 允许单个 chunk 间隔最长 60s
     timeout = httpx.Timeout(connect=10.0, read=60.0, write=60.0, pool=10.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
@@ -132,13 +144,13 @@ async def download_release(url: str, dest_dir: Path, progress_cb=None) -> Path:
             resp.raise_for_status()
             total = int(resp.headers.get("content-length") or 0)
             received = 0
-            with zip_path.open("wb") as f:
+            with archive_path.open("wb") as f:
                 async for chunk in resp.aiter_bytes(65536):
                     f.write(chunk)
                     received += len(chunk)
                     if progress_cb is not None:
                         progress_cb(received, total)
-    return zip_path
+    return archive_path
 
 
 def _is_mac_full_zip(names: list[str]) -> bool:
@@ -150,9 +162,48 @@ def _is_patch_zip(names: list[str]) -> bool:
     return "src" in top and "X-iTrader-Client.app" not in top and "iTrader.exe" not in top
 
 
-def extract_update(zip_path: Path, stage_dir: Path) -> Path:
+def _extract_dmg(dmg_path: Path, extract_root: Path) -> Path:
+    """挂载 dmg、用 ditto 复制出 X-iTrader-Client.app、卸载，返回 .app 路径。
+
+    用 hdiutil attach + ditto 而非 cp -R：ditto 完整保留符号链接（Python.framework
+    内部大量使用）与扩展属性，复制后 ad-hoc 签名仍有效。挂载点由 hdiutil 决定
+    （/Volumes/<volname>，重名时加后缀），从输出解析而非硬编码。始终 detach，
+    异常路径也不残留挂载。
+    """
+    attach = subprocess.run(
+        ["hdiutil", "attach", "-nobrowse", "-readonly", "-plist", str(dmg_path)],
+        capture_output=True, text=True, check=True,
+    )
+    # -plist 输出里取挂载点：<key>mount-point</key><string>/Volumes/...</string>
+    # plistlib.loads 同时接受 str/bytes，故不依赖 text= 的返回类型
+    info = plistlib.loads(attach.stdout)
+    mount_point = ""
+    for entity in info.get("system-entities", []):
+        if entity.get("mount-point"):
+            mount_point = entity["mount-point"]
+            break
+    if not mount_point:
+        raise ValueError("dmg 挂载失败：未找到挂载点")
+
+    try:
+        mount = Path(mount_point)
+        app_src = mount / "X-iTrader-Client.app"
+        if not app_src.is_dir():
+            raise ValueError("dmg 中未找到 X-iTrader-Client.app")
+        app_dst = extract_root / "X-iTrader-Client.app"
+        subprocess.run(["ditto", str(app_src), str(app_dst)], check=True)
+    finally:
+        subprocess.run(
+            ["hdiutil", "detach", mount_point, "-force"],
+            capture_output=True, text=True,
+        )
+    return app_dst
+
+
+def extract_update(archive_path: Path, stage_dir: Path) -> Path:
     """解压更新包到 stage_dir/stage，返回待安装物路径。
 
+    按扩展名分派：.dmg 走 hdiutil 挂载提取（macOS 全量），.zip 走 zipfile。
     返回值按包类型分别是：mac 全量=X-iTrader-Client.app 目录、win 全量=程序目录
     （根级含 iTrader.exe）、补丁包=src 目录。zipfile 自带 CRC 校验。
     """
@@ -161,8 +212,11 @@ def extract_update(zip_path: Path, stage_dir: Path) -> Path:
     shutil.rmtree(extract_root, ignore_errors=True)
     extract_root.mkdir(parents=True, exist_ok=True)
 
+    if archive_path.suffix.lower() == ".dmg":
+        return _extract_dmg(archive_path, extract_root)
+
     extract_root_res = extract_root.resolve()
-    with zipfile.ZipFile(zip_path) as zf:
+    with zipfile.ZipFile(archive_path) as zf:
         names = zf.namelist()
         if not (_is_mac_full_zip(names) or _is_patch_zip(names)):
             if "iTrader.exe" not in names and "iTrader.exe/" not in names:
