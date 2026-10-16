@@ -16,9 +16,11 @@ struct SimulationView: View {
     @State private var selectedStrategy = ""
     // 测试连接进行中（按钮置灰）
     @State private var testing = false
-    // 品种说明弹窗（原步骤 4 下方的提示行）
+    // 步骤 4 / 5 的说明弹窗（原步骤下方的提示行）
     @State private var showSymbolHelp = false
     @State private var symbolHelpHover = false
+    @State private var showStrategyHelp = false
+    @State private var strategyHelpHover = false
     // 弹窗（对应 Qt QMessageBox）
     @State private var alert: ActiveAlert?
 
@@ -47,15 +49,17 @@ struct SimulationView: View {
 
                     HStack(spacing: 6) {
                         guideLabel("4，选择交易品种：")
-                        symbolHelpButton
+                        helpButton(symbolHelpText, isPresented: $showSymbolHelp, isHovering: $symbolHelpHover)
                     }
                     symbolPicker
 
                     HairlineDivider()
 
-                    guideLabel("5，选择交易策略：")
+                    HStack(spacing: 6) {
+                        guideLabel("5，选择交易策略：")
+                        helpButton(strategyHelpText, isPresented: $showStrategyHelp, isHovering: $strategyHelpHover)
+                    }
                     strategyPicker
-                    hintLabel("提示：策略由服务器计算交易信号，客户端按信号执行开仓 / 平仓。")
                 }
                 .padding(20)
             }
@@ -82,13 +86,6 @@ struct SimulationView: View {
             .textSelection(.enabled)
     }
 
-    private func hintLabel(_ text: String) -> some View {
-        Text(text)
-            .font(AppTheme.dimFont)
-            .foregroundColor(AppTheme.dim(scheme))
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
     /// 链接行：13px 灰前缀 + #007aff 下划线链接（点击打开浏览器）
     private func linkRow(_ prefix: String, _ urlString: String) -> some View {
         var prefixAttr = AttributedString(prefix)
@@ -104,26 +101,31 @@ struct SimulationView: View {
             .textSelection(.enabled)
     }
 
-    /// 20x20 圆形问号按钮，点击弹出品种说明（样式同设置页 helpButton）
-    private var symbolHelpButton: some View {
-        Button { showSymbolHelp = true } label: {
+    /// 20x20 圆形问号按钮，点击弹出说明文案（样式同设置页 helpButton）；步骤 4 / 5 共用
+    private func helpButton(
+        _ text: String,
+        isPresented: Binding<Bool>,
+        isHovering: Binding<Bool>
+    ) -> some View {
+        Button { isPresented.wrappedValue = true } label: {
             Text("?")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(AppTheme.primary(scheme))
                 .frame(width: 20, height: 20)
-                .background(symbolHelpHover ? AppTheme.sidebarHover(scheme) : .clear)
+                .background(isHovering.wrappedValue ? AppTheme.sidebarHover(scheme) : .clear)
                 .cornerRadius(10)
                 .overlay(Circle().stroke(AppTheme.hairline(scheme), lineWidth: 1))
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .pointerCursor()
-        .onHover { symbolHelpHover = $0 }
-        .popover(isPresented: $showSymbolHelp, arrowEdge: .bottom) {
-            // 文案固定，单行宽度自适应；不指定前景色，由 popover 自身外观决定（同设置页 helpButton）
-            Text("提示：模拟帐户不支持组合/套利和期权交易，仅国内商品和股指国债。")
+        .onHover { isHovering.wrappedValue = $0 }
+        .popover(isPresented: isPresented, arrowEdge: .bottom) {
+            // 不指定前景色，由 popover 自身外观决定（同设置页 helpButton）；多行文案定宽换行
+            Text(text)
                 .font(AppTheme.dimFont)
-                .fixedSize()
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 300, alignment: .leading)
                 .padding(10)
         }
     }
@@ -209,10 +211,13 @@ struct SimulationView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Text(pickerHint)
-                .font(AppTheme.dimFont)
-                .foregroundColor(AppTheme.dim(scheme))
-                .fixedSize(horizontal: false, vertical: true)
+            // 数量提示已移入步骤 4 问号弹窗，行内只保留获取中 / 失败等瞬时状态
+            if !pickerHint.isEmpty {
+                Text(pickerHint)
+                    .font(AppTheme.dimFont)
+                    .foregroundColor(AppTheme.dim(scheme))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -225,16 +230,21 @@ struct SimulationView: View {
         return result
     }
 
-    /// 品种区状态行（对应 Qt SymbolPicker 的 _hint 文案规则）
+    /// 品种区状态行：只保留获取中 / 失败 / 尚未获取等瞬时状态，数量提示在问号弹窗内
     private var pickerHint: String {
         if appState.symbolsFetching { return "正在获取品种..." }
         if appState.symbolsMessage.hasPrefix("获取失败") {
             return "获取品种失败: \(appState.symbolsMessage)"
         }
-        if !appState.serverSymbols.isEmpty {
-            return "共 \(appState.serverSymbols.count) 个品种，选择一个订阅，选中即生效"
-        }
+        if !appState.serverSymbols.isEmpty { return "" }
         return "尚未获取品种"
+    }
+
+    /// 步骤 4 问号弹窗文案：模拟账户范围说明 + 可选品种数量
+    private var symbolHelpText: String {
+        let note = "提示：模拟帐户不支持组合/套利和期权交易，仅国内商品和股指国债。"
+        guard !appState.serverSymbols.isEmpty else { return note }
+        return note + "\n共 \(appState.serverSymbols.count) 个品种，选择一个订阅，选中即生效"
     }
 
     /// 品种选中/取消选中即生效：只提交订阅品种（取消时提交空列表），其余字段沿用已有值；
@@ -270,23 +280,31 @@ struct SimulationView: View {
                     .help(strategy.description)
                 }
             }
-            Text(strategyHint)
-                .font(AppTheme.dimFont)
-                .foregroundColor(AppTheme.dim(scheme))
-                .fixedSize(horizontal: false, vertical: true)
+            // 数量与提示文案已移入步骤 5 问号弹窗，行内只保留获取中 / 失败等瞬时状态
+            if !strategyHint.isEmpty {
+                Text(strategyHint)
+                    .font(AppTheme.dimFont)
+                    .foregroundColor(AppTheme.dim(scheme))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
-    /// 策略区状态行（对应品种区 hint 文案规则）
+    /// 策略区状态行：只保留获取中 / 失败 / 尚未获取等瞬时状态，数量提示在问号弹窗内
     private var strategyHint: String {
         if appState.strategiesFetching { return "正在获取策略..." }
         if appState.strategiesMessage.hasPrefix("获取失败") {
             return "获取策略失败: \(appState.strategiesMessage)"
         }
-        if !appState.serverStrategies.isEmpty {
-            return "共 \(appState.serverStrategies.count) 个策略，选择一个，选中即生效"
-        }
+        if !appState.serverStrategies.isEmpty { return "" }
         return "尚未获取策略"
+    }
+
+    /// 步骤 5 问号弹窗文案：策略来源说明 + 可选策略数量
+    private var strategyHelpText: String {
+        let note = "提示：策略由服务器计算交易信号，客户端按信号执行开仓 / 平仓。"
+        guard !appState.serverStrategies.isEmpty else { return note }
+        return note + "\n共 \(appState.serverStrategies.count) 个策略，选择一个，选中即生效"
     }
 
     /// 策略选中/取消即生效：只提交 strategy（取消时传空串清除），symbols 等字段沿用已有值
@@ -511,6 +529,7 @@ struct RadioRow: View {
 
 /// 品种胶囊：选中态实心主题色、未选描边；整颗按钮可点，点击切换选中（再点已选中的取消）。
 /// label 为显示文本（如「沪铜｜CU」），选中语义仍由外层 symbol 比较决定。
+/// 文字对齐官网正文：13pt 常规字重（同「天勤官网：」行），未选中沿用深色。
 struct SymbolCapsule: View {
     let label: String
     @Binding var isOn: Bool
@@ -522,7 +541,7 @@ struct SymbolCapsule: View {
             isOn.toggle()
         } label: {
             Text(label)
-                .font(AppTheme.bodyFont.weight(.semibold))
+                .font(AppTheme.dimFont)
                 .lineLimit(1)
                 .padding(.horizontal, 14)
                 .frame(minHeight: 30)
