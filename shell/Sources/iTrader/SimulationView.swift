@@ -16,6 +16,9 @@ struct SimulationView: View {
     @State private var selectedStrategy = ""
     // 测试连接进行中（按钮置灰）
     @State private var testing = false
+    // 品种说明弹窗（原步骤 4 下方的提示行）
+    @State private var showSymbolHelp = false
+    @State private var symbolHelpHover = false
     // 弹窗（对应 Qt QMessageBox）
     @State private var alert: ActiveAlert?
 
@@ -42,9 +45,11 @@ struct SimulationView: View {
 
                     HairlineDivider()
 
-                    guideLabel("4，选择交易品种：")
+                    HStack(spacing: 6) {
+                        guideLabel("4，选择交易品种：")
+                        symbolHelpButton
+                    }
                     symbolPicker
-                    hintLabel("提示：模拟帐户不支持组合/套利和期权交易，仅国内商品和股指国债。")
 
                     HairlineDivider()
 
@@ -97,6 +102,30 @@ struct SimulationView: View {
         return Text(prefixAttr + linkAttr)
             .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
+    }
+
+    /// 20x20 圆形问号按钮，点击弹出品种说明（样式同设置页 helpButton）
+    private var symbolHelpButton: some View {
+        Button { showSymbolHelp = true } label: {
+            Text("?")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(AppTheme.primary(scheme))
+                .frame(width: 20, height: 20)
+                .background(symbolHelpHover ? AppTheme.sidebarHover(scheme) : .clear)
+                .cornerRadius(10)
+                .overlay(Circle().stroke(AppTheme.hairline(scheme), lineWidth: 1))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .onHover { symbolHelpHover = $0 }
+        .popover(isPresented: $showSymbolHelp, arrowEdge: .bottom) {
+            // 文案固定，单行宽度自适应；不指定前景色，由 popover 自身外观决定（同设置页 helpButton）
+            Text("提示：模拟帐户不支持组合/套利和期权交易，仅国内商品和股指国债。")
+                .font(AppTheme.dimFont)
+                .fixedSize()
+                .padding(10)
+        }
     }
 
     // MARK: - 输入行（手机号 / 密码 / 眼睛 / 保存 / 测试连接）
@@ -164,25 +193,22 @@ struct SimulationView: View {
         .pointerCursor()
     }
 
-    // MARK: - 品种区（单选胶囊 + 刷新按钮，对应 Qt SymbolPicker）
+    // MARK: - 品种区（单选胶囊，对应 Qt SymbolPicker；刷新入口在顶部栏）
 
     private var symbolPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top, spacing: 8) {
-                FlowLayout(spacing: 10) {
-                    ForEach(simAllSymbols, id: \.self) { symbol in
-                        SymbolCapsule(label: appState.displaySymbol(symbol), isOn: Binding(
-                            get: { selectedSymbol == symbol },
-                            set: { isOn in
-                                selectedSymbol = isOn ? symbol : ""
-                                saveSymbolSelection()
-                            }
-                        ))
-                    }
+            FlowLayout(spacing: 10) {
+                ForEach(simAllSymbols, id: \.self) { symbol in
+                    SymbolCapsule(label: appState.displaySymbol(symbol), isOn: Binding(
+                        get: { selectedSymbol == symbol },
+                        set: { isOn in
+                            selectedSymbol = isOn ? symbol : ""
+                            saveSymbolSelection()
+                        }
+                    ))
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                AppButton("刷新", variant: .secondary) { appState.fetchSymbols() }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             Text(pickerHint)
                 .font(AppTheme.dimFont)
                 .foregroundColor(AppTheme.dim(scheme))

@@ -174,6 +174,15 @@ struct RootView: View {
             }
             .disabled(appState.connState != .connected)
             AppButton(dark ? "浅色" : "深色", variant: .secondary) { dark.toggle() }
+            // 刷新服务器品种与策略（模拟/实盘页共用），获取中置灰防重复点击
+            AppButton(
+                "刷新",
+                variant: .secondary,
+                disabled: appState.symbolsFetching || appState.strategiesFetching
+            ) {
+                appState.fetchSymbols()
+                appState.fetchStrategies()
+            }
             AppButton("退出", variant: .danger) { confirmQuit() }
         }
         .padding(.horizontal, 20)
