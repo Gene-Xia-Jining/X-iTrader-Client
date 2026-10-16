@@ -13,7 +13,7 @@ import types
 
 import numpy as np
 
-# 打包时 src 以外部目录分发（支持差量更新，见 specs/*.spec），PYZ 中不含 src；
+# src 以源码外置分发（支持差分更新，见 specs/backend.spec），PYZ 中不含 src；
 # 把 _MEIPASS 加入搜索路径，使 `import src` 解析到 <MEIPASS>/src
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
     sys.path.insert(0, sys._MEIPASS)
