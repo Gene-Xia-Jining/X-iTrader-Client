@@ -1,7 +1,8 @@
 """headless 后端入口：python -m src.backend
 
 启动本地 RPC 服务供 UI 壳（Swift）或 CLI 客户端连接。
-frozen 打包时工作目录与 GUI 版一致（~/.iTrader），开发态用当前目录。
+frozen 打包时工作目录为数据根（见 infrastructure.paths.data_root()，与 .app 位置
+无关），开发态用当前目录。
 """
 
 import asyncio
@@ -11,6 +12,8 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+from ..infrastructure.paths import data_root, migrate_legacy_data_root
 
 
 def _watch_parent(parent_pid: int, on_parent_gone) -> None:
@@ -28,7 +31,8 @@ def _watch_parent(parent_pid: int, on_parent_gone) -> None:
 
 async def run() -> int:
     if getattr(sys, "frozen", False):
-        workdir = Path.home() / ".iTrader"
+        migrate_legacy_data_root()
+        workdir = data_root()
         workdir.mkdir(parents=True, exist_ok=True)
         os.chdir(workdir)
     workdir = Path.cwd()

@@ -11,8 +11,11 @@ public struct BackendInfo: Codable {
 /// 后端进程管理：定位启动命令、spawn、等待发现文件、健康检查、终止。
 ///
 /// 布局探测（按序取其一）：
-/// - 生产态：Bundle 内 Resources/backend/backend（build_app.sh 组装的 PyInstaller onedir 后端），
-///   工作目录为 ~/.iTrader（frozen 后端自行 chdir 到同一路径，data/ 与 app 位置无关）；
+/// - 生产态（runtime）：壳首启下载的解压产物位于 ~/.X-iTrader-Client/runtime/backend/
+///   （见 AppPaths），工作目录为数据根 ~/.X-iTrader-Client（frozen 后端自行 chdir
+///   到同一路径，data/ 与 app 位置无关）；这是重构后的唯一生产布局。
+/// - 生产态（bundle，过渡兼容）：早期构建把 PyInstaller 后端打进 Bundle 的
+///   Resources/backend/；该回退在打包流程改造完成后可移除。
 /// - 开发态 bundle：Resources/backend_root.txt 内容为业务根目录路径（build_shell.sh 生成）；
 /// - 源码开发态：从本文件编译位置向上查找 src/backend/__main__.py 所在仓库根。
 ///   后两种为 python 模式：.venv/bin/python -m src.backend，业务根须含 .venv 与 src/。
@@ -66,7 +69,7 @@ public final class BackendProcess {
     public var onExit: (() -> Void)?
 
     /// workdirOverride：测试用临时目录隔离 data/；生产环境用默认
-    /// （python 模式 = 业务根，frozen 模式 = ~/.iTrader）
+    /// （python 模式 = 业务根，frozen 模式 = 数据根 ~/.X-iTrader-Client）
     public init(repoRootOverride: URL? = nil, workdirOverride: URL? = nil) throws {
         self.workdirOverride = workdirOverride
         if let override = repoRootOverride {
@@ -174,13 +177,18 @@ public final class BackendProcess {
     }
 
     private static func detectPlan() throws -> LaunchPlan {
-        // 生产态：build_app.sh 把 PyInstaller onedir 后端组装到 Resources/backend/
-        // （放 MacOS 会被 codesign 当代码树扫描而无法通过签名）
+        // 生产态（runtime）：壳首启下载并解压到数据根下的 runtime/backend/，
+        // workdir 为数据根（frozen 后端 chdir 到同一路径）
+        let runtimeBackend = AppPaths.backendExecutable
+        if FileManager.default.fileExists(atPath: runtimeBackend.path) {
+            return .frozen(executable: runtimeBackend, workdir: AppPaths.dataRoot)
+        }
+        // 生产态（bundle，过渡兼容）：早期构建把 PyInstaller 后端打进
+        // Resources/backend/（放 MacOS 会被 codesign 当代码树扫描而无法通过签名）
         if let backend = Bundle.main.url(
             forResource: "backend", withExtension: nil, subdirectory: "backend"
         ), FileManager.default.fileExists(atPath: backend.path) {
-            let home = URL(fileURLWithPath: NSHomeDirectory())
-            return .frozen(executable: backend, workdir: home.appendingPathComponent(".iTrader"))
+            return .frozen(executable: backend, workdir: AppPaths.dataRoot)
         }
         // 开发态 bundle：build_shell.sh 在 Resources 里放置业务根路径
         let marker = Bundle.main.url(forResource: "backend_root", withExtension: "txt")

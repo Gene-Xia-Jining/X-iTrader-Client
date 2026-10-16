@@ -9,8 +9,11 @@
 # 后端放 Resources 而非 MacOS：codesign 把 MacOS/ 下的数据目录（*.dist-info、
 # 非 Mach-O 可执行位文件）误判为未签名嵌套代码导致无法签名；Resources 只做
 # 资源封印，可整体通过 ad-hoc 签名。
-# 后端运行时工作目录为 ~/.iTrader（src/backend/__main__.py frozen 分支 chdir），
-# data/ 独立于 app 位置；壳经 Bundle 内路径定位 backend 直接 spawn，见 BackendProcess.swift。
+# 后端运行时的目标位置是数据根下的 ~/.X-iTrader-Client/runtime/backend/
+# （见 src/infrastructure/paths.py 与 shell AppPaths.swift）；frozen 后端的 workdir
+# 即数据根 ~/.X-iTrader-Client（src/backend/__main__.py frozen 分支 chdir），data/
+# 独立于 app 位置。本脚本当前仍把 backend 打进 bundle 作为过渡，壳的 detectPlan
+# 优先探测 runtime 布局、回退到 Bundle（见 BackendProcess.swift）。
 #
 # 用法: ./build_app.sh
 set -euo pipefail
