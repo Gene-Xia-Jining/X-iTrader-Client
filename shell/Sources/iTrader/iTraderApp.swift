@@ -157,22 +157,41 @@ struct RootView: View {
         }
         .background(AppTheme.canvas(scheme))
         .preferredColorScheme(dark ? .dark : .light)
+        .sheet(isPresented: startBlockedBinding) {
+            StartBlockedSheet(issues: appState.startBlockedIssues) {
+                appState.startBlockedIssues = []
+            }
+        }
     }
 
     @Environment(\.colorScheme) private var scheme
 
+    /// 启动被拦截时自动弹出问题清单；用户关闭后清空，下次点击重新判定
+    private var startBlockedBinding: Binding<Bool> {
+        Binding(
+            get: { !appState.startBlockedIssues.isEmpty },
+            set: { if !$0 { appState.startBlockedIssues = [] } }
+        )
+    }
+
     // ---- 顶部栏：品牌标题 + 自动交易/主题/退出（QFrame#head）----
+
+    /// 启动检查期间按钮显示"检查中…"，让用户知道预检（含天勤握手）在跑
+    private var startButtonTitle: String {
+        if appState.startChecking { return "自动交易：检查中…" }
+        return appState.engineStatus.tradingActive ? "自动交易：开" : "自动交易：关"
+    }
 
     private var headBar: some View {
         HStack(spacing: 12) {
             Spacer()
             AppButton(
-                appState.engineStatus.tradingActive ? "自动交易：开" : "自动交易：关",
+                startButtonTitle,
                 variant: appState.engineStatus.tradingActive ? .success : .secondary
             ) {
                 appState.toggleTrading(!appState.engineStatus.tradingActive)
             }
-            .disabled(appState.connState != .connected)
+            .disabled(appState.connState != .connected || appState.startChecking)
             AppButton(dark ? "浅色" : "深色", variant: .secondary) { dark.toggle() }
             // 刷新服务器品种与策略（模拟/实盘页共用），获取中置灰防重复点击
             AppButton(
@@ -312,5 +331,74 @@ private struct SidebarNavButton: View {
     private var backgroundColor: Color {
         if isSelected { return AppTheme.sidebarSelected(scheme) }
         return hovering ? AppTheme.sidebarHover(scheme) : .clear
+    }
+}
+// MARK: - 自动交易启动被拦截：问题清单弹窗
+
+/// 启动前预检未通过时展示的问题列表。
+///
+/// 后端在 engine.start 里逐项检查（服务器、账户字段、token、天勤握手），
+/// 全部问题一次返回，这里逐条列出而不是只显示第一项——用户通常要按提示
+/// 去多个页面补配置。关掉弹窗即清空，下次点击重新预检。
+private struct StartBlockedSheet: View {
+    let issues: [String]
+    let onClose: () -> Void
+
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(AppTheme.warning(scheme))
+                Text("自动交易未启动")
+                    .font(AppTheme.titleFont)
+                    .foregroundColor(AppTheme.ink(scheme))
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
+            .padding(.bottom, 12)
+
+            Text("请先处理以下 \(issues.count) 项问题，再重新开启自动交易：")
+                .font(AppTheme.bodyFont)
+                .foregroundColor(AppTheme.dim(scheme))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 14)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(issues.enumerated()), id: \.offset) { index, issue in
+                        HStack(alignment: .top, spacing: 10) {
+                            Text("\(index + 1).")
+                                .font(AppTheme.monoFont)
+                                .foregroundColor(AppTheme.dim(scheme))
+                                .frame(width: 22, alignment: .trailing)
+                            Text(issue)
+                                .font(AppTheme.bodyFont)
+                                .foregroundColor(AppTheme.ink(scheme))
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
+                        .padding(.vertical, 8)
+                        .padding(.horizontal, 12)
+                        .background(AppTheme.soft(scheme))
+                        .cornerRadius(10)
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+            .frame(maxHeight: 320)
+
+            HStack {
+                Spacer()
+                AppButton("好", variant: .secondary) { onClose() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(20)
+        }
+        .frame(width: 520)
+        .background(AppTheme.canvas(scheme))
     }
 }

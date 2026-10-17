@@ -178,6 +178,10 @@ final class AppState: ObservableObject {
     @Published var tokenRecords: [TokenRecord] = []
     @Published var updatePhase = UpdatePhase.idle
     @Published var lastActionError = ""
+    /// 自动交易启动被预检拦截的问题列表；非空时顶栏弹出清单，用户确认后清空
+    @Published var startBlockedIssues: [String] = []
+    /// 启动检查进行中（顶栏按钮置灰防重复点击）
+    @Published var startChecking = false
 
     private var backend: BackendProcess?
     private var client: RpcClient?
@@ -359,9 +363,30 @@ final class AppState: ObservableObject {
 
     // -------- 业务动作 --------
 
+    /// 自动交易开关。开启时后端会先做启动前预检，不通过则返回问题列表：
+    /// 这里不写日志了事，而是发布到 startBlockedIssues 由顶栏弹窗展示并拦住。
     func toggleTrading(_ on: Bool) {
+        guard !startChecking else { return }
+        startChecking = true
+        startBlockedIssues = []
         Task {
-            await runAction(method: on ? "engine.start" : "engine.stop")
+            defer { startChecking = false }
+            do {
+                lastActionError = ""
+                _ = try await call(method: on ? "engine.start" : "engine.stop")
+            } catch let error as RpcError {
+                let issues = error.issues
+                if !issues.isEmpty {
+                    startBlockedIssues = issues
+                    appendLog(level: "WARNING", message: "自动交易未启动：共 \(issues.count) 项检查未通过")
+                } else {
+                    lastActionError = error.localizedDescription
+                    appendLog(level: "ERROR", message: "engine.start 失败: \(error.localizedDescription)")
+                }
+            } catch {
+                lastActionError = error.localizedDescription
+                appendLog(level: "ERROR", message: "engine.start 失败: \(error.localizedDescription)")
+            }
             await refreshEngineOnly()
         }
     }

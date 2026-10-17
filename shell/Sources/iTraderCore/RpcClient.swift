@@ -4,7 +4,8 @@ import Network
 public enum RpcError: LocalizedError {
     case handshakeFailed(String)
     case connectionClosed
-    case requestFailed(String, String)  // error 消息, 服务端异常类型名
+    /// error 消息, 服务端异常类型名, 结构化附加数据（响应里的 data 字段）
+    case requestFailed(String, String, [String: Any])
 
     public var errorDescription: String? {
         switch self {
@@ -12,9 +13,17 @@ public enum RpcError: LocalizedError {
             return "后端握手失败: \(msg)"
         case .connectionClosed:
             return "与后端的连接已断开"
-        case .requestFailed(let error, let type):
+        case .requestFailed(let error, let type, _):
             return type == "RuntimeError" || type == "ValueError" ? error : "\(type): \(error)"
         }
+    }
+
+    /// 启动前预检问题列表（EngineStartBlockedError 的 data.issues）。
+    /// 其他失败返回空数组。
+    public var issues: [String] {
+        guard case .requestFailed(_, let type, let data) = self,
+              type == "EngineStartBlockedError" else { return [] }
+        return data["issues"] as? [String] ?? []
     }
 }
 
@@ -182,7 +191,8 @@ public actor RpcClient {
             } else {
                 cont.resume(throwing: RpcError.requestFailed(
                     obj["error"] as? String ?? "未知错误",
-                    obj["type"] as? String ?? "Error"
+                    obj["type"] as? String ?? "Error",
+                    obj["data"] as? [String: Any] ?? [:]
                 ))
             }
         }

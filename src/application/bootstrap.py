@@ -84,13 +84,14 @@ class Bootstrap:
         return self._trade_repo
 
     def build_trading_executor(self) -> TqSdkTradingExecutor:
-        """惰性创建执行器：每个账户独立 TqApi 会话，共享一个执行器实例。
+        """惰性创建执行器：每个启用账户独立 TqApi 会话，共享一个执行器实例。
 
-        账户记录（含 broker）来自 accounts 表，快期权限凭据来自每个账户的
-        tq_account/tq_password。
+        只纳入 enabled 账户：停用账户不参与交易，其凭据也不应被构造，
+        否则一个停用但凭据错误的账户会拖垮整次启动。账户记录（含 broker）
+        来自 accounts 表，快期权限凭据来自每个账户的 tq_account/tq_password。
         """
         if self._trading_executor is None:
-            accounts = self.accounts
+            accounts = [a for a in self.accounts if a.enabled]
             self._trading_executor = TqSdkTradingExecutor(
                 accounts=accounts,
                 auths={a.id: (a.tq_account, a.tq_password) for a in accounts},

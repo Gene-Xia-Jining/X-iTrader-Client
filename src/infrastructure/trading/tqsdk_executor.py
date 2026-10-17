@@ -19,6 +19,32 @@ def test_tq_auth_connection(account: str, password: str) -> None:
     api.close()
 
 
+def test_account_session(account: Account, auth: tuple[Optional[str], Optional[str]]) -> None:
+    """验证某账户的完整 TqApi 会话能否建立（auth + 账户对象）。
+
+    与 _start_session 同样的构造路径：实盘走 TqAccount、模拟走 TqKq，
+    构造中 tqsdk 会同步完成 auth.login 与账户权限校验，任一步失败都抛
+    异常。握手成功后立即 close，不留长连接。供 engine_start 的启动前预检
+    使用——区别于 test_tq_auth_connection 只验快期权限账户，本函数能发现
+    实盘期货公司/资金账号配置错误（tqsdk 在构造时即校验账户授权）。
+
+    阻塞调用，需在工作线程中执行（与 test_tq_auth_connection 一致）。
+    """
+    from tqsdk import TqAccount, TqApi, TqAuth, TqKq
+
+    if account.kind == "live":
+        account_obj = TqAccount(account.broker, account.trade_account, account.trade_password)
+    else:
+        # 模拟账户全局仅一个（快期多模拟账户需专业版，暂不支持），用主模拟账号
+        account_obj = TqKq()
+
+    api = TqApi(
+        account_obj,
+        auth=TqAuth(auth[0], auth[1]) if auth[0] and auth[1] else None,
+    )
+    api.close()
+
+
 @dataclass
 class _AccountSession:
     """单个账户的 TqApi 会话，独占一个守护线程与事件循环。"""
@@ -57,6 +83,7 @@ class TqSdkTradingExecutor(TradingExecutor):
             for account in accounts
         }
         self._closed = False
+        self._closing = False
 
     def _start_session(
         self, account: Account, auth: tuple[Optional[str], Optional[str]]
@@ -135,12 +162,27 @@ class TqSdkTradingExecutor(TradingExecutor):
         self._submit(account_id, _set)
 
     def close(self) -> None:
-        if self._closed:
+        """关闭全部账户的 TqApi 会话。幂等；单个账户失败不影响其余账户。
+
+        _closed 必须在投递完成后才置位：_submit 会拒绝已关闭执行器的调用，
+        先置位会让 close 自身抛「执行器已关闭」，会话实际从未被释放。
+        这里用独立的 _closing 标记防止重入。
+        """
+        if self._closed or self._closing:
             return
-        self._closed = True
-        for session in list(self._sessions.values()):
-            self._submit(
-                session.account_id,
-                lambda api=session.api: api.close(),
-                timeout=self._close_timeout,
-            )
+        self._closing = True
+        try:
+            for session in list(self._sessions.values()):
+                try:
+                    self._submit(
+                        session.account_id,
+                        lambda api=session.api: api.close(),
+                        timeout=self._close_timeout,
+                    )
+                except Exception:
+                    # 单账户关闭失败不阻断其余账户；线程为 daemon，进程退出时随
+                    # 进程回收，这里无需重试
+                    pass
+        finally:
+            self._closed = True
+            self._closing = False

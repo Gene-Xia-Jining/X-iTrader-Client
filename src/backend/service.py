@@ -38,7 +38,7 @@ from ..infrastructure.api.client import (
     fetch_server_symbols,
 )
 from ..infrastructure.proxy import apply_proxy_environment, server_host
-from ..infrastructure.trading.tqsdk_executor import test_tq_auth_connection
+from ..infrastructure.trading.tqsdk_executor import test_account_session, test_tq_auth_connection
 from ..infrastructure.updater import (
     ReleaseInfo,
     apply_update_and_restart,
@@ -48,6 +48,18 @@ from ..infrastructure.updater import (
     fetch_latest_release,
     is_newer,
 )
+
+
+class EngineStartBlockedError(RuntimeError):
+    """自动交易启动被预检拦截。message 为分号连接的问题摘要，
+    issues 字段保留结构化问题列表供 UI 展示。"""
+
+    def __init__(self, issues: list[str]):
+        self.issues = list(issues)
+        super().__init__("；".join(self.issues) if self.issues else "启动被拦截")
+
+    def to_payload(self) -> dict:
+        return {"data": {"issues": self.issues}}
 
 
 def _dataclass_dict(obj) -> dict:
@@ -431,14 +443,100 @@ class BackendService:
         return {}
 
     async def engine_start(self, params: dict) -> dict:
-        """开启自动交易：先探测服务器连通性，未连接则拒绝启动。"""
+        """开启自动交易：先做启动前预检，任一检查不过则拒绝启动并返回问题列表。
+
+        预检项：
+        - 服务器连通（/api/health）；
+        - 已启用账户非空，且每个账户的品种、实盘资金账号等关键字段已填；
+        - 本地 API token 已领取（否则 SSE 信号流会被服务器 401 拒绝）；
+        - 每个启用账户的快期权限账户能完成 TqApi 握手（含账户权限校验）。
+
+        预检全过后才置 auto_trade=True 并启动引擎；启动阶段若仍有账户失败，
+        同样回滚（停掉已启动的引擎、不置 auto_trade）并抛出问题列表，避免
+        出现「按钮已显示开启但实际半数账户未起」的不一致状态。
+        """
+        issues = await self._preflight_start_checks()
+        if issues:
+            # 拼成多行文案便于日志；结构化 issues 经异常 type 字段回传 UI
+            raise EngineStartBlockedError(issues)
+        # 预检通过后启动；启动期失败也按问题列表抛出，由本方法回滚
         try:
-            await check_server_health(self.bootstrap.config.server_url)
+            self.set_auto_trade({"value": True})
+            await self._start_engines()
+        except EngineStartBlockedError:
+            await self.stop_engines()
+            self.set_auto_trade({"value": False})
+            raise
         except Exception as e:
-            raise RuntimeError(f"服务器未连接: {e}") from e
-        self.set_auto_trade({"value": True})
-        await self._start_engines()
+            # 启动期非预期异常：同样回滚，避免半启动状态
+            await self.stop_engines()
+            self.set_auto_trade({"value": False})
+            raise EngineStartBlockedError([f"启动过程发生未预期错误: {e}"]) from e
         return self.engine_status()
+
+    async def _preflight_start_checks(self) -> list[str]:
+        """启动前预检，返回人类可读的问题列表（空列表 = 通过）。
+
+        单个账户的 TqApi 握手是阻塞网络调用，放线程池并发执行；任一账户
+        失败记一条问题，不阻断其余账户的检查（让用户一次看到全部问题）。
+        """
+        issues: list[str] = []
+        config = self.bootstrap.config
+
+        # 1) 服务器连通
+        try:
+            await check_server_health(config.server_url)
+        except Exception as e:
+            issues.append(f"服务器未连接: {e}")
+
+        # 2) 已启用账户与关键字段
+        enabled_accounts = [a for a in self.bootstrap.accounts if a.enabled]
+        if not enabled_accounts:
+            issues.append("没有已启用的账户，请先在模拟/实盘页启用至少一个账户")
+        for acc in enabled_accounts:
+            label = acc.label or acc.id
+            if not acc.tq_account:
+                issues.append(f"账户「{label}」未配置快期账号")
+            if not acc.tq_password:
+                issues.append(f"账户「{label}」未配置快期密码")
+            if not acc.symbols:
+                issues.append(f"账户「{label}」未选择交易品种")
+            if acc.kind == "live":
+                if not acc.broker:
+                    issues.append(f"实盘账户「{label}」未选择期货公司")
+                if not acc.trade_account:
+                    issues.append(f"实盘账户「{label}」未填写资金账号")
+                if not acc.trade_password:
+                    issues.append(f"实盘账户「{label}」未填写交易密码")
+
+        # 3) 本地 API token（SSE 信号流需要）
+        token_service = self.bootstrap.token_service
+        if not token_service.token_store.have_token():
+            issues.append("本地 API token 未领取，请在 Token 管理页申请并等待服务器审批")
+
+        # 4) 天勤账户握手（字段齐全才试，避免重复报密码错误）
+        to_probe = [
+            acc for acc in enabled_accounts
+            if acc.tq_account and acc.tq_password
+        ]
+        if to_probe:
+            results = await asyncio.gather(
+                *(
+                    asyncio.to_thread(
+                        test_account_session,
+                        acc,
+                        (acc.tq_account, acc.tq_password),
+                    )
+                    for acc in to_probe
+                ),
+                return_exceptions=True,
+            )
+            for acc, exc in zip(to_probe, results):
+                if isinstance(exc, Exception):
+                    label = acc.label or acc.id
+                    issues.append(f"账户「{label}」天勤连接失败: {exc}")
+
+        return issues
 
     async def engine_stop(self, params: dict) -> dict:
         self.set_auto_trade({"value": False})
@@ -446,8 +544,17 @@ class BackendService:
         return self.engine_status()
 
     async def _start_engines(self) -> None:
-        """启动全部已启用账户的引擎。单个账户失败不影响其余账户。"""
-        started = False
+        """启动全部已启用账户的引擎。
+
+        预检已过，但 build_engine 仍可能在 tqsdk 会话构造阶段失败（预检握手
+        与正式会话是两次独立连接，偶发网络问题仍可能在此冒出）。任一账户
+        失败视为启动不完整，抛 EngineStartBlockedError 让 engine_start 回滚。
+        """
+        started_ids: list[str] = []
+        failures: list[str] = []
+        # 与预检一致用 label 展示（无 label 时回落到 id），避免弹窗里
+        # 同一账户在两条问题中出现两种称呼
+        labels = {a.id: (a.label or a.id) for a in self.bootstrap.accounts}
         for account_id in self._enabled_account_ids():
             if account_id in self._engines and self._engines[account_id].is_running:
                 continue
@@ -456,10 +563,13 @@ class BackendService:
                 engine.set_auto_trade(self._auto_trade)
                 self._engines[account_id] = engine
                 self._engine_tasks[account_id] = asyncio.create_task(engine.start())
-                started = True
+                started_ids.append(account_id)
             except Exception as e:
-                self._log(f"启动账户 {account_id} 失败: {e}", LogLevel.ERROR)
-        if started:
+                failures.append(f"账户「{labels.get(account_id, account_id)}」启动失败: {e}")
+        if failures:
+            # 已启动的引擎交由 engine_stop 回滚，这里只汇总问题抛出
+            raise EngineStartBlockedError(failures)
+        if started_ids:
             self._log("自动交易已开启", LogLevel.SUCCESS)
 
     async def stop_engines(self) -> None:

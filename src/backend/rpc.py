@@ -165,9 +165,14 @@ class RpcServer:
             result = await handler(params)
             self._send(conn, {"id": req_id, "ok": True, "result": result})
         except Exception as e:
-            self._send(
-                conn, {"id": req_id, "ok": False, "error": str(e), "type": type(e).__name__}
-            )
+            # 异常可经 to_payload() 携带结构化字段（如启动拦截的 issues 列表），
+            # 供客户端区分展示；不带该方法的异常按原样只回 error/type
+            payload = {"id": req_id, "ok": False, "error": str(e), "type": type(e).__name__}
+            if hasattr(e, "to_payload") and callable(e.to_payload):
+                extra = e.to_payload()
+                if isinstance(extra, dict):
+                    payload.update(extra)
+            self._send(conn, payload)
         finally:
             try:
                 await conn.writer.drain()

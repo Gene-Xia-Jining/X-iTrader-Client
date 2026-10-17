@@ -30,10 +30,15 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 → {"id": 1, "method": "engine.start", "params": {}}
 ← {"id": 1, "ok": true,  "result": {...}}
 ← {"id": 1, "ok": false, "error": "服务器未连接: ...", "type": "RuntimeError"}
+← {"id": 1, "ok": false, "error": "账户「A」未配置快期账号；…", "type": "EngineStartBlockedError",
+   "data": {"issues": ["账户「A」未配置快期账号", ...]}}
 ```
 
 - 每连接请求**串行**处理，响应按完成顺序返回（客户端按 `id` 匹配）。
 - `type` 为服务端异常类名（`ValueError`/`RuntimeError`/`TqAuthError` 等），供壳展示。
+- 异常若实现 `to_payload()`，响应会附带 `data` 字段携带结构化信息；
+  当前 `EngineStartBlockedError` 用 `data.issues`（字符串数组）回传启动前预检问题清单，
+  供客户端以弹窗列表形式展示。
 
 ## 事件（服务端 → 客户端，无 id）
 
@@ -67,7 +72,7 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 | `strategies.fetch` | - | `{strategies: [...], message}` 服务器策略列表，元素为 `{id, name, description}`（id 用于 accounts.save 的 strategy 与订阅上报） |
 | `tokens.status` | - | `{status, records: [...]}`；`records` 为申请记录，元素 `{token_id, description, status, created_at, expires_at, use_count}`（created_at/expires_at 为 Unix 秒），倒序；`status` 文案：未申请/待审核/已通过，token 已加密保存/已通过，但服务器未返回 token/已拒绝。已通过但本地无 token 时就地领取一次 |
 | `tokens.request` | `{description?}` | `{status}` 提交申请后立即触发一次后台领取轮询 |
-| `engine.start` | - | engines 状态。先探测服务器，未连接则失败；等价 UI 的"自动交易"开 |
+| `engine.start` | - | engines 状态。启动前预检（服务器连通、已启用账户字段齐全、本地 token、天勤握手）；任一项不过抛 `EngineStartBlockedError`（`data.issues` 为问题列表），不置 `auto_trade`、不启动任何引擎 |
 | `engine.stop` | - | engines 状态。等价 UI 的"自动交易"关 |
 | `engine.set_auto_trade` | `{value}` | `{}` 只改自动执行标志，不动引擎 |
 | `engine.status` | - | `{auto_trade, trading_active, server_online, accounts: [{account_id, running, server_connected}]}`；`server_online` 为后端心跳探测的 iTrader 服务器连通性（启动即测、每 10s 周期、保存配置后立即重测），与引擎是否运行无关 |
