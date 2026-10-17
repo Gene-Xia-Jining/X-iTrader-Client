@@ -165,8 +165,10 @@ class ExtractUpdateTest(unittest.TestCase):
         self.assertTrue((item / "Contents" / "MacOS" / "X-iTrader-Client").is_file())
 
     def test_windows_full_zip(self):
+        # Windows 全量包是扁平布局：壳与后端可执行文件同根级，_internal/ 放后端依赖
         _make_zip(self.zip_path, {
-            "iTrader.exe": b"MZ",
+            "X-iTrader.exe": b"MZ",
+            "X-iTrader-Backend.exe": b"MZ",
             "_internal/src/__init__.py": b"x",
         })
         item = extract_update(self.zip_path, self.stage)
@@ -323,22 +325,28 @@ class ApplyUpdateTest(unittest.TestCase):
         popen.assert_called_once()
 
     def test_full_update_windows(self):
-        progdir = self.dir / "iTrader"
-        exe = progdir / "iTrader.exe"
+        # Windows 扁平布局：后端 X-iTrader-Backend.exe 的父目录即安装根，
+        # 根级必须有壳 X-iTrader.exe（全量更新时被替换、之后作为重启目标）
+        progdir = self.dir / "X-iTrader-Client"
+        backend_exe = progdir / "X-iTrader-Backend.exe"
+        shell_exe = progdir / "X-iTrader.exe"
         progdir.mkdir()
-        exe.write_bytes(b"old")
+        backend_exe.write_bytes(b"old-backend")
+        shell_exe.write_bytes(b"old-shell")
         (progdir / "_internal").mkdir()
         new_dir = self.dir / "stage"
         new_dir.mkdir()
-        (new_dir / "iTrader.exe").write_bytes(b"new")
+        (new_dir / "X-iTrader.exe").write_bytes(b"new-shell")
+        (new_dir / "X-iTrader-Backend.exe").write_bytes(b"new-backend")
         (new_dir / "_internal").mkdir()
 
-        popen = self._frozen("win32", exe)
+        # sys.executable 是后端进程；安装根取其父目录
+        popen = self._frozen("win32", backend_exe)
         binary = apply_update_and_restart(new_dir, "full")
 
-        self.assertEqual(binary.resolve(), exe.resolve())
-        self.assertEqual(exe.read_bytes(), b"new")
-        backups = list(self.dir.glob("iTrader.old-*"))
+        self.assertEqual(binary.resolve(), shell_exe.resolve())
+        self.assertEqual(shell_exe.read_bytes(), b"new-shell")
+        backups = list(self.dir.glob("X-iTrader-Client.old-*"))
         self.assertEqual(len(backups), 1)
         popen.assert_called_once()
 
@@ -409,11 +417,11 @@ class CleanupStaleBackupsTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name) / "Programs"
-        progdir = root / "iTrader"
+        progdir = root / "X-iTrader-Client"
         progdir.mkdir(parents=True)
-        exe = progdir / "iTrader.exe"
+        exe = progdir / "X-iTrader-Backend.exe"
         exe.write_bytes(b"MZ")
-        stale = root / "iTrader.old-456"
+        stale = root / "X-iTrader-Client.old-456"
         stale.mkdir()
         (stale / "junk").write_text("x")
 

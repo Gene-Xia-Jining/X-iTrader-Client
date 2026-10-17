@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="XTrader.Shell.Views.TradingLogPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid Padding="24" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Spacing="4">
+            <TextBlock x:Name="PageTitle" Text="交易日志" FontSize="22" FontWeight="SemiBold" />
+            <TextBlock x:Name="Subtitle" Text="实时查看客户端连接、信号、下单和异常信息。" />
+        </StackPanel>
+
+        <Grid Grid.Row="1">
+            <TextBlock x:Name="Hint" Text="本地会话日志，保存在内存中" HorizontalAlignment="Left"
+                       VerticalAlignment="Center" />
+            <Button Content="清空日志" Click="OnClearClick" HorizontalAlignment="Right" />
+        </Grid>
+
+        <ScrollViewer x:Name="LogScroll" Grid.Row="2" BorderThickness="1"
+                      CornerRadius="11" Padding="12"
+                      VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="LogPanel" />
+        </ScrollViewer>
+    </Grid>
+</Page>

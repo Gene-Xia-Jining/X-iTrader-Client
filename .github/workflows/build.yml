@@ -67,25 +67,35 @@ jobs:
 
     strategy:
       fail-fast: false
-      # Windows 暂不发布：Qt 打包链已随架构切换移除，SwiftUI 壳仅支持 Apple 平台，
-      # 待 Windows 壳落地后恢复 matrix 与 Package 步骤
       matrix:
-        os: [macos-latest]
+        os: [macos-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          # 与本地 .venv 一致（3.14），保证 CI 产物与本地验证过的打包结果同源
+          # 与本地 .venv 一致（3.14），保证 CI 产物与本地验证过的打包结果同源；
+          # Windows 上若个别依赖缺 cp314 wheel 会在此暴露，届时回落 3.13
           python-version: "3.14"
 
-      - name: Install dependencies
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
         run: |
           # 建在仓库根的 .venv：build_app.sh 固定调用 .venv/bin/pyinstaller
           python -m venv .venv
           .venv/bin/pip install --upgrade pip
           .venv/bin/pip install -r requirements.txt
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # 建在仓库根的 .venv：打包步骤固定调用 .venv\Scripts\pyinstaller
+          python -m venv .venv
+          .venv\Scripts\python -m pip install --upgrade pip
+          .venv\Scripts\pip install -r requirements.txt
+
+      # ---------- macOS ----------
 
       - name: Build (macOS)
         if: runner.os == 'macOS'
@@ -102,11 +112,64 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/dist"
           mv ../iTrader-${{ needs.version.outputs.version }}-macos.dmg "$GITHUB_WORKSPACE/dist/"
 
+      # ---------- Windows ----------
+
+      - name: Setup .NET (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build backend (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # specs/backend.spec 在 win32 下把产物命名为 X-iTrader-Backend
+          .venv\Scripts\pyinstaller --workpath=build/backend --distpath=dist --noconfirm specs/backend.spec
+          if (-not (Test-Path "dist/X-iTrader-Backend/X-iTrader-Backend.exe")) {
+            Write-Error "未找到后端产物 dist/X-iTrader-Backend/X-iTrader-Backend.exe"
+            exit 1
+          }
+        shell: pwsh
+
+      - name: Publish shell (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # 框架依赖发布（不内置 .NET / Windows App Runtime，由随包脚本引导安装）
+          dotnet publish winui/X-iTrader.Shell.csproj `
+            -c Release -r win-x64 -p:Platform=x64 --self-contained false `
+            -o dist/shell
+          if (-not (Test-Path "dist/shell/X-iTrader.exe")) {
+            Write-Error "未找到壳产物 dist/shell/X-iTrader.exe"
+            exit 1
+          }
+        shell: pwsh
+
+      - name: Assemble package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # 扁平布局：壳与后端可执行文件同级，后端依赖放 _internal\
+          # 该形态与 src/infrastructure/updater.py 的 Windows 假设一致
+          # （安装根 = 后端 exe 的父目录，根级有 X-iTrader.exe 作为重启目标）。
+          $ver = "${{ needs.version.outputs.version }}"
+          $stage = "dist/pkg"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          Copy-Item "dist/shell/*" $stage -Recurse -Force
+          Copy-Item "dist/X-iTrader-Backend/X-iTrader-Backend.exe" $stage -Force
+          Copy-Item "dist/X-iTrader-Backend/_internal" $stage -Recurse -Force
+          Copy-Item "winui/scripts/安装运行环境.cmd" $stage -Force
+          Copy-Item "winui/scripts/README.txt" $stage -Force
+
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/iTrader-$ver-windows.zip" -Force
+        shell: pwsh
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: itrader-${{ runner.os }}
-          path: dist/iTrader-${{ needs.version.outputs.version }}-*.dmg
+          path: |
+            dist/iTrader-*-macos.dmg
+            dist/iTrader-*-windows.zip
 
   release:
     needs: [version, build]
@@ -126,6 +189,7 @@ jobs:
           body: Automated GitHub release for iTrader Client
           files: |
             artifacts/itrader-macOS/*.dmg
+            artifacts/itrader-Windows/*.zip
             artifacts/itrader-src-patch/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

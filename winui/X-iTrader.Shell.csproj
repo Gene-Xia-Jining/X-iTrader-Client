@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    iTrader Windows 壳（WinUI 3 / .NET 8）。
+
+    部署形态：unpackaged（WindowsPackageType=None）+ 框架依赖
+    （WindowsAppSDKSelfContained=false、SelfContained=false）。
+    因此目标机必须已安装 .NET 8 Desktop Runtime 与 Windows App Runtime，
+    缺失时由随包脚本 安装运行环境.cmd 引导安装（根目录 README.txt 为用户说明）。
+
+    Publish 命令（CI 使用；本地 macOS 无法构建本工程）：
+      dotnet publish -c Release -r win-x64 -p:Platform=x64 --no-self-contained
+
+    产物根级文件名必须是 X-iTrader.exe：src/infrastructure/updater.py 的
+    Windows 分支把「后端 exe 的父目录」作为安装根，并期望根级有 X-iTrader.exe
+    作为全量更新后的重启目标（见 _launch_binary_of）。
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>XTrader.Shell</RootNamespace>
+    <!-- AssemblyName 决定 apphost 文件名（X-iTrader.exe）与其查找的同名托管 dll（X-iTrader.dll） -->
+    <AssemblyName>X-iTrader</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <UseWinUI>true</UseWinUI>
+    <EnableMsixTooling>true</EnableMsixTooling>
+
+    <!-- unpackaged：不生成 MSIX 包，无需包标识 -->
+    <WindowsPackageType>None</WindowsPackageType>
+
+    <!-- 框架依赖：不把 .NET / Windows App Runtime 打进产物 -->
+    <SelfContained>false</SelfContained>
+    <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
+
+    <!--
+      运行环境缺失时的提示：保留 SDK 的 bootstrapper 自动初始化（默认开启），
+      并打开 OnNoMatch_ShowUI —— 找不到匹配的 Windows App Runtime 时，
+      SDK 会自行弹出系统的获取提示，而不是静默 fail-fast（表现为"双击没反应"）。
+      这是官方支持的失败提示路径，比自己调 Bootstrapper API 更稳，也不必依赖
+      引导 DLL 的复制时机。真正的自动安装在随包脚本里完成。
+    -->
+    <WindowsAppSDKBootstrapAutoInitializeOptions_OnNoMatch_ShowUI>true</WindowsAppSDKBootstrapAutoInitializeOptions_OnNoMatch_ShowUI>
+
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Windows App SDK 主次版本（1.6）需与随包脚本安装的运行时一致 -->
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.250205002" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.1742" />
+  </ItemGroup>
+
+</Project>

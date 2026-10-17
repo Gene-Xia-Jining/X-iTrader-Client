@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="XTrader.Shell.Views.DashboardPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ScrollViewer>
+        <StackPanel x:Name="Root" Spacing="16" Padding="24">
+            <StackPanel Spacing="4">
+                <TextBlock x:Name="PageTitle" Text="仪表盘" FontSize="22" FontWeight="SemiBold" />
+                <TextBlock x:Name="Subtitle" Text="服务器连接与自动交易运行状态总览。" />
+            </StackPanel>
+
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <Border x:Name="ServerCard" Grid.Column="0" BorderThickness="1" CornerRadius="18" Padding="20,16">
+                    <StackPanel Spacing="6">
+                        <TextBlock x:Name="ServerCardTitle" Text="服务器状态" />
+                        <Border x:Name="ServerPill" CornerRadius="16" Padding="12,8">
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <Ellipse x:Name="ServerDot" Width="10" Height="10" VerticalAlignment="Center" />
+                                <TextBlock x:Name="ServerValue" FontWeight="SemiBold" />
+                            </StackPanel>
+                        </Border>
+                        <TextBlock x:Name="ServerSecondary" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                </Border>
+
+                <Border x:Name="TradingCard" Grid.Column="1" BorderThickness="1" CornerRadius="18" Padding="20,16">
+                    <StackPanel Spacing="6">
+                        <TextBlock x:Name="TradingCardTitle" Text="交易状态" />
+                        <Border x:Name="TradingPill" CornerRadius="16" Padding="12,8">
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <Ellipse x:Name="TradingDot" Width="10" Height="10" VerticalAlignment="Center" />
+                                <TextBlock x:Name="TradingValue" FontWeight="SemiBold" />
+                            </StackPanel>
+                        </Border>
+                        <TextBlock x:Name="TradingSecondary" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                </Border>
+
+                <Border x:Name="AccountsCard" Grid.Column="2" BorderThickness="1" CornerRadius="18" Padding="20,16">
+                    <StackPanel Spacing="6">
+                        <TextBlock x:Name="AccountsCardTitle" Text="账户资金" />
+                        <TextBlock x:Name="AccountsValue" FontSize="26" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                        <TextBlock x:Name="AccountsSecondary" Text="初始资金 (元)" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                </Border>
+
+                <Border x:Name="SymbolsCard" Grid.Column="3" BorderThickness="1" CornerRadius="18" Padding="20,16">
+                    <StackPanel Spacing="6">
+                        <TextBlock x:Name="SymbolsCardTitle" Text="活跃品种" />
+                        <TextBlock x:Name="SymbolsValue" FontSize="26" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                        <TextBlock x:Name="SymbolsSecondary" Text="已订阅行情品种" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <Border x:Name="SignalCard" BorderThickness="1" CornerRadius="18" Padding="20,16">
+                <StackPanel Spacing="10">
+                    <TextBlock x:Name="SignalTitle" Text="最近信号" />
+                    <TextBlock x:Name="SignalEmpty" Text="暂无信号 — 服务器信号将在此显示" HorizontalAlignment="Center" />
+                </StackPanel>
+            </Border>
+
+            <Border x:Name="LogCard" BorderThickness="1" CornerRadius="18" Padding="20,16">
+                <StackPanel Spacing="10">
+                    <Grid>
+                        <TextBlock x:Name="LogTitle" Text="最近日志" HorizontalAlignment="Left" />
+                        <Button Content="清空日志" Click="OnClearLogsClick" HorizontalAlignment="Right" />
+                    </Grid>
+                    <ScrollViewer x:Name="LogPreviewScroll" Height="120" BorderThickness="1"
+                                  CornerRadius="11" Padding="8">
+                        <StackPanel x:Name="LogPreviewPanel" />
+                    </ScrollViewer>
+                </StackPanel>
+            </Border>
+
+            <StackPanel Orientation="Horizontal" Spacing="10">
+                <Button Content="配置设置" Click="OnSettingsClick" />
+                <Button Content="Token 管理" Click="OnTokenClick" />
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

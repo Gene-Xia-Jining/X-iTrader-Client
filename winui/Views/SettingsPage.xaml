@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="XTrader.Shell.Views.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ScrollViewer>
+        <StackPanel x:Name="Root" Spacing="16" Padding="24">
+            <StackPanel Spacing="4">
+                <TextBlock x:Name="PageTitle" Text="设置" FontSize="22" FontWeight="SemiBold" />
+                <TextBlock x:Name="Subtitle" Text="服务器连接配置，保存后即时生效。" />
+            </StackPanel>
+
+            <Border x:Name="Card" BorderThickness="1" CornerRadius="18" Padding="20">
+                <StackPanel Spacing="14">
+
+                    <!-- 服务器地址 -->
+                    <StackPanel Spacing="6">
+                        <TextBlock x:Name="ServerLabel" Text="服务器地址:" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBox x:Name="ServerBox" Width="380"
+                                     PlaceholderText="http://localhost:8000" />
+                            <Button Content="测试连接" Click="OnTestServerClick" />
+                        </StackPanel>
+                        <TextBlock x:Name="ServerHint"
+                                   Text="这是 iTrader 智能交易服务器的地址，需与服务器部署地址一致"
+                                   TextWrapping="Wrap" />
+                        <TextBlock x:Name="ServerTestResult" TextWrapping="Wrap" Visibility="Collapsed" />
+                    </StackPanel>
+
+                    <Rectangle Height="1" x:Name="Divider1" />
+
+                    <!-- 代理服务器 -->
+                    <StackPanel Spacing="6">
+                        <TextBlock x:Name="ProxyLabel" Text="代理服务器:" />
+                        <StackPanel Orientation="Horizontal" Spacing="16">
+                            <RadioButton x:Name="ProxyDirect" Content="直连（默认）" GroupName="proxy" IsChecked="True" />
+                            <RadioButton x:Name="ProxySystem" Content="系统代理" GroupName="proxy" />
+                            <RadioButton x:Name="ProxyCustom" Content="自定义" GroupName="proxy" />
+                        </StackPanel>
+                        <TextBox x:Name="ProxyBox" IsEnabled="False"
+                                 PlaceholderText="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080" />
+                        <TextBlock x:Name="ProxyHint"
+                                   Text="仅影响天勤行情/交易连接，iTrader 服务器始终直连；直连会忽略系统代理。socks5 代理需安装 python-socks"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <Rectangle Height="1" x:Name="Divider2" />
+
+                    <!-- 软件更新 -->
+                    <StackPanel Spacing="6">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock x:Name="VersionText" Text="当前版本 v-" VerticalAlignment="Center" />
+                            <Button x:Name="CheckUpdateButton" Content="检查更新" Click="OnCheckUpdateClick" />
+                            <Button x:Name="ActionButton" Visibility="Collapsed" Click="OnUpdateActionClick" />
+                            <TextBlock x:Name="UpdateStatus" VerticalAlignment="Center" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <CheckBox x:Name="AutoCheckBox" Content="启动时自动检查更新，发现新版本时提示" />
+                    </StackPanel>
+
+                    <Rectangle Height="1" x:Name="Divider3" />
+
+                    <Button Content="保存" Click="OnSaveClick" HorizontalAlignment="Right" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

@@ -4,7 +4,8 @@
 __version__ 打 tag 并发布）：
 
 - iTrader-{version}-macos.dmg    全量包（内含 X-iTrader-Client.app，拖拽安装）
-- iTrader-{version}-windows.zip  全量包（内含 onedir 程序目录，根级 iTrader.exe）
+- iTrader-{version}-windows.zip  全量包（内含扁平程序目录，根级 X-iTrader.exe 壳
+                                  + X-iTrader-Backend.exe 后端 + _internal/）
 - iTrader-{version}-src.zip      补丁包（仅当相对上一版本只有 src/ 变化时发布，
                                   全平台共用；src 在打包时外置为普通目录，
                                   替换该目录即完成差量更新）
@@ -36,6 +37,10 @@ RELEASE_PAGE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 _FULL_ASSET_KEYWORDS = {"darwin": ("macos", ".dmg"), "win32": ("windows", ".zip")}
 # 补丁包 asset 名关键字（iTrader-{version}-src.zip，恒为 zip）
 _PATCH_ASSET_KEYWORD = "src"
+
+# Windows 全量包根级的壳可执行文件名：程序目录（安装根）即它的父目录。
+# 后端进程是 X-iTrader-Backend.exe，与壳同级；全量更新后重启的对象是壳。
+_WIN_SHELL_EXE = "X-iTrader.exe"
 
 
 @dataclass
@@ -159,7 +164,7 @@ def _is_mac_full_zip(names: list[str]) -> bool:
 
 def _is_patch_zip(names: list[str]) -> bool:
     top = {name.split("/")[0] for name in names}
-    return "src" in top and "X-iTrader-Client.app" not in top and "iTrader.exe" not in top
+    return "src" in top and "X-iTrader-Client.app" not in top and _WIN_SHELL_EXE not in top
 
 
 def _extract_dmg(dmg_path: Path, extract_root: Path) -> Path:
@@ -205,7 +210,7 @@ def extract_update(archive_path: Path, stage_dir: Path) -> Path:
 
     按扩展名分派：.dmg 走 hdiutil 挂载提取（macOS 全量），.zip 走 zipfile。
     返回值按包类型分别是：mac 全量=X-iTrader-Client.app 目录、win 全量=程序目录
-    （根级含 iTrader.exe）、补丁包=src 目录。zipfile 自带 CRC 校验。
+    （根级含 X-iTrader.exe）、补丁包=src 目录。zipfile 自带 CRC 校验。
     """
     extract_root = stage_dir / "stage"
     # 上次中断的残留暂存；清理失败只影响磁盘占用，后续解压会覆盖同名文件
@@ -219,7 +224,7 @@ def extract_update(archive_path: Path, stage_dir: Path) -> Path:
     with zipfile.ZipFile(archive_path) as zf:
         names = zf.namelist()
         if not (_is_mac_full_zip(names) or _is_patch_zip(names)):
-            if "iTrader.exe" not in names and "iTrader.exe/" not in names:
+            if _WIN_SHELL_EXE not in names and f"{_WIN_SHELL_EXE}/" not in names:
                 raise ValueError("压缩包内容不是有效的 iTrader 更新包")
         # 安全解压：校验每个条目路径，防止 Zip Slip 路径穿越
         for member in zf.infolist():
@@ -302,7 +307,9 @@ def _launch_binary_of(install_root: Path) -> Path:
     if sys.platform == "darwin":
         binary = install_root / "Contents" / "MacOS" / "X-iTrader-Client"
     else:
-        binary = install_root / "iTrader.exe"
+        # Windows 扁平布局：安装根（后端 exe 的父目录）根级是壳 X-iTrader.exe，
+        # 全量更新后重启的是壳（由壳再拉起同级的 X-iTrader-Backend.exe）
+        binary = install_root / _WIN_SHELL_EXE
     if not binary.is_file():
         raise RuntimeError(f"更新包中未找到可执行文件: {binary}")
     return binary
