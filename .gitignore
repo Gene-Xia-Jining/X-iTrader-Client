@@ -33,9 +33,9 @@ iTrader.spec
 shell/.build/
 .build/
 
-# WinUI 壳构建产物
-winui/bin/
-winui/obj/
+# Windows 壳构建产物
+shell-windows/bin/
+shell-windows/obj/
 
 # 本地备份
 *.bak

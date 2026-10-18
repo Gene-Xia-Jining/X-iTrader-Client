@@ -135,7 +135,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           # 框架依赖发布（不内置 .NET / Windows App Runtime，由随包脚本引导安装）
-          dotnet publish winui/X-iTrader.Shell.csproj `
+          dotnet publish shell-windows/X-iTrader.Shell.csproj `
             -c Release -r win-x64 -p:Platform=x64 --self-contained false `
             -o dist/shell
           if (-not (Test-Path "dist/shell/X-iTrader.exe")) {
@@ -157,8 +157,8 @@ jobs:
           Copy-Item "dist/shell/*" $stage -Recurse -Force
           Copy-Item "dist/X-iTrader-Backend/X-iTrader-Backend.exe" $stage -Force
           Copy-Item "dist/X-iTrader-Backend/_internal" $stage -Recurse -Force
-          Copy-Item "winui/scripts/安装运行环境.cmd" $stage -Force
-          Copy-Item "winui/scripts/README.txt" $stage -Force
+          Copy-Item "shell-windows/scripts/安装运行环境.cmd" $stage -Force
+          Copy-Item "shell-windows/scripts/README.txt" $stage -Force
 
           Compress-Archive -Path "$stage/*" -DestinationPath "dist/iTrader-$ver-windows.zip" -Force
         shell: pwsh
