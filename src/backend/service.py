@@ -459,6 +459,36 @@ class BackendService:
         self._token_check_now.set()
         return {"status": "已提交申请，等待服务器审核"}
 
+    async def delete_token_request(self, params: dict) -> dict:
+        """删除一条申请记录并回传刷新后的状态与记录列表。
+
+        删掉的若是当前生效记录，服务器会立即判定本地 token 失效；这里顺手
+        校验一次并清掉本地凭据，避免自动交易预检仍显示「已领取」。
+        """
+        token_id = (params.get("token_id") or "").strip()
+        if not token_id:
+            raise ValueError("缺少 token_id")
+        if not self.bootstrap.config.server_url:
+            raise ValueError("未配置服务器地址")
+        token_service = self.bootstrap.token_service
+        await token_service.delete_token_request(token_id)
+
+        store = token_service.token_store
+        if store.have_token():
+            try:
+                valid = await token_service.validate_token(store.load_token())
+            except Exception:
+                # 网络异常不代表 token 失效，保留本地值，交给下次启动校验
+                valid = True
+            if not valid:
+                store.delete_token()
+                self._token_validated = False
+                self._log("本地 token 已失效（对应申请记录已删除）", LogLevel.WARNING)
+
+        payload = await self._token_status_payload()
+        self._broadcast("token_status", payload)
+        return payload
+
     # -------- 引擎 --------
 
     def _log(self, message: str, level: LogLevel = LogLevel.INFO) -> None:
@@ -782,6 +812,7 @@ def build_routes(service: BackendService) -> dict:
         "strategies.fetch": service.fetch_strategies,
         "tokens.status": service.token_status,
         "tokens.request": service.request_token,
+        "tokens.delete": service.delete_token_request,
         "engine.start": service.engine_start,
         "engine.stop": service.engine_stop,
         "engine.set_auto_trade": set_auto_trade,

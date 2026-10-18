@@ -6,14 +6,30 @@ struct TokenManageView: View {
     @Environment(\.colorScheme) private var scheme
 
     @State private var description = ""
-    @State private var statusAlert: String?
 
-    private struct ColumnHelp: Identifiable {
-        let id = UUID()
+    /// 列含义说明弹窗（点击表头问号触发）
+    private struct ColumnHelp {
         let title: String
         let message: String
     }
-    @State private var columnHelp: ColumnHelp?
+
+    /// 页面弹窗：同一视图只挂一个 .alert，避免多个 alert 修饰符互相抢占
+    private enum PageAlert: Identifiable {
+        case columnHelp(ColumnHelp)
+        case tokenStatus(String)
+        case confirmDelete(TokenRecord)
+        case deleteFailed(String)
+
+        var id: String {
+            switch self {
+            case .columnHelp(let help): return "help-\(help.title)"
+            case .tokenStatus(let status): return "status-\(status)"
+            case .confirmDelete(let record): return "delete-\(record.id)"
+            case .deleteFailed(let message): return "delete-error-\(message)"
+            }
+        }
+    }
+    @State private var alert: PageAlert?
 
     var body: some View {
         PageContainer {
@@ -50,7 +66,7 @@ struct TokenManageView: View {
                         AppButton("申请 Token", variant: .primary) { apply() }
                         AppButton("刷新状态", variant: .secondary) { appState.refreshTokenStatus() }
                         AppButton("查看状态", variant: .secondary, disabled: !approved) {
-                            statusAlert = appState.tokenStatus
+                            alert = .tokenStatus(appState.tokenStatus)
                         }
                         Spacer()
                     }
@@ -72,31 +88,46 @@ struct TokenManageView: View {
                         recordHeader
                         ForEach(Array(appState.tokenRecords.enumerated()), id: \.element.id) { index, record in
                             HairlineDivider()
-                            recordRow(index: index + 1, record: record)
+                            // 记录按申请时间倒序（最新在前），正序编号才是「历史第几笔」
+                            recordRow(
+                                index: appState.tokenRecords.count - index,
+                                record: record
+                            )
                         }
                     }
                 }
                 .padding(20)
             }
-            .alert(
-                columnHelp?.title ?? "",
-                isPresented: Binding(get: { columnHelp != nil }, set: { if !$0 { columnHelp = nil } }),
-                presenting: columnHelp
-            ) { _ in
-                Button("好") {}
-            } message: { help in
-                Text(help.message)
-            }
         }
         .onAppear { appState.refreshTokenStatus() }
-        .alert(
-            "Token 审批状态",
-            isPresented: Binding(get: { statusAlert != nil }, set: { if !$0 { statusAlert = nil } }),
-            presenting: statusAlert
-        ) { _ in
-            Button("好") {}
-        } message: { status in
-            Text(status)
+        .alert(item: $alert) { alert in
+            switch alert {
+            case .columnHelp(let help):
+                return Alert(
+                    title: Text(help.title),
+                    message: Text(help.message),
+                    dismissButton: .default(Text("好"))
+                )
+            case .tokenStatus(let status):
+                return Alert(
+                    title: Text("Token 审批状态"),
+                    message: Text(status),
+                    dismissButton: .default(Text("好"))
+                )
+            case .confirmDelete(let record):
+                return Alert(
+                    title: Text("删除申请记录"),
+                    message: Text(deleteConfirmMessage(record)),
+                    primaryButton: .destructive(Text("删除")) { performDelete(record) },
+                    secondaryButton: .cancel(Text("取消"))
+                )
+            case .deleteFailed(let message):
+                return Alert(
+                    title: Text("删除失败"),
+                    message: Text(message),
+                    dismissButton: .default(Text("好"))
+                )
+            }
         }
     }
 
@@ -110,7 +141,7 @@ struct TokenManageView: View {
         HStack(spacing: 12) {
             headerItem(
                 title: "编号",
-                helpMessage: "当前申请记录的序号（从 1 开始）。",
+                helpMessage: "该笔申请的序号，按申请时间从早到晚排列：最早申请的为 1 号。列表本身仍按时间倒序显示，最新记录在最上面。",
                 width: 52
             )
             headerItem(
@@ -137,6 +168,11 @@ struct TokenManageView: View {
                 helpMessage: "当前 Token 的审批状态：\n• 待审核：申请已提交，等待管理员审批\n• 已通过：审批通过，Token 有效可用\n• 已拒绝：申请未获批准",
                 width: 70
             )
+            headerItem(
+                title: "操作",
+                helpMessage: "删除该条申请记录。删除后服务器不再保留这条记录；若删掉的是当前生效的 Token，客户端本地凭据会随之失效并需要重新申请。",
+                width: 52
+            )
         }
         .font(AppTheme.dimFont.weight(.semibold))
         .foregroundColor(AppTheme.dim(scheme))
@@ -149,7 +185,7 @@ struct TokenManageView: View {
         width: CGFloat? = nil
     ) -> some View {
         let button = Button {
-            columnHelp = ColumnHelp(title: title, message: helpMessage)
+            alert = .columnHelp(ColumnHelp(title: title, message: helpMessage))
         } label: {
             HStack(spacing: 3) {
                 Text(title)
@@ -185,9 +221,27 @@ struct TokenManageView: View {
             Text(record.statusText)
                 .foregroundColor(recordColor(record.status))
                 .frame(width: 70, alignment: .leading)
+            deleteButton(for: record)
+                .frame(width: 52, alignment: .leading)
         }
         .font(AppTheme.dimFont)
         .foregroundColor(AppTheme.ink(scheme))
+    }
+
+    /// 行内删除按钮（图标 + 悬停提示，与表格行高对齐）
+    private func deleteButton(for record: TokenRecord) -> some View {
+        Button {
+            alert = .confirmDelete(record)
+        } label: {
+            Image(systemName: "trash")
+                .font(.system(size: 12))
+                .foregroundColor(AppTheme.danger(scheme))
+                .frame(width: 24, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .help("删除这条申请记录")
     }
 
     /// 记录状态语义色（已通过绿 / 已拒绝红 / 待审核黄）
@@ -215,5 +269,22 @@ struct TokenManageView: View {
     private func apply() {
         let text = description.trimmingCharacters(in: .whitespaces)
         appState.requestToken(description: text.isEmpty ? "iTrader 智能交易系统" : text)
+    }
+
+    /// 删除确认文案：删掉已通过的记录会让本地 Token 失效，需在确认前讲清楚
+    private func deleteConfirmMessage(_ record: TokenRecord) -> String {
+        let summary = record.description.isEmpty ? "（无说明）" : record.description
+        if record.status == "approved" {
+            return "将删除申请记录「\(summary)」。\n\n这条记录对应的 Token 已通过审批，删除后服务器不再认可它；若本地正在使用该 Token，需要重新申请并等待审批。"
+        }
+        return "将删除申请记录「\(summary)」。删除后不可恢复。"
+    }
+
+    private func performDelete(_ record: TokenRecord) {
+        Task {
+            if let error = await appState.deleteTokenRecord(tokenId: record.id) {
+                alert = .deleteFailed(error)
+            }
+        }
     }
 }

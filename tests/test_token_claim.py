@@ -19,6 +19,7 @@ class FakeTokenService:
         self.claim_calls = 0
         self.validate_calls = 0
         self.list_calls = 0
+        self.deleted: list[str] = []
 
     async def claim_token(self):
         self.claim_calls += 1
@@ -31,6 +32,10 @@ class FakeTokenService:
     async def list_token_requests(self):
         self.list_calls += 1
         return self._records
+
+    async def delete_token_request(self, token_id):
+        self.deleted.append(token_id)
+        self._records = [r for r in self._records if r.get("token_id") != token_id]
 
 
 def _make_service(server_url: str = "http://192.0.2.1:3080"):
@@ -172,6 +177,64 @@ class TokenStatusPayloadTest(unittest.TestCase):
         fake = self._fake()
         payload = self._payload(fake, server_url="")
         self.assertEqual(payload["status"], "未配置服务器")
+
+
+class TokenDeleteTest(unittest.TestCase):
+    def _service(self, fake):
+        service, events, _ = _make_service()
+        service.bootstrap._token_service = fake
+        return service, events
+
+    def _fake(self, **kwargs):
+        return FakeTokenService(str(Path(tempfile.mkdtemp()) / "client.db"), **kwargs)
+
+    def test_delete_removes_record_and_returns_fresh_payload(self):
+        fake = self._fake(records=[{"token_id": "t1", "status": "rejected"}])
+        service, events = self._service(fake)
+
+        payload = asyncio.run(service.delete_token_request({"token_id": "t1"}))
+
+        self.assertEqual(fake.deleted, ["t1"])
+        self.assertEqual(payload["records"], [])
+        self.assertEqual(payload["status"], "未申请")
+        self.assertEqual(events[0][0], "token_status")
+
+    def test_delete_clears_local_token_when_it_became_invalid(self):
+        fake = self._fake(valid=False, records=[{"token_id": "t1", "status": "approved"}])
+        fake.token_store.save_token("tok-live")
+        service, _ = self._service(fake)
+
+        asyncio.run(service.delete_token_request({"token_id": "t1"}))
+
+        self.assertEqual(fake.validate_calls, 1)
+        self.assertIsNone(fake.token_store.load_token())
+
+    def test_delete_keeps_local_token_when_still_valid(self):
+        # 删掉的是历史记录、当前 token 仍有效：不能误清本地凭据
+        fake = self._fake(valid=True, records=[{"token_id": "t1", "status": "rejected"}])
+        fake.token_store.save_token("tok-live")
+        service, _ = self._service(fake)
+
+        asyncio.run(service.delete_token_request({"token_id": "t1"}))
+
+        self.assertEqual(fake.token_store.load_token(), "tok-live")
+
+    def test_delete_without_token_id_raises(self):
+        fake = self._fake()
+        service, _ = self._service(fake)
+
+        with self.assertRaises(ValueError):
+            asyncio.run(service.delete_token_request({}))
+        self.assertEqual(fake.deleted, [])
+
+    def test_delete_without_server_url_raises(self):
+        fake = self._fake()
+        service, _, _ = _make_service(server_url="")
+        service.bootstrap._token_service = fake
+
+        with self.assertRaises(ValueError):
+            asyncio.run(service.delete_token_request({"token_id": "t1"}))
+        self.assertEqual(fake.deleted, [])
 
 
 if __name__ == "__main__":

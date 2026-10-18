@@ -163,6 +163,15 @@ class TokenApiService:
             response.raise_for_status()
             return response.json()
 
+    async def delete_token_request(self, token_id: str) -> None:
+        """删除一条申请记录（含已批准记录）；记录不存在时抛错，避免界面假装成功。"""
+        url = f"{self.server_url}/api/tokens/delete"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json={"token_id": token_id})
+            if response.status_code == 404:
+                raise ValueError("申请记录不存在（可能已被删除）")
+            response.raise_for_status()
+
     async def validate_token(self, token: str) -> bool:
         url = f"{self.server_url}/api/tokens/validate"
         async with httpx.AsyncClient() as client:

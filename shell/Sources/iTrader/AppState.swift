@@ -532,6 +532,17 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// 删除一条申请记录；成功返回 nil，失败返回错误文案供页面弹窗展示
+    func deleteTokenRecord(tokenId: String) async -> String? {
+        do {
+            let resp = try await call(method: "tokens.delete", params: ["token_id": tokenId])
+            applyTokenStatus(resp)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
     func checkUpdate() {
         Task {
             updatePhase = .checking
