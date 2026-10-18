@@ -9,7 +9,8 @@
     缺失时由随包脚本 安装运行环境.cmd 引导安装（根目录 README.txt 为用户说明）。
 
     Publish 命令（CI 使用；本地 macOS 无法构建本工程）：
-      dotnet publish -c Release -r win-x64 -p:Platform=x64 --no-self-contained
+      dotnet publish -c Release -r win-x64 -p:Platform=x64
+      外加命令行参数 self-contained false（XML 注释里不能出现连续两个减号）
 
     产物根级文件名必须是 X-iTrader.exe：src/infrastructure/updater.py 的
     Windows 分支把「后端 exe 的父目录」作为安装根，并期望根级有 X-iTrader.exe
