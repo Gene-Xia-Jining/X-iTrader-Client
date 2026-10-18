@@ -22,6 +22,8 @@ public sealed partial class MainWindow : Window
     private readonly AppState _state;
     private readonly TrayIcon _tray;
     private bool _syncingToggle;
+    /// <summary>启动预检拦截弹窗是否已弹出（避免状态刷新重复打开）</summary>
+    private bool _issuesDialogOpen;
 
     /// <summary>当前是否深色（页面据此取色）</summary>
     public bool IsDark { get; private set; }
@@ -104,10 +106,12 @@ public sealed partial class MainWindow : Window
         var pageType = tag switch
         {
             "dashboard" => typeof(DashboardPage),
+            "token" => typeof(TokenManagePage),
             "log" => typeof(TradingLogPage),
+            "sim" => typeof(SimulationPage),
+            "live" => typeof(LiveAccountPage),
             "settings" => typeof(SettingsPage),
-            // 骨架阶段：Token 管理 / 模拟交易 / 实盘交易 为占位页，后续分批补齐
-            _ => typeof(PlaceholderPage),
+            _ => typeof(DashboardPage),
         };
 
         // sim/live 进入时预取品种与策略（与 mac 壳一致）
@@ -183,9 +187,17 @@ public sealed partial class MainWindow : Window
 
         // 自动交易开关与引擎实际状态同步（回填时抑制 Toggled 副作用）
         _syncingToggle = true;
-        AutoTradeToggle.IsEnabled = _state.ConnState == ConnState.Connected;
+        AutoTradeToggle.IsEnabled = _state.ConnState == ConnState.Connected && !_state.StartChecking;
         AutoTradeToggle.IsOn = engine.TradingActive;
         _syncingToggle = false;
+
+        // 预检（含天勤握手）在跑时让用户看到进度，而不是以为按钮没反应
+        var toggleContent = _state.StartChecking ? "自动交易：检查中…" : "自动交易";
+        AutoTradeToggle.OnContent = toggleContent;
+        AutoTradeToggle.OffContent = toggleContent;
+
+        RefreshButton.IsEnabled = !(_state.SymbolsFetching || _state.StrategiesFetching);
+        RefreshButton.Content = _state.SymbolsFetching || _state.StrategiesFetching ? "刷新中…" : "刷新";
 
         var running = engine.Accounts.Count(a => a.Running);
         StatusLeft.Text = running > 0 ? $"交易状态: 运行中 ({running})" : "交易状态: 已停止";
@@ -194,6 +206,63 @@ public sealed partial class MainWindow : Window
         TradingStatusText.Text = engine.TradingActive ? "自动交易运行中" : "已停止";
         TradingDot.Fill = new SolidColorBrush(
             engine.TradingActive ? ThemeTokens.StatusGreen : ThemeTokens.StatusRed);
+
+        ShowStartBlockedIssuesIfNeeded();
+    }
+
+    /// <summary>
+    /// 启动预检未通过时弹出问题清单（对应 mac 壳的 StartBlockedSheet）。
+    /// 后端把服务器、账户字段、token、天勤握手的问题一次返回，这里逐条列出
+    /// ——用户通常要按提示去多个页面补配置。关闭即清空，下次点击重新预检。
+    /// </summary>
+    private async void ShowStartBlockedIssuesIfNeeded()
+    {
+        var issues = _state.StartBlockedIssues;
+        if (issues.Count == 0 || _issuesDialogOpen || RootGrid.XamlRoot is null)
+        {
+            return;
+        }
+
+        _issuesDialogOpen = true;
+        var panel = new StackPanel { Spacing = 10 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"请先处理以下 {issues.Count} 项问题，再重新开启自动交易：",
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = new SolidColorBrush(ThemeTokens.For(IsDark).Dim),
+        });
+        var list = new StackPanel { Spacing = 6 };
+        for (var i = 0; i < issues.Count; i++)
+        {
+            list.Children.Add(new Border
+            {
+                Background = new SolidColorBrush(ThemeTokens.For(IsDark).Soft),
+                CornerRadius = new CornerRadius(10),
+                Padding = new Thickness(12, 8, 12, 8),
+                Child = new TextBlock
+                {
+                    Text = $"{i + 1}. {issues[i]}",
+                    TextWrapping = TextWrapping.Wrap,
+                    IsTextSelectionEnabled = true,
+                },
+            });
+        }
+        panel.Children.Add(new ScrollViewer
+        {
+            Content = list,
+            MaxHeight = 320,
+        });
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = RootGrid.XamlRoot,
+            Title = "自动交易未启动",
+            Content = panel,
+            CloseButtonText = "好",
+        };
+        await dialog.ShowAsync();
+        _issuesDialogOpen = false;
+        _state.ClearStartBlockedIssues();
     }
 
     // -------- 主题 --------

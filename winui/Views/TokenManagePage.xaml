@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="XTrader.Shell.Views.TokenManagePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ScrollViewer>
+        <StackPanel x:Name="Root" Spacing="16" Padding="24">
+            <StackPanel Spacing="4">
+                <TextBlock x:Name="PageTitle" Text="Token 管理" FontSize="22" FontWeight="SemiBold" />
+                <TextBlock x:Name="Subtitle" Text="申请、刷新并查看服务器审批状态。" />
+            </StackPanel>
+
+            <!-- 申请与审批状态 -->
+            <Border x:Name="FormCard" BorderThickness="1" CornerRadius="18" Padding="20">
+                <StackPanel Spacing="12">
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="64" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="DescLabel" Text="申请说明:" VerticalAlignment="Center"
+                                   HorizontalAlignment="Right" />
+                        <TextBox x:Name="DescriptionBox" Grid.Column="1"
+                                 PlaceholderText="例如：iTrader 智能交易系统" />
+                    </Grid>
+
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="64" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="StatusLabel" Text="审批状态:" VerticalAlignment="Top"
+                                   HorizontalAlignment="Right" Margin="0,4,0,0" />
+                        <StackPanel Grid.Column="1" Spacing="6">
+                            <TextBlock x:Name="TokenStatusText" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock x:Name="StatusHint"
+                                       Text="提交申请后等待服务器审批，可通过刷新状态查看进度"
+                                       FontSize="13" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Rectangle x:Name="FormDivider" Height="1" />
+
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Button x:Name="RequestButton" Content="申请 Token" Click="OnRequestClick" />
+                        <Button Content="刷新状态" Click="OnRefreshClick" />
+                        <Button x:Name="ViewStatusButton" Content="查看状态" Click="OnViewStatusClick" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- 申请记录 -->
+            <Border x:Name="RecordsCard" BorderThickness="1" CornerRadius="18" Padding="20">
+                <StackPanel Spacing="12">
+                    <TextBlock x:Name="RecordsTitle" Text="申请记录" FontWeight="SemiBold" />
+                    <TextBlock x:Name="EmptyHint" Text="暂无申请记录" FontSize="13"
+                               Visibility="Collapsed" />
+                    <StackPanel x:Name="RecordsPanel" Spacing="0" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

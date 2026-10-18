@@ -39,6 +39,12 @@ public sealed class AccountInfo
     public IReadOnlyList<string> Symbols { get; init; } = [];
     public string Strategy { get; init; } = "";
     public bool Enabled { get; init; } = true;
+    public bool HasTqPassword { get; init; }
+    public bool HasTradePassword { get; init; }
+
+    /// <summary>已存密码的明文长度，仅用于按真实长度绘制掩码圆点（密码本身不回传）</summary>
+    public int TqPasswordLength { get; init; }
+    public int TradePasswordLength { get; init; }
 
     public bool IsSim => Kind == "sim";
 
@@ -59,6 +65,10 @@ public sealed class AccountInfo
             Symbols = JsonHelpers.StringList(dict["symbols"]),
             Strategy = dict["strategy"]?.GetValue<string>() ?? "",
             Enabled = dict["enabled"]?.GetValue<bool>() ?? true,
+            HasTqPassword = dict["has_tq_password"]?.GetValue<bool>() ?? false,
+            HasTradePassword = dict["has_trade_password"]?.GetValue<bool>() ?? false,
+            TqPasswordLength = dict["tq_password_length"]?.GetValue<int>() ?? 0,
+            TradePasswordLength = dict["trade_password_length"]?.GetValue<int>() ?? 0,
         };
     }
 }
@@ -80,6 +90,9 @@ public sealed class TokenRecord
     public DateTime? CreatedAt { get; init; }
     public DateTime? ExpiresAt { get; init; }
     public int UseCount { get; init; }
+
+    /// <summary>服务器是否还留有可领取的明文（首次领取后即为 false）</summary>
+    public bool Claimable { get; init; }
 
     /// <summary>状态中文文案（对应服务器 status 字段）</summary>
     public string StatusText => Status switch
@@ -117,6 +130,7 @@ public sealed class TokenRecord
             CreatedAt = UnixSeconds(dict["created_at"]),
             ExpiresAt = UnixSeconds(dict["expires_at"]),
             UseCount = dict["use_count"]?.GetValue<int>() ?? 0,
+            Claimable = dict["claimable"]?.GetValue<bool>() ?? false,
         };
     }
 }
@@ -323,6 +337,43 @@ public sealed class AppState : INotifyPropertyChanged
         private set => Set(ref _tokenRecords, value);
     }
 
+    private string? _activeTokenId;
+    /// <summary>当前生效的 token 来自哪条申请记录（null 表示本地无可用 token）</summary>
+    public string? ActiveTokenId
+    {
+        get => _activeTokenId;
+        private set => Set(ref _activeTokenId, value);
+    }
+
+    private IReadOnlySet<string> _cachedTokenIds = new HashSet<string>();
+    /// <summary>本地缓存过明文、可切换回去的记录 id</summary>
+    public IReadOnlySet<string> CachedTokenIds
+    {
+        get => _cachedTokenIds;
+        private set => Set(ref _cachedTokenIds, value);
+    }
+
+    /// <summary>该记录是否在本地留有明文缓存（后端列表的 claimable 只管服务器侧）</summary>
+    public bool HasCachedToken(string tokenId) => CachedTokenIds.Contains(tokenId);
+
+    private IReadOnlyList<string> _startBlockedIssues = [];
+    /// <summary>自动交易启动被预检拦截的问题列表；非空时主窗口弹出清单，用户确认后清空</summary>
+    public IReadOnlyList<string> StartBlockedIssues
+    {
+        get => _startBlockedIssues;
+        private set => Set(ref _startBlockedIssues, value);
+    }
+
+    private bool _startChecking;
+    /// <summary>启动检查进行中（按钮置灰防重复点击）</summary>
+    public bool StartChecking
+    {
+        get => _startChecking;
+        private set => Set(ref _startChecking, value);
+    }
+
+    internal void ClearStartBlockedIssues() => StartBlockedIssues = [];
+
     private UpdatePhase _updatePhase = new UpdatePhase.Idle();
     public UpdatePhase UpdatePhase
     {
@@ -480,7 +531,9 @@ public sealed class AppState : INotifyPropertyChanged
         }
         catch (RpcException ex)
         {
-            throw new RpcException(ex.DisplayMessage, ex.ServerType);
+            // 换成为界面准备的文案，但保留服务端类型与结构化问题清单
+            // （engine.start 的预检问题就靠 Issues 传出去）
+            throw new RpcException(ex.DisplayMessage, ex.ServerType, ex.Issues);
         }
     }
 
@@ -625,11 +678,52 @@ public sealed class AppState : INotifyPropertyChanged
 
     // -------- 业务动作 --------
 
-    internal void ToggleTrading(bool on) => _ = Task.Run(async () =>
+    /// <summary>
+    /// 自动交易开关。开启时后端先做启动前预检，不通过则返回问题列表：
+    /// 这里发布到 <see cref="StartBlockedIssues"/> 由主窗口弹窗拦住，
+    /// 而不是只写一条日志让用户猜哪里没配好。
+    /// </summary>
+    internal void ToggleTrading(bool on)
     {
-        await RunActionAsync(on ? "engine.start" : "engine.stop");
-        await RefreshEngineOnlyAsync();
-    });
+        if (StartChecking)
+        {
+            return;
+        }
+        StartChecking = true;
+        StartBlockedIssues = [];
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                Post(() => LastActionError = "");
+                _ = await CallAsync(on ? "engine.start" : "engine.stop");
+            }
+            catch (RpcException ex)
+            {
+                if (ex.Issues.Count > 0)
+                {
+                    Post(() => StartBlockedIssues = ex.Issues);
+                    // AppendLog 自带 UI 线程调度，不必再套一层 Post
+                    AppendLog("WARNING", $"自动交易未启动：共 {ex.Issues.Count} 项检查未通过");
+                }
+                else
+                {
+                    Post(() => LastActionError = ex.DisplayMessage);
+                    AppendLog("ERROR", $"engine.start 失败: {ex.DisplayMessage}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Post(() => LastActionError = ex.Message);
+                AppendLog("ERROR", $"engine.start 失败: {ex.Message}");
+            }
+            finally
+            {
+                await RefreshEngineOnlyAsync();
+                Post(() => StartChecking = false);
+            }
+        });
+    }
 
     internal void SetAutoTrade(bool value) => _ = Task.Run(() =>
         RunActionAsync("engine.set_auto_trade", new JsonObject { ["value"] = value }));
@@ -746,17 +840,75 @@ public sealed class AppState : INotifyPropertyChanged
             ? $"{name}｜{symbol}"
             : symbol;
 
-    internal async Task<string> TestTqAuthAsync(string account, string password)
+    /// <summary>测试快期账户：密码留空时后端沿用该账户已存密码（accountId 用于定位）</summary>
+    internal async Task<string> TestTqAuthAsync(string account, string password, string? accountId = null)
     {
         try
         {
-            var resp = await CallAsync("accounts.test_tq_auth",
-                new JsonObject { ["account"] = account, ["password"] = password });
+            var parameters = new JsonObject
+            {
+                ["account"] = account,
+                ["password"] = password,
+            };
+            if (accountId is not null)
+            {
+                parameters["account_id"] = accountId;
+            }
+            var resp = await CallAsync("accounts.test_tq_auth", parameters);
             return resp["message"]?.GetValue<string>() ?? "连接成功";
         }
         catch (Exception ex)
         {
             return $"连接失败: {ex.Message}";
+        }
+    }
+
+    /// <summary>读取已存密码明文（用户点击眼睛图标时受控调用）；失败返回空串</summary>
+    internal async Task<string> GetAccountPasswordAsync(
+        string? accountId = null,
+        string? kind = null,
+        string field = "tq_password")
+    {
+        try
+        {
+            var parameters = new JsonObject { ["field"] = field };
+            if (accountId is not null) parameters["account_id"] = accountId;
+            if (kind is not null) parameters["kind"] = kind;
+            var resp = await CallAsync("accounts.get_password", parameters);
+            return resp["password"]?.GetValue<string>() ?? "";
+        }
+        catch
+        {
+            // 取不到明文时由调用方保留掩码显示，不弹错误打断流程
+            return "";
+        }
+    }
+
+    /// <summary>保存账户；成功返回 null，失败返回错误文案供页面弹窗展示</summary>
+    internal async Task<string?> SaveAccountAsync(JsonObject parameters)
+    {
+        try
+        {
+            _ = await CallAsync("accounts.save", parameters);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
+        }
+    }
+
+    /// <summary>删除账户；成功返回 null，失败返回错误文案</summary>
+    internal async Task<string?> DeleteAccountAsync(string accountId)
+    {
+        try
+        {
+            _ = await CallAsync("accounts.delete", new JsonObject { ["account_id"] = accountId });
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
         }
     }
 
@@ -792,6 +944,10 @@ public sealed class AppState : INotifyPropertyChanged
     {
         TokenStatus = data["status"]?.GetValue<string>() ?? "";
         TokenRecords = JsonHelpers.ObjectList(data["records"]).Select(TokenRecord.From).OfType<TokenRecord>().ToList();
+        // 空字符串按「无生效记录」处理：后端的 null 与 "" 语义一致
+        var active = data["active_token_id"]?.GetValue<string>();
+        ActiveTokenId = string.IsNullOrEmpty(active) ? null : active;
+        CachedTokenIds = JsonHelpers.StringList(data["cached_token_ids"]).ToHashSet(StringComparer.Ordinal);
     }
 
     internal void RequestToken(string description) => _ = Task.Run(async () =>
@@ -806,6 +962,40 @@ public sealed class AppState : INotifyPropertyChanged
             Post(() => AppendLog("ERROR", $"tokens.request 失败: {ex.Message}"));
         }
     });
+
+    /// <summary>删除一条申请记录；成功返回 null，失败返回错误文案供页面弹窗展示</summary>
+    internal async Task<string?> DeleteTokenRecordAsync(string tokenId)
+    {
+        try
+        {
+            var resp = await CallAsync("tokens.delete", new JsonObject { ["token_id"] = tokenId });
+            Post(() => ApplyTokenStatus(resp));
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// 切换当前使用的 Token；成功返回 null，失败返回错误文案。
+    /// 后端切换后会停掉引擎（信号流请求头固定了旧 token），因此顺带刷新引擎状态。
+    /// </summary>
+    internal async Task<string?> SwitchTokenAsync(string tokenId)
+    {
+        try
+        {
+            var resp = await CallAsync("tokens.switch", new JsonObject { ["token_id"] = tokenId });
+            Post(() => ApplyTokenStatus(resp));
+            await RefreshEngineOnlyAsync();
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
+        }
+    }
 
     internal void CheckUpdate() => _ = Task.Run(async () =>
     {

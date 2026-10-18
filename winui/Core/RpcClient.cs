@@ -11,9 +11,14 @@ internal sealed class RpcException : Exception
 {
     internal string ServerType { get; }
 
-    internal RpcException(string message, string serverType = "Error") : base(message)
+    /// <summary>服务端异常 to_payload() 回传的结构化问题清单（如启动前预检）。</summary>
+    internal IReadOnlyList<string> Issues { get; }
+
+    internal RpcException(string message, string serverType = "Error", IReadOnlyList<string>? issues = null)
+        : base(message)
     {
         ServerType = serverType;
+        Issues = issues ?? [];
     }
 
     /// <summary>Error/Warning 之外的运行时异常保留类型名前缀，便于排障。</summary>
@@ -134,7 +139,7 @@ internal sealed class RpcClient : IAsyncDisposable
         return await tcs.Task;
     }
 
-    internal async ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         _closed = true;
         try
@@ -227,12 +232,12 @@ internal sealed class RpcClient : IAsyncDisposable
                 if (read == 0)
                 {
                     // 对端关闭：把缓冲区剩余内容作为最后一行返回（若有）
-                    if (_recv.Count == 0)
+                    if (_recv.Length == 0)
                     {
                         return null;
                     }
                     var tail = Encoding.UTF8.GetString(_recv.ToArray());
-                    _recv.Clear();
+                    _recv.SetLength(0);
                     return tail.TrimEnd('\r');
                 }
                 _recv.Write(buffer.AsSpan(0, read));
@@ -306,7 +311,17 @@ internal sealed class RpcClient : IAsyncDisposable
             {
                 var error = obj["error"]?.GetValue<string>() ?? "未知错误";
                 var type = obj["type"]?.GetValue<string>() ?? "Error";
-                tcs.TrySetException(new RpcException(error, type));
+                // EngineStartBlockedError 用 data.issues 回传启动前预检的全部问题
+                IReadOnlyList<string>? issues = null;
+                if (type == "EngineStartBlockedError"
+                    && (obj["data"] as JsonObject)?["issues"] is JsonArray issueArray)
+                {
+                    issues = issueArray
+                        .Select(item => item?.GetValue<string>())
+                        .OfType<string>()
+                        .ToList();
+                }
+                tcs.TrySetException(new RpcException(error, type, issues));
             }
         }
     }

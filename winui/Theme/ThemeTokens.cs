@@ -66,7 +66,7 @@ internal static class ThemeTokens
         Card = Hex(0x272729),
         Hairline = Hex(0x3A3A3C),
         Divider = Hex(0x3A3A3C),
-        Ink = Colors.White,
+        Ink = Microsoft.UI.Colors.White,
         Dim = Hex(0x86868B),
         Primary = Hex(0x2997FF),
         Danger = Hex(0xFF453A),
