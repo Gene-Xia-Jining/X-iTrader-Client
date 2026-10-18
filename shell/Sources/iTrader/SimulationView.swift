@@ -153,18 +153,22 @@ struct SimulationView: View {
     }
 
     private var passwordField: some View {
-        // 已存密码且用户未输入新密码时显示星号占位；没有密码时为空白
-        let placeholder = (hasStoredPassword && password.isEmpty) ? "••••••" : ""
-        return HStack(spacing: 0) {
-            if passwordVisible {
-                TextField(placeholder, text: $password)
-                    .textFieldStyle(.plain)
-                    .font(AppTheme.bodyFont)
-            } else {
-                SecureField(placeholder, text: $password)
-                    .textFieldStyle(.plain)
-                    .font(AppTheme.bodyFont)
+        // 已存密码且未输入新密码时，用自绘圆点表示「密码已设置」：
+        // placeholder 是浅灰辅助色，看起来像未填写的提示，不像真实密码。
+        // 明文模式下若取回密码失败（password 仍为空）也保留圆点，避免误以为密码被清空
+        let showMask = hasStoredPassword && password.isEmpty
+        return ZStack(alignment: .leading) {
+            if showMask { storedPasswordMask }
+            // 输入框放在上层且保持透明背景，聚焦时的插入点才能压在圆点之上
+            Group {
+                if passwordVisible {
+                    TextField("", text: $password)
+                } else {
+                    SecureField("", text: $password)
+                }
             }
+            .textFieldStyle(.plain)
+            .font(AppTheme.bodyFont)
         }
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, minHeight: 36)
@@ -174,6 +178,15 @@ struct SimulationView: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(AppTheme.hairline(scheme), lineWidth: 1)
         )
+    }
+
+    /// 已存密码的自绘掩码：与真实密码框同样的深色圆点，避免浅灰 placeholder 被当成提示文字
+    private var storedPasswordMask: some View {
+        Text(String(repeating: "•", count: 10))
+            .font(AppTheme.bodyFont)
+            .kerning(1.2)
+            .foregroundColor(AppTheme.ink(scheme))
+            .allowsHitTesting(false)
     }
 
     /// 眼睛图标按钮：图标表示点击后的效果（隐藏时睁眼=查看，明文时闭眼=隐藏）
