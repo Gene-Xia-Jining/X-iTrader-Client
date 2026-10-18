@@ -63,9 +63,9 @@ class VersionCompareTest(unittest.TestCase):
 
 class SelectAssetsTest(unittest.TestCase):
     ASSETS = [
-        {"name": "iTrader-0.0.3-macos.dmg", "browser_download_url": "https://x/macos.dmg"},
-        {"name": "iTrader-0.0.3-windows.zip", "browser_download_url": "https://x/win.zip"},
-        {"name": "iTrader-0.0.3-src.zip", "browser_download_url": "https://x/src.zip"},
+        {"name": "x-itrader-client-0.0.3-macos.dmg", "browser_download_url": "https://x/macos.dmg"},
+        {"name": "x-itrader-client-0.0.3-windows.zip", "browser_download_url": "https://x/win.zip"},
+        {"name": "x-itrader-client-0.0.3-src.zip", "browser_download_url": "https://x/src.zip"},
     ]
 
     def test_darwin_selects_macos_dmg_and_patch(self):
@@ -89,7 +89,7 @@ class SelectAssetsTest(unittest.TestCase):
     def test_darwin_does_not_treat_zip_full_as_patch(self):
         # 若 Release 只有 zip 全量包（旧命名），darwin 不应把它当成补丁包
         assets = [
-            {"name": "iTrader-0.0.3-macos.zip", "browser_download_url": "https://x/macos.zip"},
+            {"name": "x-itrader-client-0.0.3-macos.zip", "browser_download_url": "https://x/macos.zip"},
         ]
         with mock.patch.object(sys, "platform", "darwin"):
             full, patch = updater._select_assets(assets)
@@ -106,9 +106,9 @@ class FetchLatestReleaseTest(unittest.TestCase):
             "assets": assets
             if assets is not None
             else [
-                {"name": "iTrader-0.0.3-macos.dmg", "browser_download_url": "https://x/macos.dmg"},
-                {"name": "iTrader-0.0.3-windows.zip", "browser_download_url": "https://x/win.zip"},
-                {"name": "iTrader-0.0.3-src.zip", "browser_download_url": "https://x/src.zip"},
+                {"name": "x-itrader-client-0.0.3-macos.dmg", "browser_download_url": "https://x/macos.dmg"},
+                {"name": "x-itrader-client-0.0.3-windows.zip", "browser_download_url": "https://x/win.zip"},
+                {"name": "x-itrader-client-0.0.3-src.zip", "browser_download_url": "https://x/src.zip"},
             ],
         }
 
@@ -217,7 +217,7 @@ class ExtractDmgTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self._tmp.name)
         self.stage = self.dir / "update"
-        self.dmg_path = self.dir / "iTrader-0.0.3-macos.dmg"
+        self.dmg_path = self.dir / "x-itrader-client-0.0.3-macos.dmg"
         self.dmg_path.write_bytes(b"dmg")
 
     def tearDown(self):

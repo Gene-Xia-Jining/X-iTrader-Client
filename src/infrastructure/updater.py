@@ -3,12 +3,12 @@
 更新源是本仓库的 GitHub Releases（CI 在 push main 时以 src/__init__.py 的
 __version__ 打 tag 并发布）：
 
-- iTrader-{version}-macos.dmg    全量包（内含 X-iTrader-Client.app，拖拽安装）
-- iTrader-{version}-windows.zip  全量包（内含扁平程序目录，根级 X-iTrader.exe 壳
-                                  + X-iTrader-Backend.exe 后端 + _internal/）
-- iTrader-{version}-src.zip      补丁包（仅当相对上一版本只有 src/ 变化时发布，
-                                  全平台共用；src 在打包时外置为普通目录，
-                                  替换该目录即完成差量更新）
+- x-itrader-client-{version}-macos.dmg    全量包（内含 X-iTrader-Client.app，拖拽安装）
+- x-itrader-client-{version}-windows.zip  全量包（内含扁平程序目录，根级 X-iTrader.exe 壳
+                                          + X-iTrader-Backend.exe 后端 + _internal/）
+- x-itrader-client-{version}-src.zip      补丁包（仅当相对上一版本只有 src/ 变化时发布，
+                                          全平台共用；src 在打包时外置为普通目录，
+                                          替换该目录即完成差量更新）
 
 全量包两种格式都可解：macOS 用 dmg（hdiutil 挂载后复制 .app），Windows 用 zip；
 补丁包恒为 zip。替换采用 rename→move→Popen→退出 模式：旧安装物整体改名让位，
@@ -32,10 +32,11 @@ GITHUB_REPO = "Gene-Xia-Jining/X-iTrader-Client"
 RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 RELEASE_PAGE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 
-# 当前平台全量包的 asset 名关键字与扩展名（CI 产物 iTrader-{version}-{平台}.dmg/.zip）。
+# 当前平台全量包的 asset 名关键字与扩展名
+# （CI 产物 x-itrader-client-{version}-{平台}.dmg/.zip）。
 # macOS 分发 dmg、Windows 分发 zip；扩展名参与匹配，避免把 .zip 全量包误当补丁包。
 _FULL_ASSET_KEYWORDS = {"darwin": ("macos", ".dmg"), "win32": ("windows", ".zip")}
-# 补丁包 asset 名关键字（iTrader-{version}-src.zip，恒为 zip）
+# 补丁包 asset 名关键字（x-itrader-client-{version}-src.zip，恒为 zip）
 _PATCH_ASSET_KEYWORD = "src"
 
 # Windows 全量包根级的壳可执行文件名：程序目录（安装根）即它的父目录。

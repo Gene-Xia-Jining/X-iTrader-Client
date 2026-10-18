@@ -49,7 +49,7 @@
 ## 构建
 
 > * `./build_app.sh` 执行 macOS `.app` 打包（SwiftUI 壳 + PyInstaller onedir 后端组装），产物位于仓库上一级：`../X-iTrader-Client.app`。
-> * `./build_dmg.sh` 把该 `.app` 封装成可分发的 `../iTrader-{version}-macos.dmg`（拖拽安装布局，需先跑 `build_app.sh`）。
+> * `./build_dmg.sh` 把该 `.app` 封装成可分发的 `../x-itrader-client-{version}-macos.dmg`（拖拽安装布局，需先跑 `build_app.sh`）。
 > * CI（`.github/workflows/build.yml`）在 push main 时自动构建并发布 Release：macOS 发 dmg，Windows 发 zip，另在仅 src 变化时发全平台共用的 src 补丁包。
 > * 客户端自动更新（`src/infrastructure/updater.py`）macOS 走 dmg（hdiutil 挂载 + ditto 提取）、Windows 走 zip，补丁包恒为 zip。
 

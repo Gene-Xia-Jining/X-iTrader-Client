@@ -49,7 +49,7 @@ jobs:
             echo "Non-src files changed since $PREV; skip patch"
             echo "built=false" >> "$GITHUB_OUTPUT"
           else
-            zip -r "iTrader-${{ steps.ver.outputs.version }}-src.zip" src \
+            zip -r "x-itrader-client-${{ steps.ver.outputs.version }}-src.zip" src \
               -x '*/__pycache__/*' '*.pyc'
             echo "built=true" >> "$GITHUB_OUTPUT"
           fi
@@ -58,8 +58,8 @@ jobs:
         if: steps.patch.outputs.built == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: itrader-src-patch
-          path: iTrader-*-src.zip
+          name: x-itrader-client-src-patch
+          path: x-itrader-client-*-src.zip
 
   build:
     needs: version
@@ -110,7 +110,7 @@ jobs:
         run: |
           # dmg 已在仓库上一级生成，移入仓库 dist/ 供 upload-artifact 收集
           mkdir -p "$GITHUB_WORKSPACE/dist"
-          mv ../iTrader-${{ needs.version.outputs.version }}-macos.dmg "$GITHUB_WORKSPACE/dist/"
+          mv ../x-itrader-client-${{ needs.version.outputs.version }}-macos.dmg "$GITHUB_WORKSPACE/dist/"
 
       # ---------- Windows ----------
 
@@ -160,16 +160,16 @@ jobs:
           Copy-Item "shell-windows/scripts/安装运行环境.cmd" $stage -Force
           Copy-Item "shell-windows/scripts/README.txt" $stage -Force
 
-          Compress-Archive -Path "$stage/*" -DestinationPath "dist/iTrader-$ver-windows.zip" -Force
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/x-itrader-client-$ver-windows.zip" -Force
         shell: pwsh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: itrader-${{ runner.os }}
+          name: x-itrader-client-${{ runner.os }}
           path: |
-            dist/iTrader-*-macos.dmg
-            dist/iTrader-*-windows.zip
+            dist/x-itrader-client-*-macos.dmg
+            dist/x-itrader-client-*-windows.zip
 
   release:
     needs: [version, build]
@@ -188,8 +188,8 @@ jobs:
           name: Release ${{ needs.version.outputs.version }}
           body: Automated GitHub release for iTrader Client
           files: |
-            artifacts/itrader-macOS/*.dmg
-            artifacts/itrader-Windows/*.zip
-            artifacts/itrader-src-patch/*.zip
+            artifacts/x-itrader-client-macOS/*.dmg
+            artifacts/x-itrader-client-Windows/*.zip
+            artifacts/x-itrader-client-src-patch/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
