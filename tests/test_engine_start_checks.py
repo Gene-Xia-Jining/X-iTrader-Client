@@ -168,6 +168,36 @@ class EngineStartPreflightTest(unittest.TestCase):
         self.assertIsNone(error)
         self.assertTrue(service._auto_trade)
 
+    def test_accounts_list_masks_password_and_provides_flags(self):
+        service = _make_service()
+        service.bootstrap.save_account(_sim_account(tq_password="secret"))
+        service.bootstrap.save_account(
+            _live_account(id="acc-empty", tq_password="", trade_password="")
+        )
+        accounts = service.accounts_list()
+        sim = next(a for a in accounts if a["id"] == "legacy")
+        self.assertNotIn("tq_password", sim)
+        self.assertNotIn("trade_password", sim)
+        self.assertTrue(sim["has_tq_password"])
+
+        live = next(a for a in accounts if a["id"] == "acc-empty")
+        self.assertNotIn("tq_password", live)
+        self.assertNotIn("trade_password", live)
+        self.assertFalse(live["has_tq_password"])
+        self.assertFalse(live["has_trade_password"])
+
+    def test_get_account_password_returns_saved_password(self):
+        service = _make_service()
+        service.bootstrap.save_account(_sim_account(tq_password="sim_secret_123"))
+        resp = asyncio.run(service.get_account_password({"kind": "sim", "field": "tq_password"}))
+        self.assertEqual(resp.get("password"), "sim_secret_123")
+
+        resp_by_id = asyncio.run(service.get_account_password({"account_id": "legacy", "field": "tq_password"}))
+        self.assertEqual(resp_by_id.get("password"), "sim_secret_123")
+
+        resp_none = asyncio.run(service.get_account_password({"account_id": "non_existent"}))
+        self.assertEqual(resp_none.get("password"), "")
+
     def test_start_failure_rolls_back_auto_trade(self):
         service = _make_service()
         service.bootstrap.save_account(_sim_account())

@@ -32,6 +32,8 @@ struct AccountInfo: Identifiable, Equatable {
     let symbols: [String]
     let strategy: String
     let enabled: Bool
+    let hasTqPassword: Bool
+    let hasTradePassword: Bool
 
     var isSim: Bool { kind == "sim" }
 
@@ -46,7 +48,9 @@ struct AccountInfo: Identifiable, Equatable {
             tradeAccount: dict["trade_account"] as? String ?? "",
             symbols: dict["symbols"] as? [String] ?? [],
             strategy: dict["strategy"] as? String ?? "",
-            enabled: dict["enabled"] as? Bool ?? true
+            enabled: dict["enabled"] as? Bool ?? true,
+            hasTqPassword: dict["has_tq_password"] as? Bool ?? false,
+            hasTradePassword: dict["has_trade_password"] as? Bool ?? false
         )
     }
 }
@@ -469,15 +473,29 @@ final class AppState: ObservableObject {
         return symbol
     }
 
-    func testTqAuth(account: String, password: String) async -> String {
+    func testTqAuth(account: String, password: String, accountId: String? = nil) async -> String {
         do {
+            var params: [String: Any] = ["account": account, "password": password]
+            if let accountId { params["account_id"] = accountId }
             let resp = try await call(
                 method: "accounts.test_tq_auth",
-                params: ["account": account, "password": password]
+                params: params
             )
             return resp["message"] as? String ?? "连接成功"
         } catch {
             return "连接失败: \(error.localizedDescription)"
+        }
+    }
+
+    func getAccountPassword(accountId: String? = nil, kind: String? = nil, field: String = "tq_password") async -> String {
+        do {
+            var params: [String: Any] = ["field": field]
+            if let accountId { params["account_id"] = accountId }
+            if let kind { params["kind"] = kind }
+            let resp = try await call(method: "accounts.get_password", params: params)
+            return resp["password"] as? String ?? ""
+        } catch {
+            return ""
         }
     }
 

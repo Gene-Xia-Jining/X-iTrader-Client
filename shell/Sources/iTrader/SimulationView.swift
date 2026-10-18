@@ -153,8 +153,8 @@ struct SimulationView: View {
     }
 
     private var passwordField: some View {
-        // 已存账户密码框占位显示星号，表示密码已设置；用户开始输入即视为修改密码
-        let placeholder = (hasStoredPassword && password.isEmpty) ? "••••••" : "密码"
+        // 已存密码且用户未输入新密码时显示星号占位；没有密码时为空白
+        let placeholder = (hasStoredPassword && password.isEmpty) ? "••••••" : ""
         return HStack(spacing: 0) {
             if passwordVisible {
                 TextField(placeholder, text: $password)
@@ -179,7 +179,19 @@ struct SimulationView: View {
     /// 眼睛图标按钮：图标表示点击后的效果（隐藏时睁眼=查看，明文时闭眼=隐藏）
     private var eyeButton: some View {
         Button {
-            passwordVisible.toggle()
+            let nextVisible = !passwordVisible
+            if nextVisible && password.isEmpty && hasStoredPassword {
+                Task {
+                    let simId = appState.accounts.first(where: { $0.kind == "sim" })?.id
+                    let savedPwd = await appState.getAccountPassword(accountId: simId, kind: "sim", field: "tq_password")
+                    if !savedPwd.isEmpty {
+                        password = savedPwd
+                    }
+                    passwordVisible = true
+                }
+            } else {
+                passwordVisible = nextVisible
+            }
         } label: {
             Image(systemName: passwordVisible ? "eye.slash" : "eye")
                 .resizable()
@@ -331,11 +343,14 @@ struct SimulationView: View {
     /// 用已存模拟账户回填（后端不回传密码，密码留空 = 沿用旧值）；
     /// 仅在手机号为空时填充，避免覆盖用户正在编辑的内容
     private func fillFromAccount() {
-        guard phone.isEmpty,
-              let sim = appState.accounts.first(where: { $0.kind == "sim" }) else { return }
+        guard let sim = appState.accounts.first(where: { $0.kind == "sim" }) else {
+            hasStoredPassword = false
+            return
+        }
+        // 后端不回传密码，但会返回「是否已设置密码」的标记，用于密码框占位星号
+        hasStoredPassword = sim.hasTqPassword
+        guard phone.isEmpty else { return }
         phone = sim.tqAccount
-        // 后端不回传密码，但能取到已存 sim 账户即说明密码已设置，用于密码框占位星号
-        hasStoredPassword = true
         if let first = sim.symbols.first {
             selectedSymbol = first
             if !appState.serverSymbols.contains(first) && keptSymbols.isEmpty {
@@ -357,9 +372,9 @@ struct SimulationView: View {
             alert = .inputError("手机号不能为空")
             return
         }
-        // 新账户必须设置密码；已存账户留空沿用旧密码（后端约定）
+        // 新账户必须设置密码；已存且已有密码的账户留空沿用旧密码（后端约定）
         let isNew = !appState.accounts.contains { $0.kind == "sim" }
-        guard !password.isEmpty || !isNew else {
+        guard !password.isEmpty || (!isNew && hasStoredPassword) else {
             alert = .inputError("密码不能为空")
             return
         }
@@ -382,9 +397,15 @@ struct SimulationView: View {
 
         Task {
             await appState.runAction(method: "accounts.save", params: params)
-            alert = appState.lastActionError.isEmpty
-                ? .saveSuccess
-                : .inputError(appState.lastActionError)
+            if appState.lastActionError.isEmpty {
+                alert = .saveSuccess
+                if !password.isEmpty {
+                    password = ""
+                    hasStoredPassword = true
+                }
+            } else {
+                alert = .inputError(appState.lastActionError)
+            }
         }
     }
 
@@ -394,13 +415,14 @@ struct SimulationView: View {
             alert = .inputError("手机号不能为空")
             return
         }
-        guard !password.isEmpty else {
+        guard !password.isEmpty || hasStoredPassword else {
             alert = .inputError("密码不能为空")
             return
         }
         testing = true
+        let simId = appState.accounts.first(where: { $0.kind == "sim" })?.id
         Task {
-            let message = await appState.testTqAuth(account: account, password: password)
+            let message = await appState.testTqAuth(account: account, password: password, accountId: simId)
             testing = false
             alert = .testResult(message: message)
         }

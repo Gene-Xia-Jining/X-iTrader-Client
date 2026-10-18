@@ -270,9 +270,12 @@ class BackendService:
 
     def accounts_list(self) -> list[dict]:
         # 不回传密码：客户端表单留空 = 不修改，与 save_account 的沿用语义配套
+        # 返回是否已设置密码的布尔标记，供客户端显示占位星号
         result = []
         for account in self.bootstrap.accounts:
             item = _dataclass_dict(account)
+            item["has_tq_password"] = bool(account.tq_password)
+            item["has_trade_password"] = bool(account.trade_password)
             item.pop("tq_password")
             item.pop("trade_password")
             result.append(item)
@@ -386,9 +389,38 @@ class BackendService:
         password = params.get("password", "")
         if not account:
             raise ValueError("account 不能为空")
+        if not password:
+            account_id = params.get("account_id")
+            existing = self.bootstrap.config_service.get_account(account_id) if account_id else None
+            if not existing:
+                existing = next((a for a in self.bootstrap.accounts if a.tq_account == account), None)
+            if existing and existing.tq_password:
+                password = existing.tq_password
+        if not password:
+            raise ValueError("密码不能为空")
         # TqApi 构造是阻塞网络调用，放线程池避免卡住 asyncio 事件循环
         await asyncio.to_thread(test_tq_auth_connection, account, password)
         return {"message": "连接成功，账户密码验证通过"}
+
+    async def get_account_password(self, params: dict) -> dict:
+        """获取指定账户的保存密码，供客户端在用户点击明文查看时受控读取。"""
+        account_id = params.get("account_id")
+        kind = params.get("kind")
+        field = params.get("field", "tq_password")  # "tq_password" 或 "trade_password"
+        if not account_id and not kind:
+            raise ValueError("必须提供 account_id 或 kind")
+
+        target = None
+        if account_id:
+            target = self.bootstrap.config_service.get_account(account_id)
+        if not target and kind:
+            target = next((a for a in self.bootstrap.accounts if a.kind == kind), None)
+
+        if not target:
+            return {"password": ""}
+
+        val = getattr(target, field, "") if hasattr(target, field) else ""
+        return {"password": val or ""}
 
     async def test_server(self, params: dict) -> dict:
         server_url = params.get("server_url") or self.bootstrap.config.server_url
@@ -743,6 +775,7 @@ def build_routes(service: BackendService) -> dict:
         "accounts.list": accounts_list,
         "accounts.save": service.save_account,
         "accounts.delete": service.delete_account,
+        "accounts.get_password": service.get_account_password,
         "accounts.test_tq_auth": service.test_tq_auth,
         "server.test": service.test_server,
         "symbols.fetch": service.fetch_symbols,
