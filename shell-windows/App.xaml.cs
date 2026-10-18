@@ -29,7 +29,7 @@ public partial class App : Application
             return;
         }
 
-        State = new AppState(DispatcherQueue);
+        State = new AppState(Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread());
         State.Start();
 
         _window = new MainWindow(State);
