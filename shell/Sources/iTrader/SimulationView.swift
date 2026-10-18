@@ -32,7 +32,7 @@ struct SimulationView: View {
             AppCard {
                 VStack(alignment: .leading, spacing: 12) {
                     guideLabel("在开始实盘交易之前，您应该通过 1-3 个月的模拟交易建立信心。\n\n我们支持快期的模拟交易，您需要：")
-                    guideLabel("1，下载快期模拟版客户端：")
+                    guideLabel("1，下载快期客户端：")
                     linkRow("手机端：", "https://www.shinnytech.com/products/app")
                     // App Store 是手机端 iOS 渠道的子项，保留 Qt 版的 4 空格缩进
                     linkRow("    App Store：", "https://itunes.apple.com/us/app/快期小q/id1187762307?l=zh&ls=1&mt=8")
@@ -579,7 +579,7 @@ struct RadioRow: View {
 // MARK: - 品种胶囊（单选，无 radio 圆点）
 
 /// 品种胶囊：选中态实心主题色、未选描边；整颗按钮可点，点击切换选中（再点已选中的取消）。
-/// label 为显示文本（如「沪铜｜CU」），选中语义仍由外层 symbol 比较决定。
+/// label 为显示文本（如「CU｜沪铜」），选中语义仍由外层 symbol 比较决定。
 /// 文字对齐官网正文：13pt 常规字重（同「天勤官网：」行），未选中沿用深色。
 struct SymbolCapsule: View {
     let label: String

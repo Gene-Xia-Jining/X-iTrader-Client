@@ -477,10 +477,10 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 品种显示文本：有中文名时「中文｜代码」，否则纯代码（选中/保存仍用代码本身）
+    /// 品种显示文本：有中文名时「代码｜中文」，否则纯代码（选中/保存仍用代码本身）
     func displaySymbol(_ symbol: String) -> String {
         if let name = serverSymbolNames[symbol], !name.isEmpty {
-            return "\(name)｜\(symbol)"
+            return "\(symbol)｜\(name)"
         }
         return symbol
     }

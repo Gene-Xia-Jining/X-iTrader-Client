@@ -834,10 +834,10 @@ public sealed class AppState : INotifyPropertyChanged
         });
     }
 
-    /// <summary>品种显示文本：有中文名时「中文｜代码」，否则纯代码</summary>
+    /// <summary>品种显示文本：有中文名时「代码｜中文」，否则纯代码</summary>
     internal string DisplaySymbol(string symbol) =>
         ServerSymbolNames.TryGetValue(symbol, out var name) && name.Length > 0
-            ? $"{name}｜{symbol}"
+            ? $"{symbol}｜{name}"
             : symbol;
 
     /// <summary>测试快期账户：密码留空时后端沿用该账户已存密码（accountId 用于定位）</summary>
