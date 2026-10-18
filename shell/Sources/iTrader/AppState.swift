@@ -34,6 +34,9 @@ struct AccountInfo: Identifiable, Equatable {
     let enabled: Bool
     let hasTqPassword: Bool
     let hasTradePassword: Bool
+    /// 已存密码的明文长度，仅用于按真实长度绘制掩码圆点（密码本身不回传）
+    let tqPasswordLength: Int
+    let tradePasswordLength: Int
 
     var isSim: Bool { kind == "sim" }
 
@@ -50,7 +53,9 @@ struct AccountInfo: Identifiable, Equatable {
             strategy: dict["strategy"] as? String ?? "",
             enabled: dict["enabled"] as? Bool ?? true,
             hasTqPassword: dict["has_tq_password"] as? Bool ?? false,
-            hasTradePassword: dict["has_trade_password"] as? Bool ?? false
+            hasTradePassword: dict["has_trade_password"] as? Bool ?? false,
+            tqPasswordLength: dict["tq_password_length"] as? Int ?? 0,
+            tradePasswordLength: dict["trade_password_length"] as? Int ?? 0
         )
     }
 }
@@ -70,6 +75,8 @@ struct TokenRecord: Identifiable, Equatable {
     let createdAt: Date?
     let expiresAt: Date?
     let useCount: Int
+    /// 服务器是否还留有可领取的明文（首次领取后即为 false）
+    let claimable: Bool
 
     /// 状态中文文案（对应服务器 status 字段）
     var statusText: String {
@@ -92,7 +99,8 @@ struct TokenRecord: Identifiable, Equatable {
             status: dict["status"] as? String ?? "pending",
             createdAt: created.map { Date(timeIntervalSince1970: $0) },
             expiresAt: expires.map { Date(timeIntervalSince1970: $0) },
-            useCount: (dict["use_count"] as? NSNumber)?.intValue ?? 0
+            useCount: (dict["use_count"] as? NSNumber)?.intValue ?? 0,
+            claimable: dict["claimable"] as? Bool ?? false
         )
     }
 }
@@ -180,6 +188,10 @@ final class AppState: ObservableObject {
     @Published var tokenStatus = ""
     /// token 申请记录（服务器返回，倒序）
     @Published var tokenRecords: [TokenRecord] = []
+    /// 当前生效的 token 来自哪条申请记录（nil 表示本地无可用 token）
+    @Published var activeTokenId: String?
+    /// 本地缓存过明文、可切换回去的记录 id
+    @Published var cachedTokenIds: Set<String> = []
     @Published var updatePhase = UpdatePhase.idle
     @Published var lastActionError = ""
     /// 自动交易启动被预检拦截的问题列表；非空时顶栏弹出清单，用户确认后清空
@@ -522,8 +534,14 @@ final class AppState: ObservableObject {
     private func applyTokenStatus(_ data: [String: Any]) {
         tokenStatus = data["status"] as? String ?? ""
         tokenRecords = (data["records"] as? [[String: Any]] ?? []).compactMap(TokenRecord.from)
+        activeTokenId = data["active_token_id"] as? String
+        cachedTokenIds = Set(data["cached_token_ids"] as? [String] ?? [])
     }
 
+    /// 该记录是否在本地留有明文缓存（后端列表的 claimable 只管服务器侧）
+    func hasCachedToken(_ tokenId: String) -> Bool {
+        cachedTokenIds.contains(tokenId)
+    }
     func requestToken(description: String) {
         Task {
             if let resp = try? await call(method: "tokens.request", params: ["description": description]) {
@@ -537,6 +555,18 @@ final class AppState: ObservableObject {
         do {
             let resp = try await call(method: "tokens.delete", params: ["token_id": tokenId])
             applyTokenStatus(resp)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// 切换当前使用的 Token；成功返回 nil，失败返回错误文案
+    func switchToken(tokenId: String) async -> String? {
+        do {
+            let resp = try await call(method: "tokens.switch", params: ["token_id": tokenId])
+            applyTokenStatus(resp)
+            await refreshEngineOnly()
             return nil
         } catch {
             return error.localizedDescription

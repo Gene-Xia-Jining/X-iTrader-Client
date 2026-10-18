@@ -179,12 +179,17 @@ class EngineStartPreflightTest(unittest.TestCase):
         self.assertNotIn("tq_password", sim)
         self.assertNotIn("trade_password", sim)
         self.assertTrue(sim["has_tq_password"])
+        # 只回传长度，供密码框按真实长度绘制掩码
+        self.assertEqual(sim["tq_password_length"], len("secret"))
+        self.assertEqual(sim["trade_password_length"], 0)
 
         live = next(a for a in accounts if a["id"] == "acc-empty")
         self.assertNotIn("tq_password", live)
         self.assertNotIn("trade_password", live)
         self.assertFalse(live["has_tq_password"])
         self.assertFalse(live["has_trade_password"])
+        self.assertEqual(live["tq_password_length"], 0)
+        self.assertEqual(live["trade_password_length"], 0)
 
     def test_get_account_password_returns_saved_password(self):
         service = _make_service()

@@ -17,12 +17,14 @@ class FakeTokenService:
         self._valid = valid
         self._records = records or []
         self.claim_calls = 0
+        self.last_claim_token_id = "unset"
         self.validate_calls = 0
         self.list_calls = 0
         self.deleted: list[str] = []
 
-    async def claim_token(self):
+    async def claim_token(self, token_id=None):
         self.claim_calls += 1
+        self.last_claim_token_id = token_id
         return self._claim_result
 
     async def validate_token(self, token):
@@ -235,6 +237,75 @@ class TokenDeleteTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             asyncio.run(service.delete_token_request({"token_id": "t1"}))
         self.assertEqual(fake.deleted, [])
+
+
+class TokenSwitchTest(unittest.TestCase):
+    def _setup(self, **fake_kwargs):
+        service, events, _ = _make_service()
+        fake = FakeTokenService(str(Path(tempfile.mkdtemp()) / "client.db"), **fake_kwargs)
+        service.bootstrap._token_service = fake
+        return service, fake, events
+
+    def test_switch_uses_cached_token_without_claiming(self):
+        service, fake, events = self._setup(claim_result=None)
+        fake.token_store.save_token("tok-old", "t1")
+        fake.token_store.save_token("tok-new", "t2")
+
+        payload = asyncio.run(service.switch_token({"token_id": "t1"}))
+
+        self.assertEqual(fake.token_store.load_token(), "tok-old")
+        self.assertEqual(payload["active_token_id"], "t1")
+        self.assertEqual(fake.claim_calls, 0)
+        self.assertEqual(events[-1][0], "token_status")
+
+    def test_switch_claims_from_server_when_no_cache(self):
+        service, fake, _ = self._setup(
+            claim_result={"token_id": "t2", "token": "tok-from-server"},
+            records=[{"token_id": "t2", "status": "approved"}],
+        )
+        fake.token_store.save_token("tok-old", "t1")
+
+        payload = asyncio.run(service.switch_token({"token_id": "t2"}))
+
+        self.assertEqual(fake.last_claim_token_id, "t2")
+        self.assertEqual(fake.token_store.load_token(), "tok-from-server")
+        self.assertEqual(payload["active_token_id"], "t2")
+
+    def test_switch_fails_when_no_cache_and_not_claimable(self):
+        service, fake, _ = self._setup(claim_result=None)
+        fake.token_store.save_token("tok-old", "t1")
+
+        with self.assertRaises(ValueError) as ctx:
+            asyncio.run(service.switch_token({"token_id": "t2"}))
+        self.assertIn("没有可用的明文", str(ctx.exception))
+        # 失败不能动当前凭据
+        self.assertEqual(fake.token_store.load_token(), "tok-old")
+
+    def test_switch_to_active_record_rejected(self):
+        service, fake, _ = self._setup()
+        fake.token_store.save_token("tok-old", "t1")
+
+        with self.assertRaises(ValueError):
+            asyncio.run(service.switch_token({"token_id": "t1"}))
+        self.assertEqual(fake.claim_calls, 0)
+
+    def test_switch_requires_token_id(self):
+        service, fake, _ = self._setup()
+        with self.assertRaises(ValueError):
+            asyncio.run(service.switch_token({}))
+        self.assertEqual(fake.claim_calls, 0)
+
+    def test_switch_network_error_is_not_reported_as_missing_token(self):
+        class Boom(FakeTokenService):
+            async def claim_token(self, token_id=None):
+                raise RuntimeError("连接超时")
+
+        service, _, _ = _make_service()
+        fake = Boom(str(Path(tempfile.mkdtemp()) / "client.db"))
+        service.bootstrap._token_service = fake
+
+        with self.assertRaises(RuntimeError):
+            asyncio.run(service.switch_token({"token_id": "t2"}))
 
 
 if __name__ == "__main__":

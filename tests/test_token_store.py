@@ -84,6 +84,44 @@ class DbTokenStoreTest(unittest.TestCase):
         self.assertEqual(self.store.load_token(), "token-abc")
         self.assertTrue((self.dir / ".secret.key").exists())
 
+    # ---- 切换用的凭据缓存 ----
+
+    def test_save_token_records_source_id(self):
+        self.store.save_token("tok-1", "rec-1")
+        self.assertEqual(self.store.load_token_id(), "rec-1")
+        self.assertEqual(self.store.cached_token_ids(), {"rec-1"})
+
+    def test_activate_cached_token_switches_back(self):
+        self.store.save_token("tok-1", "rec-1")
+        self.store.save_token("tok-2", "rec-2")
+        self.assertEqual(self.store.load_token_id(), "rec-2")
+
+        self.assertTrue(self.store.activate_cached_token("rec-1"))
+        self.assertEqual(self.store.load_token(), "tok-1")
+        self.assertEqual(self.store.load_token_id(), "rec-1")
+
+    def test_activate_cached_token_without_cache_returns_false(self):
+        self.assertFalse(self.store.activate_cached_token("rec-x"))
+        self.assertIsNone(self.store.load_token())
+
+    def test_cached_token_stored_encrypted(self):
+        self.store.save_token("secret-token", "rec-1")
+        conn = sqlite3.connect(self.db_path)
+        try:
+            stored = conn.execute(
+                "SELECT token FROM api_token_history WHERE token_id = 'rec-1'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertTrue(stored.startswith("enc:v1:"))
+        self.assertNotIn("secret-token", stored)
+
+    def test_delete_cached_token(self):
+        self.store.save_token("tok-1", "rec-1")
+        self.store.delete_cached_token("rec-1")
+        self.assertEqual(self.store.cached_token_ids(), set())
+        self.assertFalse(self.store.activate_cached_token("rec-1"))
+
 
 if __name__ == "__main__":
     unittest.main()

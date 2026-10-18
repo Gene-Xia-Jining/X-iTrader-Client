@@ -9,8 +9,9 @@ struct SimulationView: View {
     @State private var phone = ""
     @State private var password = ""
     @State private var passwordVisible = false
-    // 已存模拟账户 => 后端不回传密码，但本地知道“密码已设置”，用于在密码框显示占位星号
+    // 已存模拟账户 => 后端不回传密码，但会返回「已设置」与长度，用于按真实长度绘制掩码圆点
     @State private var hasStoredPassword = false
+    @State private var storedPasswordLength = 0
     // 品种单选（服务器品种；已订阅但不在服务器列表的品种保留显示）
     @State private var selectedSymbol = ""
     @State private var keptSymbols: [String] = []
@@ -180,13 +181,18 @@ struct SimulationView: View {
         )
     }
 
-    /// 已存密码的自绘掩码：与真实密码框同样的深色圆点，避免浅灰 placeholder 被当成提示文字
+    /// 已存密码的自绘掩码：按真实密码长度绘制圆点（后端只回传长度，不回传明文），
+    /// 尺寸对齐设计稿——直径 6.5pt、中心间距 9pt
     private var storedPasswordMask: some View {
-        Text(String(repeating: "•", count: 10))
-            .font(AppTheme.bodyFont)
-            .kerning(1.2)
-            .foregroundColor(AppTheme.ink(scheme))
-            .allowsHitTesting(false)
+        let count = storedPasswordLength > 0 ? storedPasswordLength : 10
+        return HStack(spacing: 2.5) {
+            ForEach(0..<count, id: \.self) { _ in
+                Circle()
+                    .fill(AppTheme.ink(scheme))
+                    .frame(width: 6.5, height: 6.5)
+            }
+        }
+        .allowsHitTesting(false)
     }
 
     /// 眼睛图标按钮：图标表示点击后的效果（隐藏时睁眼=查看，明文时闭眼=隐藏）
@@ -358,10 +364,12 @@ struct SimulationView: View {
     private func fillFromAccount() {
         guard let sim = appState.accounts.first(where: { $0.kind == "sim" }) else {
             hasStoredPassword = false
+            storedPasswordLength = 0
             return
         }
-        // 后端不回传密码，但会返回「是否已设置密码」的标记，用于密码框占位星号
+        // 后端不回传密码，但会返回「是否已设置」与长度，用于按真实长度绘制掩码圆点
         hasStoredPassword = sim.hasTqPassword
+        storedPasswordLength = sim.tqPasswordLength
         guard phone.isEmpty else { return }
         phone = sim.tqAccount
         if let first = sim.symbols.first {
@@ -409,12 +417,14 @@ struct SimulationView: View {
         }
 
         Task {
+            let newPasswordLength = password.count
             await appState.runAction(method: "accounts.save", params: params)
             if appState.lastActionError.isEmpty {
                 alert = .saveSuccess
-                if !password.isEmpty {
+                if newPasswordLength > 0 {
                     password = ""
                     hasStoredPassword = true
+                    storedPasswordLength = newPasswordLength
                 }
             } else {
                 alert = .inputError(appState.lastActionError)

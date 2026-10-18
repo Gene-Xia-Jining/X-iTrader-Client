@@ -211,48 +211,114 @@ class BackendService:
         payload = await self._token_status_payload(try_claim=False)
         self._broadcast("token_status", payload)
 
-    async def _claim_and_save(self) -> bool:
-        """领取已批准 token 并加密落库；无待领取记录返回 False。"""
+    async def _claim_and_save(self, token_id: Optional[str] = None, strict: bool = False) -> bool:
+        """领取已批准 token 并加密落库；无待领取记录返回 False。
+
+        token_id 为空时领取最新一条待领取记录（启动时的自动领取），
+        指定时只领取该条（用户在记录列表里切换当前使用的 Token）。
+        strict=True 时网络异常向上抛，避免把「连不上服务器」说成
+        「记录没有可领取的明文」。
+        """
         if not self.bootstrap.config.server_url:
             return False
         token_service = self.bootstrap.token_service
         try:
-            result = await token_service.claim_token()
+            result = await token_service.claim_token(token_id)
         except Exception as e:
             self._log(f"Token 领取失败: {e}", LogLevel.WARNING)
+            if strict:
+                raise
             return False
         if not result or not result.get("token"):
             return False
-        token_service.token_store.save_token(result["token"])
+        token_service.token_store.save_token(result["token"], result.get("token_id"))
         return True
 
     async def _token_status_payload(self, try_claim: bool = True) -> dict:
         """归纳审批状态文案并附带申请记录；已通过但无本地 token 时就地领取一次。"""
         token_service = self.bootstrap.token_service
         if not self.bootstrap.config.server_url:
-            return {"status": "未配置服务器", "records": []}
+            return self._payload("未配置服务器", [])
 
         try:
             records = await token_service.list_token_requests()
         except Exception as e:
-            return {"status": f"查询失败: {e}", "records": []}
+            return self._payload(f"查询失败: {e}", [])
 
         if token_service.token_store.have_token():
-            return {"status": "已通过，token 已加密保存", "records": records}
+            return self._payload("已通过，token 已加密保存", records)
         if not records:
-            return {"status": "未申请", "records": records}
+            return self._payload("未申请", records)
 
         # 记录按 created_at 倒序，首条即最新一次申请
         state = records[0].get("status") or "pending"
         if state == "pending":
-            return {"status": "待审核", "records": records}
+            return self._payload("待审核", records)
         if state == "rejected":
-            return {"status": "已拒绝", "records": records}
+            return self._payload("已拒绝", records)
 
         if try_claim and await self._claim_and_save():
             self._log("Token 审批已通过，已自动领取并保存", LogLevel.SUCCESS)
-            return {"status": "已通过，token 已加密保存", "records": records}
-        return {"status": "已通过，但服务器未返回 token", "records": records}
+            return self._payload("已通过，token 已加密保存", records)
+        return self._payload("已通过，但服务器未返回 token", records)
+
+    def _payload(self, status: str, records: list[dict]) -> dict:
+        """状态文案 + 记录 + 当前生效记录 id + 本地有缓存的记录 id。
+
+        后两项供界面标出「使用中」并判断哪些行可以切换。
+        """
+        store = self.bootstrap.token_service.token_store
+        return {
+            "status": status,
+            "records": records,
+            "active_token_id": store.load_token_id(),
+            "cached_token_ids": sorted(store.cached_token_ids()),
+        }
+
+    async def switch_token(self, params: dict) -> dict:
+        """把指定申请记录的 Token 设为当前使用。
+
+        服务器对已签发 Token 只保存 hash，明文仅在「批准 → 领取」窗口内
+        存在一次。因此优先用本地缓存（曾经用过的那份明文），缓存里没有时
+        再向服务器领取；两者都不行才报错，而不是让界面显示切换成功。
+        """
+        token_id = (params.get("token_id") or "").strip()
+        if not token_id:
+            raise ValueError("缺少 token_id")
+        if not self.bootstrap.config.server_url:
+            raise ValueError("未配置服务器地址")
+
+        token_service = self.bootstrap.token_service
+        store = token_service.token_store
+        if store.load_token_id() == token_id and store.have_token():
+            raise ValueError("该记录已是当前使用的 Token")
+
+        if store.activate_cached_token(token_id):
+            self._log("已切换 Token（使用本地缓存凭据）", LogLevel.INFO)
+        elif not await self._claim_and_save(token_id, strict=True):
+            raise ValueError(
+                "该记录没有可用的明文 Token（首次领取后服务器不再保留，"
+                "本地也没有使用记录），请在服务器端重新批准后再切换"
+            )
+
+        # 新 token 已落库：重置校验标记，让下一次心跳按新凭据重新校验
+        self._token_validated = False
+        await self._reset_engines_after_token_change()
+        self._log(f"已切换 Token（记录 {token_id[:8]}…）", LogLevel.SUCCESS)
+        payload = await self._token_status_payload(try_claim=False)
+        self._broadcast("token_status", payload)
+        return payload
+
+    async def _reset_engines_after_token_change(self) -> None:
+        """切换凭据后停掉并重建引擎：信号流的请求头在建立时固定了旧 token，
+        不重建就会一直用旧凭据（服务器 401 后也不会自愈）。停引擎走
+        engine_stop 的同一路径，避免界面仍显示自动交易运行中。"""
+        if not self._engines:
+            return
+        self.set_auto_trade({"value": False})
+        await self.stop_engines()
+        self.bootstrap.reset_stream_clients()
+        self._log("Token 已变更，自动交易已停止，请重新开启", LogLevel.WARNING)
 
     # -------- 查询 --------
 
@@ -270,12 +336,14 @@ class BackendService:
 
     def accounts_list(self) -> list[dict]:
         # 不回传密码：客户端表单留空 = 不修改，与 save_account 的沿用语义配套
-        # 返回是否已设置密码的布尔标记，供客户端显示占位星号
+        # 附带「是否已设置密码」与密码长度，供客户端在密码框按真实长度显示掩码圆点
         result = []
         for account in self.bootstrap.accounts:
             item = _dataclass_dict(account)
             item["has_tq_password"] = bool(account.tq_password)
             item["has_trade_password"] = bool(account.trade_password)
+            item["tq_password_length"] = len(account.tq_password)
+            item["trade_password_length"] = len(account.trade_password)
             item.pop("tq_password")
             item.pop("trade_password")
             result.append(item)
@@ -474,7 +542,13 @@ class BackendService:
         await token_service.delete_token_request(token_id)
 
         store = token_service.token_store
-        if store.have_token():
+        store.delete_cached_token(token_id)
+        if store.load_token_id() == token_id:
+            # 删掉的正是当前生效记录：本地凭据已无对应记录，直接作废
+            store.delete_token()
+            self._token_validated = False
+            self._log("当前使用的 Token 记录已被删除，本地凭据已作废", LogLevel.WARNING)
+        elif store.have_token():
             try:
                 valid = await token_service.validate_token(store.load_token())
             except Exception:
@@ -813,6 +887,7 @@ def build_routes(service: BackendService) -> dict:
         "tokens.status": service.token_status,
         "tokens.request": service.request_token,
         "tokens.delete": service.delete_token_request,
+        "tokens.switch": service.switch_token,
         "engine.start": service.engine_start,
         "engine.stop": service.engine_stop,
         "engine.set_auto_trade": set_auto_trade,

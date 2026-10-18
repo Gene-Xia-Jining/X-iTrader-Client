@@ -151,3 +151,8 @@ class Bootstrap:
     def reset_token_service(self) -> None:
         """服务器地址变更后重建 token 客户端（其 server_url 构造时固定）。"""
         self._token_service = None
+
+    def reset_stream_clients(self) -> None:
+        """丢弃已建的信号流客户端：请求头里的 Token 在建立时固定，
+        换了凭据必须重建，否则会一直用旧 Token 订阅。"""
+        self._stream_clients.clear()

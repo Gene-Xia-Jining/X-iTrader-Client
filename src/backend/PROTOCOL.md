@@ -63,16 +63,17 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 |---|---|---|
 | `app.status` | - | `{version, pid, config, accounts, engines}` 全量初始状态 |
 | `config.save` | `{server_url?, proxy_url?, auto_check_update?, skipped_version?}` | `{}` 未提供的字段沿用 |
-| `accounts.list` | - | `{accounts: [...]}` **不含密码** |
+| `accounts.list` | - | `{accounts: [...]}` **不含密码**；每项含 `has_tq_password` / `has_trade_password` 与 `tq_password_length` / `trade_password_length`（明文长度，供 UI 按真实长度绘制掩码圆点） |
 | `accounts.save` | `{kind: "sim"\|"live", account_id?, label?, tq_account?, tq_password?, broker?, trade_account?, trade_password?, symbols?, strategy?, enabled?}` | `{account_id}` 未提供的字段沿用已有账户；symbols 支持数组或逗号分隔字符串；strategy 为服务器策略 id（空字符串 = 清除选择）；无 account_id 时 sim→`legacy`、live→`legacy-live` |
 | `accounts.delete` | `{account_id}` | `{}` |
 | `accounts.test_tq_auth` | `{account, password}` | `{message}` 验证快期权限账户 |
 | `server.test` | `{server_url?}` | `{message}` 缺省用当前配置 |
 | `symbols.fetch` | - | `{symbols: [...], message}` 服务器品种列表，元素为 `{symbol, name}`（name 为中文名，可能为空；旧版后端为纯代码字符串） |
 | `strategies.fetch` | - | `{strategies: [...], message}` 服务器策略列表，元素为 `{id, name, description}`（id 用于 accounts.save 的 strategy 与订阅上报） |
-| `tokens.status` | - | `{status, records: [...]}`；`records` 为申请记录，元素 `{token_id, description, status, created_at, expires_at, use_count}`（created_at/expires_at 为 Unix 秒），倒序；`status` 文案：未申请/待审核/已通过，token 已加密保存/已通过，但服务器未返回 token/已拒绝。已通过但本地无 token 时就地领取一次 |
+| `tokens.status` | - | `{status, records: [...], active_token_id, cached_token_ids}`；`records` 为申请记录，元素 `{token_id, description, status, created_at, expires_at, use_count, claimable}`（created_at/expires_at 为 Unix 秒），倒序；`claimable` 表示服务器是否还留有可领取明文（首次领取后为 false）；`active_token_id` 为当前生效记录 id，`cached_token_ids` 为本地留有明文可切换回去的记录 id 列表；`status` 文案：未申请/待审核/已通过，token 已加密保存/已通过，但服务器未返回 token/已拒绝。已通过但本地无 token 时就地领取一次 |
 | `tokens.request` | `{description?}` | `{status}` 提交申请后立即触发一次后台领取轮询 |
-| `tokens.delete` | `{token_id}` | `{status, records: [...]}` 删除一条申请记录后返回刷新后的状态；若删掉的是当前生效记录，会顺带校验并清除本地 token。记录不存在时抛错 |
+| `tokens.delete` | `{token_id}` | `{status, records, active_token_id, cached_token_ids}` 删除一条申请记录后返回刷新后的状态；删掉的若是当前生效记录，本地 token 与该记录的凭据缓存一并清除。记录不存在时抛错 |
+| `tokens.switch` | `{token_id}` | `{status, records, active_token_id, cached_token_ids}` 把该记录的 Token 设为当前使用：优先取本地缓存，没有则向服务器定向领取；两者都不可用时抛错。切换后若引擎在运行会被停止（信号流的请求头固定了旧 token），需重新开启自动交易 |
 | `engine.start` | - | engines 状态。启动前预检（服务器连通、已启用账户字段齐全、本地 token、天勤握手）；任一项不过抛 `EngineStartBlockedError`（`data.issues` 为问题列表），不置 `auto_trade`、不启动任何引擎 |
 | `engine.stop` | - | engines 状态。等价 UI 的"自动交易"关 |
 | `engine.set_auto_trade` | `{value}` | `{}` 只改自动执行标志，不动引擎 |
