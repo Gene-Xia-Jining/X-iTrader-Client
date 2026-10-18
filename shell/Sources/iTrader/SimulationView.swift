@@ -9,6 +9,8 @@ struct SimulationView: View {
     @State private var phone = ""
     @State private var password = ""
     @State private var passwordVisible = false
+    // 已存模拟账户 => 后端不回传密码，但本地知道“密码已设置”，用于在密码框显示占位星号
+    @State private var hasStoredPassword = false
     // 品种单选（服务器品种；已订阅但不在服务器列表的品种保留显示）
     @State private var selectedSymbol = ""
     @State private var keptSymbols: [String] = []
@@ -151,13 +153,15 @@ struct SimulationView: View {
     }
 
     private var passwordField: some View {
-        HStack(spacing: 0) {
+        // 已存账户密码框占位显示星号，表示密码已设置；用户开始输入即视为修改密码
+        let placeholder = (hasStoredPassword && password.isEmpty) ? "••••••" : "密码"
+        return HStack(spacing: 0) {
             if passwordVisible {
-                TextField("密码", text: $password)
+                TextField(placeholder, text: $password)
                     .textFieldStyle(.plain)
                     .font(AppTheme.bodyFont)
             } else {
-                SecureField("密码", text: $password)
+                SecureField(placeholder, text: $password)
                     .textFieldStyle(.plain)
                     .font(AppTheme.bodyFont)
             }
@@ -330,6 +334,8 @@ struct SimulationView: View {
         guard phone.isEmpty,
               let sim = appState.accounts.first(where: { $0.kind == "sim" }) else { return }
         phone = sim.tqAccount
+        // 后端不回传密码，但能取到已存 sim 账户即说明密码已设置，用于密码框占位星号
+        hasStoredPassword = true
         if let first = sim.symbols.first {
             selectedSymbol = first
             if !appState.serverSymbols.contains(first) && keptSymbols.isEmpty {

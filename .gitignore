@@ -31,6 +31,7 @@ iTrader.spec
 
 # Swift 壳构建产物
 shell/.build/
+.build/
 
 # WinUI 壳构建产物
 winui/bin/
