@@ -1,3 +1,4 @@
+using XTrader.Shell.Theme;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
@@ -9,16 +10,32 @@ namespace XTrader.Shell.Views;
 /// <summary>
 /// 设置页：服务器连接 + 代理 + 软件更新（对应 mac 壳的 SettingsView / Qt SettingsPage）。
 /// </summary>
-public sealed partial class SettingsPage : ThemedPageBase
+public sealed partial class SettingsPage : Page
 {
+
+    // -------- 页面公共逻辑（状态 / 宿主窗口 / 主题画刷）--------
+
+    private readonly ThemedPage _theme;
+
+    private AppState State => _theme.State;
+    private MainWindow Host => _theme.Host;
+    private Palette Palette => _theme.Palette;
+
+    private SolidColorBrush Brush(Windows.UI.Color color) => _theme.Brush(color);
+
+    private static Windows.UI.Color Hex(uint value) => ThemedPage.Hex(value);
+
+    private static Windows.UI.Color LogLevelColor(string level, bool dark) =>
+        ThemedPage.LogLevelColor(level, dark);
     private bool _filling;
 
     public SettingsPage()
     {
         InitializeComponent();
+        _theme = new ThemedPage(this, ApplyPalette, OnStateChanged);
     }
 
-    protected override void ApplyPalette()
+    private void ApplyPalette()
     {
         PageTitle.Foreground = Brush(Palette.Ink);
         Subtitle.Foreground = Brush(Palette.Dim);
@@ -44,6 +61,7 @@ public sealed partial class SettingsPage : ThemedPageBase
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
+        _theme.Attach(e);
         if (State is null)
         {
             return;
@@ -51,7 +69,7 @@ public sealed partial class SettingsPage : ThemedPageBase
         FillFromConfig();
     }
 
-    protected override void OnStateChanged()
+    private void OnStateChanged()
     {
         VersionText.Text = $"当前版本 v{State.BackendVersion}";
         if (!_filling)

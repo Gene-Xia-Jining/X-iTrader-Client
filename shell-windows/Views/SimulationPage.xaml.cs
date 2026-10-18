@@ -16,8 +16,23 @@ namespace XTrader.Shell.Views;
 /// 已存密码不回传明文：后端只给「是否已设置」和长度，密码框按真实长度
 /// 自绘圆点掩码；点眼睛时才通过 accounts.get_password 受控取一次明文。
 /// </summary>
-public sealed partial class SimulationPage : ThemedPageBase
+public sealed partial class SimulationPage : Page
 {
+
+    // -------- 页面公共逻辑（状态 / 宿主窗口 / 主题画刷）--------
+
+    private readonly ThemedPage _theme;
+
+    private AppState State => _theme.State;
+    private MainWindow Host => _theme.Host;
+    private Palette Palette => _theme.Palette;
+
+    private SolidColorBrush Brush(Windows.UI.Color color) => _theme.Brush(color);
+
+    private static Windows.UI.Color Hex(uint value) => ThemedPage.Hex(value);
+
+    private static Windows.UI.Color LogLevelColor(string level, bool dark) =>
+        ThemedPage.LogLevelColor(level, dark);
     // 引导文案里的外链（与 mac 壳一致）
     private const string UrlMobile = "https://www.shinnytech.com/products/app";
     private const string UrlAppStore = "https://itunes.apple.com/us/app/快期小q/id1187762307?l=zh&ls=1&mt=8";
@@ -41,6 +56,7 @@ public sealed partial class SimulationPage : ThemedPageBase
     public SimulationPage()
     {
         InitializeComponent();
+        _theme = new ThemedPage(this, ApplyPalette, OnStateChanged);
         PasswordHidden.PasswordChanged += (_, _) => UpdatePasswordMask();
         PasswordShown.TextChanged += (_, _) => UpdatePasswordMask();
         PasswordHidden.GotFocus += (_, _) => PasswordFrame.BorderBrush = Brush(Palette.Primary);
@@ -52,6 +68,7 @@ public sealed partial class SimulationPage : ThemedPageBase
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
+        _theme.Attach(e);
         if (State is null)
         {
             return;
@@ -59,7 +76,7 @@ public sealed partial class SimulationPage : ThemedPageBase
         FillFromAccount();
     }
 
-    protected override void ApplyPalette()
+    private void ApplyPalette()
     {
         // 先切主题再上色：RequestedTheme 会重算模板资源，后设颜色才不会被覆盖
         Root.RequestedTheme = Host.IsDark ? ElementTheme.Dark : ElementTheme.Light;
@@ -111,7 +128,7 @@ public sealed partial class SimulationPage : ThemedPageBase
         RenderCapsules();
     }
 
-    protected override void OnStateChanged()
+    private void OnStateChanged()
     {
         FillFromAccount();
         RefreshTransientState();

@@ -1,3 +1,4 @@
+using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -9,14 +10,36 @@ namespace XTrader.Shell.Views;
 /// <summary>
 /// 仪表盘：状态指标卡 + 最近信号 + 最近日志（对应 mac 壳的 DashboardView）。
 /// </summary>
-public sealed partial class DashboardPage : ThemedPageBase
+public sealed partial class DashboardPage : Page
 {
+
+    // -------- 页面公共逻辑（状态 / 宿主窗口 / 主题画刷）--------
+
+    private readonly ThemedPage _theme;
+
+    private AppState State => _theme.State;
+    private MainWindow Host => _theme.Host;
+    private Palette Palette => _theme.Palette;
+
+    private SolidColorBrush Brush(Windows.UI.Color color) => _theme.Brush(color);
+
+    private static Windows.UI.Color Hex(uint value) => ThemedPage.Hex(value);
+
+    private static Windows.UI.Color LogLevelColor(string level, bool dark) =>
+        ThemedPage.LogLevelColor(level, dark);
     public DashboardPage()
     {
         InitializeComponent();
+        _theme = new ThemedPage(this, ApplyPalette, OnStateChanged);
     }
 
-    protected override void ApplyPalette()
+    protected override void OnNavigatedTo(NavigationEventArgs e)
+    {
+        base.OnNavigatedTo(e);
+        _theme.Attach(e);
+    }
+
+    private void ApplyPalette()
     {
         Root.RequestedTheme = Host.IsDark ? ElementTheme.Dark : ElementTheme.Light;
         PageTitle.Foreground = Brush(Palette.Ink);
@@ -52,7 +75,7 @@ public sealed partial class DashboardPage : ThemedPageBase
         LogPreviewScroll.BorderBrush = Brush(Palette.Hairline);
     }
 
-    protected override void OnStateChanged()
+    private void OnStateChanged()
     {
         var engine = State.EngineStatus;
 

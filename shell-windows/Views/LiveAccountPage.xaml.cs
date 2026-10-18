@@ -13,8 +13,23 @@ namespace XTrader.Shell.Views;
 /// 实盘交易页：账户卡片列表（对应 mac 壳的 AccountView）。
 /// 每张卡片持有独立的期货公司单选（跨账户不互斥），支持多个实盘账户并存。
 /// </summary>
-public sealed partial class LiveAccountPage : ThemedPageBase
+public sealed partial class LiveAccountPage : Page
 {
+
+    // -------- 页面公共逻辑（状态 / 宿主窗口 / 主题画刷）--------
+
+    private readonly ThemedPage _theme;
+
+    private AppState State => _theme.State;
+    private MainWindow Host => _theme.Host;
+    private Palette Palette => _theme.Palette;
+
+    private SolidColorBrush Brush(Windows.UI.Color color) => _theme.Brush(color);
+
+    private static Windows.UI.Color Hex(uint value) => ThemedPage.Hex(value);
+
+    private static Windows.UI.Color LogLevelColor(string level, bool dark) =>
+        ThemedPage.LogLevelColor(level, dark);
     private const string BrokerUrl = "https://www.shinnytech.com/articles/reference/tqsdk-brokers";
 
     /// <summary>新建未保存卡片的 id（前端生成，保存时传给后端）</summary>
@@ -27,11 +42,13 @@ public sealed partial class LiveAccountPage : ThemedPageBase
     public LiveAccountPage()
     {
         InitializeComponent();
+        _theme = new ThemedPage(this, ApplyPalette, OnStateChanged);
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
+        _theme.Attach(e);
         if (State is null)
         {
             return;
@@ -39,7 +56,7 @@ public sealed partial class LiveAccountPage : ThemedPageBase
         RebuildCards();
     }
 
-    protected override void ApplyPalette()
+    private void ApplyPalette()
     {
         // 先切主题再上色：RequestedTheme 会重算模板资源，后设颜色才不会被覆盖
         Root.RequestedTheme = Host.IsDark ? ElementTheme.Dark : ElementTheme.Light;
@@ -54,7 +71,7 @@ public sealed partial class LiveAccountPage : ThemedPageBase
         }
     }
 
-    protected override void OnStateChanged()
+    private void OnStateChanged()
     {
         RebuildCards();
         foreach (var card in _cards)

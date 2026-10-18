@@ -1,3 +1,4 @@
+using XTrader.Shell.Theme;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -13,8 +14,23 @@ namespace XTrader.Shell.Views;
 /// 列表为手写表格：WinUI 的 GridView 没有列头语义且不好对齐固定列宽，
 /// 与 mac 壳一样用「列头 + 行」的 Grid 逐行构建，列宽常量集中在此。
 /// </summary>
-public sealed partial class TokenManagePage : ThemedPageBase
+public sealed partial class TokenManagePage : Page
 {
+
+    // -------- 页面公共逻辑（状态 / 宿主窗口 / 主题画刷）--------
+
+    private readonly ThemedPage _theme;
+
+    private AppState State => _theme.State;
+    private MainWindow Host => _theme.Host;
+    private Palette Palette => _theme.Palette;
+
+    private SolidColorBrush Brush(Windows.UI.Color color) => _theme.Brush(color);
+
+    private static Windows.UI.Color Hex(uint value) => ThemedPage.Hex(value);
+
+    private static Windows.UI.Color LogLevelColor(string level, bool dark) =>
+        ThemedPage.LogLevelColor(level, dark);
     // 列宽与 mac 壳逐项一致（编号 / 说明 / 申请时间 / 过期时间 / 已使用 / 状态 / 操作）
     private const double IndexWidth = 52;
     private const double TimeWidth = 130;
@@ -29,11 +45,13 @@ public sealed partial class TokenManagePage : ThemedPageBase
     public TokenManagePage()
     {
         InitializeComponent();
+        _theme = new ThemedPage(this, ApplyPalette, OnStateChanged);
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
+        _theme.Attach(e);
         if (State is null)
         {
             return;
@@ -42,7 +60,7 @@ public sealed partial class TokenManagePage : ThemedPageBase
         State.RefreshTokenStatus();
     }
 
-    protected override void ApplyPalette()
+    private void ApplyPalette()
     {
         // 先切主题再上色：RequestedTheme 会重算模板资源，后设颜色才不会被覆盖
         Root.RequestedTheme = Host.IsDark ? ElementTheme.Dark : ElementTheme.Light;
@@ -75,7 +93,7 @@ public sealed partial class TokenManagePage : ThemedPageBase
         RenderRecords();
     }
 
-    protected override void OnStateChanged()
+    private void OnStateChanged()
     {
         TokenStatusText.Text = string.IsNullOrEmpty(State.TokenStatus) ? "未申请" : State.TokenStatus;
         TokenStatusText.Foreground = Brush(StatusColor(State.TokenStatus));

@@ -1,3 +1,4 @@
+using XTrader.Shell.Theme;
 using System.Collections.Specialized;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -13,14 +14,30 @@ namespace XTrader.Shell.Views;
 /// 直接订阅 AppState.Logs 的集合变更增量追加 TextBlock，而不是每次全量重建：
 /// 日志可达 500 行，全量重建在滚动时会明显掉帧。
 /// </summary>
-public sealed partial class TradingLogPage : ThemedPageBase
+public sealed partial class TradingLogPage : Page
 {
+
+    // -------- 页面公共逻辑（状态 / 宿主窗口 / 主题画刷）--------
+
+    private readonly ThemedPage _theme;
+
+    private AppState State => _theme.State;
+    private MainWindow Host => _theme.Host;
+    private Palette Palette => _theme.Palette;
+
+    private SolidColorBrush Brush(Windows.UI.Color color) => _theme.Brush(color);
+
+    private static Windows.UI.Color Hex(uint value) => ThemedPage.Hex(value);
+
+    private static Windows.UI.Color LogLevelColor(string level, bool dark) =>
+        ThemedPage.LogLevelColor(level, dark);
     public TradingLogPage()
     {
         InitializeComponent();
+        _theme = new ThemedPage(this, ApplyPalette, OnStateChanged);
     }
 
-    protected override void ApplyPalette()
+    private void ApplyPalette()
     {
         PageTitle.Foreground = Brush(Palette.Ink);
         Subtitle.Foreground = Brush(Palette.Dim);
@@ -30,7 +47,7 @@ public sealed partial class TradingLogPage : ThemedPageBase
         RebuildLogs();
     }
 
-    protected override void OnStateChanged()
+    private void OnStateChanged()
     {
         // 日志增量由 CollectionChanged 处理；此处仅确保已挂载后的首帧渲染
     }
@@ -38,6 +55,7 @@ public sealed partial class TradingLogPage : ThemedPageBase
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
+        _theme.Attach(e);
         if (State is null)
         {
             return;
