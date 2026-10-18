@@ -28,7 +28,7 @@ from pathlib import Path
 
 import httpx
 
-GITHUB_REPO = "Gene-Xia-Jining/iTrader"
+GITHUB_REPO = "Gene-Xia-Jining/X-iTrader-Client"
 RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 RELEASE_PAGE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 
