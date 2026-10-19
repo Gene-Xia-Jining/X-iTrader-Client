@@ -52,11 +52,19 @@
 
   <ItemGroup>
     <!--
-      Windows App SDK 2.5.1：主版本 2 决定运行时包家族名
-      Microsoft.WindowsAppRuntime.2，bootstrapper 的 majorMinorVersion 精确匹配
-      2.5。安装运行环境.cmd 里的 WASDK_MIN / WASDK_PKG 须与此保持一致。
+      Windows App SDK 2.5.1，按组件引用而非元包 Microsoft.WindowsAppSDK。
+      元包会把 AI / ML / Search / Widgets / DWrite 一并拖进产物（实测多出
+      19MB，其中 DirectML.dll 单个 17.8MB），本壳只用 WinUI 3，用不到这些。
+
+      运行时绑定仍由 Foundation 提供：bootstrapper 的 majorMinorVersion 取自
+      Runtime 的 WindowsAppSDK-VersionInfo.cs（Release.MajorMinor = 2.5，
+      Runtime.Version = 2.5.1.0）。三个版本号必须同属 2.5.1，否则壳会去找
+      一个与安装脚本装的运行时对不上的版本。
     -->
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.9" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Foundation" Version="2.3.12" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="2.1.9" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="2.5.1" />
     <!--
       不可低于 10.0.26100.4654：WindowsAppSDK.Base 2.0.4 传递依赖这个下限，
       写更低的版本会触发 NuGet 降级错误（NU1605）导致还原失败。
