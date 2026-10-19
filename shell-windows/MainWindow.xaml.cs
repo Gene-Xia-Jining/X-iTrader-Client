@@ -110,6 +110,7 @@ public sealed partial class MainWindow : Window
             "log" => typeof(TradingLogPage),
             "sim" => typeof(SimulationPage),
             "live" => typeof(LiveAccountPage),
+            "records" => typeof(TradeRecordPage),
             "settings" => typeof(SettingsPage),
             _ => typeof(DashboardPage),
         };

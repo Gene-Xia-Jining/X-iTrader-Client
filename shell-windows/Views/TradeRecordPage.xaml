@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="XTrader.Shell.Views.TradeRecordPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ScrollViewer x:Name="Root">
+        <StackPanel Padding="24" Spacing="16">
+            <StackPanel Spacing="4">
+                <TextBlock x:Name="PageTitle" Text="交易记录" FontSize="22" FontWeight="SemiBold" />
+                <TextBlock x:Name="Subtitle" Text="查看模拟与实盘账户的资金、持仓、当日委托与成交。" />
+            </StackPanel>
+
+            <!-- 模拟 / 实盘 tab，选中态记在 ShellPrefs -->
+            <StackPanel Orientation="Horizontal" Spacing="10">
+                <Button x:Name="SimTab" Content="模拟交易" Click="OnSimTabClick" CornerRadius="17" MinHeight="34" Padding="20,0" />
+                <Button x:Name="LiveTab" Content="实盘交易" Click="OnLiveTabClick" CornerRadius="17" MinHeight="34" Padding="20,0" />
+            </StackPanel>
+
+            <Grid>
+                <TextBlock x:Name="Hint" VerticalAlignment="Center" />
+                <Button x:Name="RefreshButton" Content="刷新" Click="OnRefreshClick" HorizontalAlignment="Right" />
+            </Grid>
+
+            <Border x:Name="ErrorCard" BorderThickness="1" CornerRadius="18" Padding="20" Visibility="Collapsed">
+                <TextBlock x:Name="ErrorText" TextWrapping="Wrap" />
+            </Border>
+
+            <StackPanel x:Name="AccountPanel" Spacing="16" />
+        </StackPanel>
+    </ScrollViewer>
+</Page>

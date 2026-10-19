@@ -123,7 +123,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - 路由（与 Qt 版侧边栏顺序一致）
 
 enum AppRoute: String, CaseIterable, Identifiable {
-    case dashboard, token, log, sim, live, settings
+    case dashboard, token, log, sim, live, records, settings
 
     var id: String { rawValue }
 
@@ -134,6 +134,7 @@ enum AppRoute: String, CaseIterable, Identifiable {
         case .log: return "交易日志"
         case .sim: return "模拟交易"
         case .live: return "实盘交易"
+        case .records: return "交易记录"
         case .settings: return "设置"
         }
     }
@@ -258,6 +259,7 @@ struct RootView: View {
         case .log: TradingLogView()
         case .sim: SimulationView()
         case .live: AccountView()
+        case .records: TradeRecordView()
         case .settings: SettingsView()
         }
     }

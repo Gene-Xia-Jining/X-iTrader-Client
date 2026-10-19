@@ -39,6 +39,7 @@ from ..infrastructure.api.client import (
 )
 from ..infrastructure.proxy import apply_proxy_environment, server_host
 from ..infrastructure.trading.tqsdk_executor import test_account_session, test_tq_auth_connection
+from ..infrastructure.trading.tqsdk_records import fetch_account_records
 from ..infrastructure.updater import (
     ReleaseInfo,
     apply_update_and_restart,
@@ -438,6 +439,63 @@ class BackendService:
         self.bootstrap.delete_account(account_id)
         await self._on_accounts_changed()
         return {}
+
+    async def trading_records(self, params: dict) -> dict:
+        """查询账户当日交易数据：资金、持仓、委托、成交。
+
+        kind 用于「交易记录」页的模拟/实盘 tab；指定 account_id 时以它为准。
+        同时可能有多个实盘账户，故返回 accounts 数组而不是单个账户。
+        每个账户读各自的快期模拟/实盘账户（TqKq / TqAccount），与引擎的账户选择一致。
+        """
+        kind = params.get("kind")
+        account_id = (params.get("account_id") or "").strip()
+        if kind is not None and kind not in ("sim", "live"):
+            raise ValueError("kind 必须是 sim 或 live")
+
+        accounts = list(self.bootstrap.accounts)
+        if account_id:
+            accounts = [a for a in accounts if a.id == account_id]
+            if not accounts:
+                raise ValueError(f"未知账户: {account_id}")
+        elif kind:
+            accounts = [a for a in accounts if a.kind == kind]
+
+        if not accounts:
+            hint = "模拟" if kind == "sim" else "实盘" if kind == "live" else ""
+            raise ValueError(f"尚未配置{hint}账户")
+
+        # TqApi 构造与取数是阻塞网络调用，放线程池避免卡住 asyncio 事件循环；
+        # 单账户失败不阻断其余账户，按账户分别回传错误
+        results = await asyncio.gather(
+            *(
+                asyncio.to_thread(
+                    fetch_account_records,
+                    acc,
+                    (acc.tq_account, acc.tq_password),
+                )
+                for acc in accounts
+            ),
+            return_exceptions=True,
+        )
+
+        records: list[dict] = []
+        for acc, result in zip(accounts, results):
+            if isinstance(result, BaseException):
+                records.append(
+                    {
+                        "account_id": acc.id,
+                        "kind": acc.kind,
+                        "label": acc.label or acc.id,
+                        "error": str(result),
+                        "account": {},
+                        "positions": [],
+                        "orders": [],
+                        "trades": [],
+                    }
+                )
+            else:
+                records.append(result)
+        return {"accounts": records}
 
     async def _on_accounts_changed(self) -> None:
         """配置或账户变更后的状态同步。引擎运行中不重建（下次启动生效）。"""
@@ -892,6 +950,7 @@ def build_routes(service: BackendService) -> dict:
         "engine.stop": service.engine_stop,
         "engine.set_auto_trade": set_auto_trade,
         "engine.status": engine_status,
+        "trading.records": service.trading_records,
         "update.check": service.update_check,
         "update.download": service.update_download,
         "update.cancel": update_cancel,

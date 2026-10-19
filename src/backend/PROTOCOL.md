@@ -78,11 +78,84 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 | `engine.stop` | - | engines 状态。等价 UI 的"自动交易"关 |
 | `engine.set_auto_trade` | `{value}` | `{}` 只改自动执行标志，不动引擎 |
 | `engine.status` | - | `{auto_trade, trading_active, server_online, accounts: [{account_id, running, server_connected}]}`；`server_online` 为后端心跳探测的 iTrader 服务器连通性（启动即测、每 10s 周期、保存配置后立即重测），与引擎是否运行无关 |
+| `trading.records` | `{kind?: "sim"\|"live", account_id?}` | `{accounts: [{account_id, kind, label, error?, account, positions, orders, trades}]}` 账户当日交易数据快照（字段见下）。不传 kind / account_id 时返回全部已配置账户；多账户并发取数，单账户失败只体现在该项 `error` |
 | `update.check` | `{silent?}` | `{status: "latest"\|"available"\|"none"\|"error"\|"skipped", message, version?, has_patch?}`；silent 尊重"跳过此版本" |
 | `update.download` | - | `{status: "downloading"}` 进度走 `update_progress` 事件 |
 | `update.cancel` | - | `{}` |
 | `update.apply` | - | `{}` 停引擎→替换安装物→重启后端→`backend_stopping`；开发态报错 |
 | `app.quit` | - | `{}` 停引擎→`backend_stopping`→后端退出 |
+
+## `trading.records` 返回字段
+
+每个账户一项，`account` / `positions` / `orders` / `trades` 均为**当日**快照（TqSdk 只提供当前交易日数据，历史成交需 TqSdk 专业版，这里不提供）。
+
+```jsonc
+{
+  "account_id": "legacy-live",
+  "kind": "live",
+  "label": "实盘账户",
+  "error": "…",                       // 仅取数失败时出现；此时其余字段为空
+  "account": {
+    "balance": 100000.0,              // 账户权益（动态权益）
+    "available": 90000.0,             // 可用资金
+    "margin": 10000.0,                // 保证金占用
+    "float_profit": 120.0,            // 浮动盈亏
+    "position_profit": 100.0,         // 持仓盈亏（相对昨结算）
+    "close_profit": -20.0,            // 本交易日平仓盈亏
+    "commission": 5.0,                // 本交易日手续费
+    "risk_ratio": 0.1,                // 风险度
+    "pre_balance": 99900.0,           // 昨日权益
+    "static_balance": 100000.0        // 静态权益
+  },
+  "positions": [
+    {
+      "symbol": "SHFE.rb2405",
+      "direction": "多",              // 多 / 空，一个合约的多空各成一行
+      "volume": 2,
+      "open_price": 3800.0,           // 开仓均价
+      "position_price": 3790.0,       // 持仓均价
+      "float_profit": 120.0,
+      "margin": 7600.0
+    }
+  ],
+  "orders": [
+    {
+      "order_id": "…",
+      "symbol": "SHFE.rb2405",
+      "direction": "BUY",
+      "direction_text": "买",
+      "offset": "OPEN",
+      "offset_text": "开仓",          // 开仓 / 平仓 / 平今 / 平昨
+      "volume_orign": 1,              // 总报单手数
+      "volume_left": 0,               // 未成交手数
+      "limit_price": 3800.0,          // 限价单价格，市价单为 null
+      "trade_price": 3800.0,          // 平均成交价
+      "status": "FINISHED",
+      "status_text": "已完",          // 已报 / 已完
+      "last_msg": "全部成交",
+      "insert_time": "2024-01-01 09:00:00"   // 北京时间，已格式化
+    }
+  ],
+  "trades": [
+    {
+      "trade_id": "…",
+      "order_id": "…",
+      "symbol": "SHFE.rb2405",
+      "direction": "BUY",
+      "direction_text": "买",
+      "offset": "OPEN",
+      "offset_text": "开仓",
+      "price": 3800.0,
+      "volume": 1,
+      "trade_time": "2024-01-01 09:00:01"
+    }
+  ]
+}
+```
+
+- 数值字段在 TqSdk 中可能是 `nan`（数据未就绪），后端统一转 `null`，客户端须按可空处理。
+- 时间字段由后端按北京时间（固定 +08:00）格式化成字符串，客户端不再做时区换算。
+- 取数走临时只读会话（建 TqApi → 读 → 关），与 `engine` 会话隔离：自动交易未开启也能查，查询失败不影响正在运行的调仓。
 
 ## 约定
 

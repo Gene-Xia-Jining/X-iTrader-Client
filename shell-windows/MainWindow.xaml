@@ -43,6 +43,7 @@
                 <muxc:NavigationViewItem Content="交易日志" Tag="log" />
                 <muxc:NavigationViewItem Content="模拟交易" Tag="sim" />
                 <muxc:NavigationViewItem Content="实盘交易" Tag="live" />
+                <muxc:NavigationViewItem Content="交易记录" Tag="records" />
                 <muxc:NavigationViewItem Content="设置" Tag="settings" />
             </muxc:NavigationView.MenuItems>
             <Frame x:Name="ContentFrame" />

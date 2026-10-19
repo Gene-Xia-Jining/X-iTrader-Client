@@ -1093,4 +1093,12 @@ internal static class JsonHelpers
 
     internal static IEnumerable<JsonObject> ObjectList(JsonNode? node) =>
         node is JsonArray array ? array.OfType<JsonObject>() : [];
+
+    /// <summary>可空数值：JSON null（后端把 TqSdk 的 nan 转成了 null）返回 null。</summary>
+    internal static double? Double(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue<double>(out var number) ? number : null;
+
+    /// <summary>可空整数：JSON 数字可能是 long 或 double，统一按数值解析。</summary>
+    internal static int? Int(JsonNode? node) =>
+        Double(node) is { } number ? (int)number : null;
 }
