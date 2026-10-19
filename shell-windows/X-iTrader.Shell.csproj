@@ -3,14 +3,13 @@
   <!--
     iTrader Windows 壳（WinUI 3 / .NET 8）。
 
-    部署形态：unpackaged（WindowsPackageType=None）+ 框架依赖
-    （WindowsAppSDKSelfContained=false、SelfContained=false）。
-    因此目标机必须已安装 .NET 8 Desktop Runtime 与 Windows App Runtime，
-    缺失时由随包脚本 安装运行环境.cmd 引导安装（根目录 README.txt 为用户说明）。
+    部署形态：unpackaged（WindowsPackageType=None）+ 自包含
+    （SelfContained=true、WindowsAppSDKSelfContained=true）。
+    产物自带 .NET 运行时与 Windows App SDK 原生库，目标机无需安装任何
+    运行环境，解压即可运行；不再需要 安装运行环境.cmd 与 bootstrapper。
 
     Publish 命令（CI 使用；本地 macOS 无法构建本工程）：
       dotnet publish -c Release -r win-x64 -p:Platform=x64
-      外加命令行参数 self-contained false（XML 注释里不能出现连续两个减号）
 
     产物根级文件名必须是 X-iTrader.exe：src/infrastructure/updater.py 的
     Windows 分支把「后端 exe 的父目录」作为安装根，并期望根级有 X-iTrader.exe
@@ -26,24 +25,37 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x64</Platforms>
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <!--
+      SelfContained=true 要求必须指定 RID，否则 dotnet build 会报 NETSDK1031。
+      显式设置后本地 dotnet build 也能直接产出可运行目录，不必再传 runtime 参数。
+    -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <UseWinUI>true</UseWinUI>
     <EnableMsixTooling>true</EnableMsixTooling>
 
     <!-- unpackaged：不生成 MSIX 包，无需包标识 -->
     <WindowsPackageType>None</WindowsPackageType>
 
-    <!-- 框架依赖：不把 .NET / Windows App Runtime 打进产物 -->
-    <SelfContained>false</SelfContained>
-    <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
+    <!--
+      自包含：两个开关必须同时为 true 才是完全自包含——WindowsAppSDKSelfContained
+      只负责 Windows App SDK 原生库，.NET 运行时仍由 SelfContained 决定。
+      WindowsAppSDKSelfContained=true 时 SDK 会自动关闭 bootstrapper 并启用
+      UndockedRegFreeWinRT（unpackaged 自包含所需的免注册激活），无需额外配置。
+    -->
+    <SelfContained>true</SelfContained>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
 
     <!--
-      运行环境缺失时的提示：保留 SDK 的 bootstrapper 自动初始化（默认开启），
-      并打开 OnNoMatch_ShowUI —— 找不到匹配的 Windows App Runtime 时，
-      SDK 会自行弹出系统的获取提示，而不是静默 fail-fast（表现为"双击没反应"）。
-      这是官方支持的失败提示路径，比自己调 Bootstrapper API 更稳，也不必依赖
-      引导 DLL 的复制时机。真正的自动安装在随包脚本里完成。
+      体积控制（自包含的硬成本是 .NET 运行时约 70MB + WASDK 原生库约 52MB，
+      配置层面只能压附属资源，压不动运行时本体）：
+      - SatelliteResourceLanguages：只保留中英文附属程序集，裁掉其余语言
+      - 不开 PublishReadyToRun：R2R 会显著增大体积，壳的启动开销不值得换
+      - 不开 PublishSingleFile：WinUI 单文件只是首启解压到 temp，体积不变且更慢
+      - 不开 PublishTrimmed：WinUI 3 官方不支持裁剪（WindowsAppSDK#2478）
+      WinUI 原生库自带的 86 种语言 .mui 资源约 3.4MB，由 CI 在 publish 后
+      按产物目录直接裁剪，见 .github/workflows/build.yml 的 Trim step。
     -->
-    <WindowsAppSDKBootstrapAutoInitializeOptions_OnNoMatch_ShowUI>true</WindowsAppSDKBootstrapAutoInitializeOptions_OnNoMatch_ShowUI>
+    <SatelliteResourceLanguages>zh-Hans;zh-Hant;en</SatelliteResourceLanguages>
 
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -56,15 +68,17 @@
       元包会把 AI / ML / Search / Widgets / DWrite 一并拖进产物（实测多出
       19MB，其中 DirectML.dll 单个 17.8MB），本壳只用 WinUI 3，用不到这些。
 
-      运行时绑定仍由 Foundation 提供：bootstrapper 的 majorMinorVersion 取自
-      Runtime 的 WindowsAppSDK-VersionInfo.cs（Release.MajorMinor = 2.5，
-      Runtime.Version = 2.5.1.0）。三个版本号必须同属 2.5.1，否则壳会去找
-      一个与安装脚本装的运行时对不上的版本。
+      不引用 Microsoft.WindowsAppSDK.Runtime：该包只用于框架依赖部署（提供
+      Framework 包的 MSIX 安装件），自包含时由 Base 包直接从各组件包拷贝原生库。
+      微软维护者在 WindowsAppSDK#5969 中明确说明「Runtime 只在需要框架包部署时
+      才引用，自包含应移除」，移除后还能避免把 onnxruntime / DirectML 带进产物。
+
+      WinUI / Foundation / InteractiveExperiences 三个组件版本须与该 SDK 版本线
+      配套（2.3.9 / 2.3.12 / 2.1.9），升级时一并调整。
     -->
     <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.9" />
     <PackageReference Include="Microsoft.WindowsAppSDK.Foundation" Version="2.3.12" />
     <PackageReference Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="2.1.9" />
-    <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="2.5.1" />
     <!--
       不可低于 10.0.26100.4654：WindowsAppSDK.Base 2.0.4 传递依赖这个下限，
       写更低的版本会触发 NuGet 降级错误（NU1605）导致还原失败。

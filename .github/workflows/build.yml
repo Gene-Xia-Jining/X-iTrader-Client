@@ -134,14 +134,36 @@ jobs:
       - name: Publish shell (Windows)
         if: runner.os == 'Windows'
         run: |
-          # 框架依赖发布（不内置 .NET / Windows App Runtime，由随包脚本引导安装）
+          # 自包含发布：.NET 运行时与 Windows App SDK 原生库都进产物，
+          # 目标机无需安装任何运行环境（自包含由 csproj 的 SelfContained=true
+          # 决定，命令行不再覆盖）
           dotnet publish shell-windows/X-iTrader.Shell.csproj `
-            -c Release -r win-x64 -p:Platform=x64 --self-contained false `
+            -c Release -r win-x64 -p:Platform=x64 `
             -o dist/shell
           if (-not (Test-Path "dist/shell/X-iTrader.exe")) {
             Write-Error "未找到壳产物 dist/shell/X-iTrader.exe"
             exit 1
           }
+        shell: pwsh
+
+      - name: Trim shell language resources (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # 裁掉 WinUI 原生库的 86 种语言 .mui（保留 zh-CN / zh-TW / en-us），
+          # 约省 3MB。放在发布之后按产物目录裁剪，比在 MSBuild 里做路径匹配可靠：
+          # 自包含的拷贝源路径含 build\..\，字符串判定容易静默失效。
+          $keep = @('zh-CN','zh-TW','en-us')
+          $removed = 0
+          Get-ChildItem "dist/shell" -Recurse -Filter *.mui | ForEach-Object {
+            if ($keep -notcontains $_.Directory.Name) {
+              Remove-Item $_.FullName -Force
+              $removed++
+            }
+          }
+          Write-Host "已裁剪 $removed 个语言资源文件"
+
+          $shellMb = [math]::Round(((Get-ChildItem "dist/shell" -Recurse -File | Measure-Object Length -Sum).Sum / 1MB), 1)
+          Write-Host "壳产物体积: $shellMb MB"
         shell: pwsh
 
       - name: Assemble package (Windows)
@@ -157,7 +179,7 @@ jobs:
           Copy-Item "dist/shell/*" $stage -Recurse -Force
           Copy-Item "dist/X-iTrader-Backend/X-iTrader-Backend.exe" $stage -Force
           Copy-Item "dist/X-iTrader-Backend/_internal" $stage -Recurse -Force
-          Copy-Item "shell-windows/scripts/安装运行环境.cmd" $stage -Force
+          # 壳已自包含，不再分发运行环境安装脚本
           Copy-Item "shell-windows/scripts/README.txt" $stage -Force
 
           Compress-Archive -Path "$stage/*" -DestinationPath "dist/x-itrader-client-$ver-windows.zip" -Force
