@@ -12,14 +12,14 @@ rem  通常就是缺少运行环境——运行本脚本即可自动补齐。
 rem
 rem  检测项：
 rem    1) .NET 8 Desktop Runtime (x64)   —— 壳进程本身的托管运行时
-rem    2) Windows App Runtime 1.6 (x64)  —— WinUI 3 依赖
+rem    2) Windows App Runtime 2.5 (x64)  —— WinUI 3 依赖
 rem  缺失项从微软官方 aka.ms 短链下载并静默安装，完成后启动 X-iTrader.exe。
 rem ============================================================
 
 set "SCRIPT_DIR=%~dp0"
 set "SHELL_EXE=%SCRIPT_DIR%X-iTrader.exe"
 set "DOTNET_URL=https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.exe"
-set "WASDK_URL=https://aka.ms/windowsappsdk/1.6/latest/windowsappruntimeinstall-x64.exe"
+set "WASDK_URL=https://aka.ms/windowsappsdk/2.5/2.5.1/windowsappruntimeinstall-x64.exe"
 set "DOTNET_MANUAL=https://dotnet.microsoft.com/download/dotnet/8.0"
 
 echo.
@@ -64,13 +64,18 @@ if "!HAS_DOTNET!"=="1" (
 )
 
 rem ---------- 2. 检测 Windows App Runtime ----------
-echo [2/2] 检查 Windows App Runtime 1.6 ...
-set "HAS_WASDK=0"
-rem 通过 PowerShell 查询已注册的运行时包系列名
-for /f "tokens=*" %%P in ('powershell -NoProfile -Command "(Get-AppxPackage -Name Microsoft.WindowsAppRuntime.1.6 -ErrorAction SilentlyContinue | Measure-Object).Count" 2^>nul') do (
-    set "PKGCOUNT=%%P"
-)
-if defined PKGCOUNT if not "!PKGCOUNT!"=="0" set "HAS_WASDK=1"
+rem 壳编译时绑定 Windows App SDK 2.5.1，bootstrapper 对两个条件都严格匹配：
+rem   a) 主次版本必须是 2.5 —— majorMinorVersion 是精确匹配而非最小值，
+rem      1.x 版本线（含 1.6）以及 2.4、2.3 等其它小版本都无法替代；
+rem   b) MSIX 包版本必须 >= WASDK_MIN —— 同一版本线内取最新的已装补丁。
+rem 2.x 的运行时版本号是 2.5.1.0 这种形式（1.x 是 6000.x），包家族名按
+rem 主版本命名：Microsoft.WindowsAppRuntime.2。
+rem WASDK_MIN / WASDK_PKG 与 X-iTrader.Shell.csproj 的 Microsoft.WindowsAppSDK
+rem 版本对应，升级该 NuGet 包时须同步修改。
+set "WASDK_PKG=Microsoft.WindowsAppRuntime.2"
+set "WASDK_MIN=2.5.1.0"
+echo [2/2] 检查 Windows App Runtime 2.5（>= !WASDK_MIN!）...
+call :check_wasdk
 if "!HAS_WASDK!"=="1" (
     echo       已安装。
 ) else (
@@ -88,9 +93,15 @@ if "!NEED_DOTNET!"=="1" (
 
 if "!NEED_WASDK!"=="1" (
     echo.
-    echo ==> 安装 Windows App Runtime 1.6 ...
+    echo ==> 安装 Windows App Runtime 2.5 ...
     call :download_and_install "%WASDK_URL%" "WindowsAppRuntimeInstall-x64.exe" "--quiet --force" "Windows App Runtime" "!WASDK_URL!"
     if !ERRORLEVEL! neq 0 goto :fail
+    rem 安装器返回 0 只代表部署命令成功，再确认包确实注册到了当前用户
+    call :check_wasdk
+    if "!HAS_WASDK!"=="0" (
+        echo       [警告] 安装程序返回成功，但未检测到满足版本要求的 2.5 运行时。
+        echo              请重启后重跑本脚本；仍不行请手动安装: !WASDK_URL!
+    )
 )
 
 echo.
@@ -99,6 +110,14 @@ echo   运行环境就绪，正在启动 iTrader ...
 echo ============================================
 start "" "%SHELL_EXE%"
 endlocal
+exit /b 0
+
+rem ---------- 子过程：检测满足最低版本的 2.5 运行时 ----------
+rem 结果写入 HAS_WASDK（1=满足，0=缺失或版本过低）
+:check_wasdk
+set "HAS_WASDK=0"
+powershell -NoProfile -Command "$min=[version]'%WASDK_MIN%'; foreach($p in @(Get-AppxPackage -Name '%WASDK_PKG%' -ErrorAction SilentlyContinue)){ if([version]$p.Version -ge $min){ exit 0 } }; exit 1" >nul 2>&1
+if !ERRORLEVEL!==0 set "HAS_WASDK=1"
 exit /b 0
 
 rem ---------- 子过程：下载并静默安装 ----------
@@ -143,7 +162,7 @@ echo.
 echo 运行环境安装未完成，iTrader 可能无法启动。
 echo 请手动安装以下两项后重新运行本脚本：
 echo   1. .NET 8 Desktop Runtime (x64): %DOTNET_MANUAL%
-echo   2. Windows App Runtime 1.6 (x64): %WASDK_URL%
+echo   2. Windows App Runtime 2.5 (x64): %WASDK_URL%
 echo.
 pause
 endlocal

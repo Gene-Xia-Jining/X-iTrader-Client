@@ -57,6 +57,7 @@
 
 > * 源码在 `shell-windows/`（C# / .NET 8 的 WinUI 3 工程 `X-iTrader.Shell.csproj`），与 mac 的 SwiftUI 壳平级，同样只做「后端进程管理 + RPC 通信 + 界面」，不含交易逻辑。
 > * 发布形态为 **unpackaged + 框架依赖**：产物不内置 .NET 8 Desktop Runtime 与 Windows App Runtime，首次使用需由随包的 `安装运行环境.cmd`（或壳内 `RuntimeBootstrap`）引导安装；根目录 `README.txt` 是面向用户的说明。
+> * Windows App Runtime 按**主次版本线隔离**：壳绑定 `Microsoft.WindowsAppSDK 2.5.1`（运行时包家族名 `Microsoft.WindowsAppRuntime.2`，MSIX 版本形如 `2.5.1.0`），bootstrapper 的 `majorMinorVersion` 是**精确匹配**，1.x / 2.4 等其它版本线都无法替代。`安装运行环境.cmd` 的 `WASDK_PKG` / `WASDK_MIN` 与 csproj 中的 NuGet 版本对应，升级 SDK 时须同步修改这三处。
 > * 分发包为**扁平布局**：根级 `X-iTrader.exe`（壳）+ `X-iTrader-Backend.exe`（后端）+ `_internal\`（后端依赖，含 `src\`）。该命名与布局是硬约束——`updater.py` 的 Windows 分支把「后端 exe 的父目录」当安装根，并要求根级有 `X-iTrader.exe` 作为全量更新后的重启目标。
 > * 后端产物名由 `specs/backend.spec` 按平台决定：Windows 为 `X-iTrader-Backend`，macOS 保持 `backend`（不改动 mac 现有打包链）。
 > * 本地 macOS 无法构建 `net8.0-windows`，Windows 壳的编译与运行只能靠 CI（`windows-latest`）验证。

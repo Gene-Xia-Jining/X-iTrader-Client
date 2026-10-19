@@ -19,8 +19,10 @@
 
   1. .NET 8 Desktop Runtime (x64)
      https://dotnet.microsoft.com/download/dotnet/8.0
-  2. Windows App Runtime 1.6 (x64)
-     https://aka.ms/windowsappsdk/1.6/latest/windowsappruntimeinstall-x64.exe
+  2. Windows App Runtime 2.5 (x64)，版本需 >= 2.5.1.0
+     https://aka.ms/windowsappsdk/2.5/2.5.1/windowsappruntimeinstall-x64.exe
+     注意：必须匹配 2.5 这条版本线。bootstrapper 的主次版本是精确匹配，
+           1.6 / 1.8 / 2.4 等其它版本都不能替代，缺哪个仍提示缺哪个。
 
 系统要求：Windows 10 1809 (build 17763) 或更高，64 位。
 
@@ -52,6 +54,10 @@
 ----------------------------------------
 Q: 双击 exe 没反应？
 A: 缺少运行环境。双击【安装运行环境.cmd】。
+
+Q: 弹窗提示 "requires the Windows App Runtime Version 2.5"？
+A: 本机装的运行时版本线不对（例如只装了 1.6 或 2.4）。主次版本是精确匹配，
+   其它版本线都替代不了 2.5。请双击【安装运行环境.cmd】装上 2.5 版本线。
 
 Q: 提示"Windows 已保护你的电脑"（SmartScreen）？
 A: 点"更多信息"→"仍要运行"。本程序未做代码签名。

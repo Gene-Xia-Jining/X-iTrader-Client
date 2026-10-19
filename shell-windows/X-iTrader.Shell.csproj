@@ -51,9 +51,17 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Windows App SDK 主次版本（1.6）需与随包脚本安装的运行时一致 -->
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.250205002" />
-    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.1742" />
+    <!--
+      Windows App SDK 2.5.1：主版本 2 决定运行时包家族名
+      Microsoft.WindowsAppRuntime.2，bootstrapper 的 majorMinorVersion 精确匹配
+      2.5。安装运行环境.cmd 里的 WASDK_MIN / WASDK_PKG 须与此保持一致。
+    -->
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
+    <!--
+      不可低于 10.0.26100.4654：WindowsAppSDK.Base 2.0.4 传递依赖这个下限，
+      写更低的版本会触发 NuGet 降级错误（NU1605）导致还原失败。
+    -->
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
   </ItemGroup>
 
 </Project>
