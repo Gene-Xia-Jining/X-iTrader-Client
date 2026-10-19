@@ -120,12 +120,11 @@ public sealed partial class SettingsPage : Page
         var url = ServerBox.Text.Trim();
         if (url.Length == 0)
         {
-            ShowTestResult("请先输入服务器地址", success: false);
+            await ShowInfoAsync("输入错误", "服务器地址不能为空");
             return;
         }
-        ShowTestResult("正在测试连接...", success: null);
         var message = await State.TestServerAsync(url);
-        ShowTestResult(message, message.Contains("成功"));
+        await ShowInfoAsync("测试连接", message);
     }
 
     private void OnSaveClick(object sender, RoutedEventArgs e)
@@ -133,7 +132,7 @@ public sealed partial class SettingsPage : Page
         var url = ServerBox.Text.Trim();
         if (url.Length == 0)
         {
-            _ = ShowInfoAsync("服务器地址不能为空");
+            _ = ShowInfoAsync("输入错误", "服务器地址不能为空");
             return;
         }
 
@@ -217,25 +216,13 @@ public sealed partial class SettingsPage : Page
         UpdateStatus.Visibility = Visibility.Visible;
     }
 
-    private void ShowTestResult(string message, bool? success)
-    {
-        ServerTestResult.Text = message;
-        ServerTestResult.Foreground = Brush(success switch
-        {
-            true => Hex(0x34C759),
-            false => Hex(0xE3342F),
-            null => Hex(0xE8A33D),
-        });
-        ServerTestResult.Visibility = Visibility.Visible;
-    }
-
-    private async Task ShowInfoAsync(string message)
+    private async Task ShowInfoAsync(string title, string message)
     {
         var dialog = new ContentDialog
         {
             XamlRoot = Root.XamlRoot,
-            Title = "提示",
-            Content = message,
+            Title = title,
+            Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true },
             CloseButtonText = "好",
         };
         await dialog.ShowAsync();

@@ -55,7 +55,6 @@ public sealed partial class SimulationPage : Page
     private bool _serverTesting;
     /// <summary>上一次从配置回填的服务器地址：输入框未被编辑时才跟随配置刷新</summary>
     private string _lastConfigServerUrl = "";
-    private bool? _serverTestSuccess;
     private bool _filling;
 
     /// <summary>品种/策略胶囊的重建签名：数据或选中态变化才重建，避免频繁刷界面</summary>
@@ -165,7 +164,6 @@ public sealed partial class SimulationPage : Page
         BuildLinks();
         UpdateEyeButton();
         UpdatePasswordMask();
-        UpdateServerTestResult();
 
         // 配色变化后胶囊需要重绘
         _symbolKey = "";
@@ -317,19 +315,6 @@ public sealed partial class SimulationPage : Page
         _lastConfigServerUrl = current;
     }
 
-    private void UpdateServerTestResult()
-    {
-        ServerTestResult.Visibility =
-            ServerTestResult.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-        // 与设置页 testServer 同款状态色（固定值，不随主题）
-        ServerTestResult.Foreground = Brush(_serverTestSuccess switch
-        {
-            true => Hex(0x34C759),
-            false => Hex(0xE3342F),
-            null => Hex(0xE8A33D),
-        });
-    }
-
     /// <summary>
     /// 输入完成即保存（回车或失焦）：与当前生效地址相同则不提交，空值视为放弃修改。
     /// </summary>
@@ -363,23 +348,15 @@ public sealed partial class SimulationPage : Page
         var url = ServerBox.Text.Trim();
         if (url.Length == 0)
         {
-            SetServerTestResult("请先输入服务器地址", success: false);
+            await ShowInfoAsync("输入错误", "服务器地址不能为空");
             return;
         }
         _serverTesting = true;
         RefreshTransientState();
-        SetServerTestResult("正在测试连接...", success: null);
         var message = await State.TestServerAsync(url);
         _serverTesting = false;
         RefreshTransientState();
-        SetServerTestResult(message, message.Contains("成功"));
-    }
-
-    private void SetServerTestResult(string message, bool? success)
-    {
-        _serverTestSuccess = success;
-        ServerTestResult.Text = message;
-        UpdateServerTestResult();
+        await ShowInfoAsync("测试连接", message);
     }
 
     private async void OnServerHelpClick(object sender, RoutedEventArgs e)

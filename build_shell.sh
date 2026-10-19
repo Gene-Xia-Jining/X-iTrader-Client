@@ -37,6 +37,9 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>CFBundleName</key><string>X-iTrader-Client</string>
     <key>CFBundleDisplayName</key><string>X-iTrader-Client</string>
     <key>CFBundleIdentifier</key><string>com.itrader.shell</string>
+    <!-- SwiftUI 默认菜单栏（文件/编辑/显示/窗口/帮助）由系统按本地化生成，
+         声明开发区域为中文后即使系统首选语言是英文也显示中文 -->
+    <key>CFBundleDevelopmentRegion</key><string>zh-Hans</string>
     <key>CFBundleExecutable</key><string>X-iTrader-Client</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>

@@ -26,8 +26,6 @@ struct SimulationView: View {
     /// 上一次从后端回填的地址：只有输入框未被编辑时才跟随配置刷新，避免冲掉正在输入的内容
     @State private var lastConfigServerUrl = ""
     @State private var serverTesting = false
-    @State private var serverTestMessage = ""
-    @State private var serverTestSuccess: Bool?  // nil = 进行中
     @State private var showServerHelp = false
     @State private var serverHelpHover = false
     // 品种单选（服务器品种；已订阅但不在服务器列表的品种保留显示）
@@ -276,30 +274,22 @@ struct SimulationView: View {
         .pointerCursor()
     }
 
-    // MARK: - 服务器地址行（同设置页：输入框 + 测试连接 + 结果行；输入完成即保存）
+    // MARK: - 服务器地址行（输入框 + 测试连接；结果与手机号一致走弹窗；输入完成即保存）
 
     private var serverRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                AppTextField(
-                    placeholder: "https://itrader.redboil.us.ci",
-                    text: $serverUrl,
-                    onCommit: saveServerIfChanged
-                )
-                AppButton(
-                    serverTesting ? "测试中..." : "测试连接",
-                    variant: .secondary,
-                    size: .inline,
-                    disabled: serverTesting
-                ) {
-                    testServer()
-                }
-            }
-            if !serverTestMessage.isEmpty {
-                Text(serverTestMessage)
-                    .font(AppTheme.bodyFont)
-                    .foregroundColor(serverTestColor)
-                    .fixedSize(horizontal: false, vertical: true)
+        HStack(spacing: 8) {
+            AppTextField(
+                placeholder: "https://itrader.redboil.us.ci",
+                text: $serverUrl,
+                onCommit: saveServerIfChanged
+            )
+            AppButton(
+                serverTesting ? "测试中..." : "测试连接",
+                variant: .secondary,
+                size: .inline,
+                disabled: serverTesting
+            ) {
+                testServer()
             }
         }
     }
@@ -307,15 +297,6 @@ struct SimulationView: View {
     /// 步骤 4 问号弹窗文案：说明地址与设置页共用同一份配置
     private var serverHelpText: String {
         "这是 iTrader 智能交易服务器的地址，与「设置」页是同一份配置，输入完成（回车或点到别处）即时保存生效。"
-    }
-
-    /// 与设置页 testServer 同款状态色（固定值，不随主题）
-    private var serverTestColor: Color {
-        switch serverTestSuccess {
-        case .none: return Color(hex: 0xE8A33D)
-        case .some(true): return Color(hex: 0x34C759)
-        case .some(false): return Color(hex: 0xE3342F)
-        }
     }
 
     /// 用配置回填服务器地址；输入框已被编辑（与上次回填值不同）时不覆盖
@@ -345,18 +326,14 @@ struct SimulationView: View {
     private func testServer() {
         let url = serverUrl.trimmingCharacters(in: .whitespaces)
         guard !url.isEmpty else {
-            serverTestMessage = "请先输入服务器地址"
-            serverTestSuccess = false
+            alert = .inputError("服务器地址不能为空")
             return
         }
         serverTesting = true
-        serverTestMessage = "正在测试连接..."
-        serverTestSuccess = nil
         Task {
             let message = await appState.testServer(url: url)
             serverTesting = false
-            serverTestMessage = message
-            serverTestSuccess = message.contains("成功")
+            alert = .testResult(message: message)
         }
     }
 

@@ -18,7 +18,7 @@ struct iTraderApp: App {
                     appDelegate.appState = appState
                 }
         }
-        .defaultSize(width: 1180, height: 760)
+        .defaultSize(width: 1020, height: 760)
         .windowResizability(.contentMinSize)
     }
 }
@@ -146,6 +146,11 @@ struct RootView: View {
     @EnvironmentObject var appState: AppState
     @State private var selection: AppRoute = .dashboard
     @State private var dark = false
+    @State private var showServerHelp = false
+    @State private var serverHelpHovering = false
+    @State private var showAutoTradeHelp = false
+    @State private var autoTradeHelpHovering = false
+    @State private var autoTradeHovering = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -154,7 +159,6 @@ struct RootView: View {
                 sidebar
                 page
             }
-            statusBar
         }
         .background(AppTheme.canvas(scheme))
         .preferredColorScheme(dark ? .dark : .light)
@@ -185,14 +189,9 @@ struct RootView: View {
 
     private var headBar: some View {
         HStack(spacing: 12) {
+            serverStatusPill
             Spacer()
-            AppButton(
-                startButtonTitle,
-                variant: appState.engineStatus.tradingActive ? .success : .secondary
-            ) {
-                appState.toggleTrading(!appState.engineStatus.tradingActive)
-            }
-            .disabled(appState.connState != .connected || appState.startChecking)
+            autoTradePill
             AppButton(dark ? "浅色" : "深色", variant: .secondary) { dark.toggle() }
             // 刷新服务器品种与策略（模拟/实盘页共用），获取中置灰防重复点击
             AppButton(
@@ -254,7 +253,7 @@ struct RootView: View {
     @ViewBuilder
     private var page: some View {
         switch selection {
-        case .dashboard: DashboardView(selection: $selection)
+        case .dashboard: DashboardView()
         case .token: TokenManageView()
         case .log: TradingLogView()
         case .sim: SimulationView(selection: $selection)
@@ -264,44 +263,107 @@ struct RootView: View {
         }
     }
 
-    // ---- 底部状态栏：交易状态 + 服务器/交易指示器（QStatusBar）----
-
-    private var tradingStatusText: String {
-        let running = appState.engineStatus.accounts.filter(\.running).count
-        return running > 0 ? "运行中 (\(running))" : "已停止"
-    }
+    // ---- 底部状态栏已移除：服务器状态以胶囊形式并入顶栏左侧 ----
 
     private var serverConnected: Bool {
         appState.engineStatus.serverOnline
     }
 
-    private var statusBar: some View {
-        HStack(spacing: 0) {
-            Text("交易状态: \(tradingStatusText)")
-                .font(AppTheme.dimFont)
-                .foregroundColor(AppTheme.dim(scheme))
-                .padding(.leading, 10)
-            Spacer()
-            statusIndicator(dot: serverConnected ? AppTheme.statusGreen : AppTheme.statusRed,
-                            text: "服务器: \(serverConnected ? "已连接" : "未连接")")
-            Spacer().frame(width: 24)
-            statusIndicator(dot: appState.engineStatus.tradingActive ? AppTheme.statusGreen : AppTheme.statusRed,
-                            text: "交易: \(tradingStatusText)")
+    /// 服务器状态胶囊：尺寸与「自动交易」按钮一致（高 36、圆角 18）；问号在胶囊左侧
+    private var serverStatusPill: some View {
+        let color = serverConnected ? AppTheme.statusGreen : AppTheme.statusRed
+        return HStack(spacing: 8) {
+            helpButton(
+                text: "这里的服务器指策略信号服务器，地址在「设置」中配置。客户端从它获取交易品种与交易信号，并每 10 秒探测一次连通性。",
+                isPresented: $showServerHelp,
+                isHovering: $serverHelpHovering
+            )
+            Text("服务器状态：\(serverConnected ? "已连接" : "未连接")")
+                .font(AppTheme.bodyFont.weight(.semibold))
+                .foregroundColor(color)
         }
-        .padding(.trailing, 10)
-        .padding(.vertical, 6)
-        .background(AppTheme.chrome(scheme))
-        .overlay(alignment: .top) {
-            Rectangle().fill(AppTheme.divider(scheme)).frame(height: 1)
-        }
+        .padding(.leading, 14)
+        .padding(.trailing, 22)
+        .frame(minHeight: 36)
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(AppTheme.hairline(scheme), lineWidth: 1)
+        )
+        .cornerRadius(18)
     }
 
-    private func statusIndicator(dot: Color, text: String) -> some View {
-        HStack(spacing: 6) {
-            Circle().fill(dot).frame(width: 6, height: 6)
+    /// 自动交易胶囊：外观同 AppButton（开关语义色），问号放在胶囊内部右侧
+    private var autoTradePill: some View {
+        let active = appState.engineStatus.tradingActive
+        let disabled = appState.connState != .connected || appState.startChecking
+        let fg: Color = disabled
+            ? (scheme == .dark ? Color(hex: 0x86868B) : Color(hex: 0xCCCCCC))
+            : (active ? .white : AppTheme.primary(scheme))
+        let bg: Color = disabled
+            ? (active ? AppTheme.hairline(scheme) : .clear)
+            : (active ? (autoTradeHovering ? AppTheme.successHover(scheme) : AppTheme.success(scheme))
+                      : (autoTradeHovering ? AppTheme.canvas(scheme) : .clear))
+        let border: Color = disabled
+            ? (active ? .clear : AppTheme.divider(scheme))
+            : (active ? .clear : (autoTradeHovering ? AppTheme.dim(scheme) : AppTheme.hairline(scheme)))
+
+        return HStack(spacing: 8) {
+            helpButton(
+                text: autoTradeHelpText,
+                isPresented: $showAutoTradeHelp,
+                isHovering: $autoTradeHelpHovering
+            )
+
+            Button { appState.toggleTrading(!active) } label: {
+                Text(startButtonTitle)
+                    .font(AppTheme.bodyFont.weight(.semibold))
+                    .foregroundColor(fg)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(disabled)
+            .onHover { autoTradeHovering = $0 }
+            .pointerCursor()
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 22)
+        .frame(minHeight: 36)
+        .background(bg)
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(border, lineWidth: active || disabled ? 0 : 1)
+        )
+        .cornerRadius(18)
+    }
+
+    private let autoTradeHelpText = "开启后客户端接收服务器推送的交易信号并自动下单，开启前会先校验服务器连通、账户配置、Token 和天勤握手。关闭只会停止接收信号与下单，已持有的仓位不会被自动平仓。"
+
+    /// 20x20 圆形问号按钮，点击弹出说明（样式同设置页 helpButton）
+    private func helpButton(
+        text: String,
+        isPresented: Binding<Bool>,
+        isHovering: Binding<Bool>
+    ) -> some View {
+        Button { isPresented.wrappedValue = true } label: {
+            Text("?")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(AppTheme.primary(scheme))
+                .frame(width: 20, height: 20)
+                .background(isHovering.wrappedValue ? AppTheme.sidebarHover(scheme) : .clear)
+                .cornerRadius(10)
+                .overlay(Circle().stroke(AppTheme.hairline(scheme), lineWidth: 1))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .onHover { isHovering.wrappedValue = $0 }
+        .popover(isPresented: isPresented, arrowEdge: .bottom) {
+            // 不指定前景色，由 popover 自身外观决定（同设置页 helpButton）
             Text(text)
                 .font(AppTheme.dimFont)
-                .foregroundColor(AppTheme.dim(scheme))
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 300, alignment: .leading)
+                .padding(10)
         }
     }
 }

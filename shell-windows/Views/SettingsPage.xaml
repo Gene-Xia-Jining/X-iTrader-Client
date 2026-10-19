@@ -25,7 +25,6 @@
                         <TextBlock x:Name="ServerHint"
                                    Text="这是 iTrader 智能交易服务器的地址，需与服务器部署地址一致"
                                    TextWrapping="Wrap" />
-                        <TextBlock x:Name="ServerTestResult" TextWrapping="Wrap" Visibility="Collapsed" />
                     </StackPanel>
 
                     <Rectangle Height="1" x:Name="Divider1" />

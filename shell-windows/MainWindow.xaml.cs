@@ -37,7 +37,7 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
 
         Title = "iTrader 智能交易系统";
-        SetInitialSize(1180, 760);
+        SetInitialSize(1020, 760);
 
         IsDark = Application.Current.RequestedTheme == ApplicationTheme.Dark;
         ApplyThemeToChrome();
@@ -151,6 +151,39 @@ public sealed partial class MainWindow : Window
         _state.FetchStrategies();
     }
 
+    /// <summary>服务器状态胶囊里的问号：说明这里指的是哪个服务器（对应用户在 mac 壳的 popover）。</summary>
+    private async void OnServerHelpClick(object sender, RoutedEventArgs e)
+    {
+        await ShowHelpAsync("服务器状态",
+            "这里的服务器指策略信号服务器，地址在「设置」中配置。"
+            + "客户端从它获取交易品种与交易信号，并每 10 秒探测一次连通性。");
+    }
+
+    /// <summary>自动交易开关旁的问号：说明开关控制什么、关闭是否平仓。</summary>
+    private async void OnAutoTradeHelpClick(object sender, RoutedEventArgs e)
+    {
+        await ShowHelpAsync("自动交易",
+            "开启后客户端接收服务器推送的交易信号并自动下单，开启前会先校验服务器连通、账户配置、Token 和天勤握手。"
+            + "关闭只会停止接收信号与下单，已持有的仓位不会被自动平仓。");
+    }
+
+    private async Task ShowHelpAsync(string title, string message)
+    {
+        var dialog = new ContentDialog
+        {
+            XamlRoot = RootGrid.XamlRoot,
+            Title = title,
+            Content = new TextBlock
+            {
+                Text = message,
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true,
+            },
+            CloseButtonText = "好",
+        };
+        await dialog.ShowAsync();
+    }
+
     private async void OnQuitClick(object sender, RoutedEventArgs e)
     {
         // 交易运行中退出需确认（对应 mac 壳的确认弹窗）
@@ -200,13 +233,10 @@ public sealed partial class MainWindow : Window
         RefreshButton.IsEnabled = !(_state.SymbolsFetching || _state.StrategiesFetching);
         RefreshButton.Content = _state.SymbolsFetching || _state.StrategiesFetching ? "刷新中…" : "刷新";
 
-        var running = engine.Accounts.Count(a => a.Running);
-        StatusLeft.Text = running > 0 ? $"交易状态: 运行中 ({running})" : "交易状态: 已停止";
-
-        ServerStatusText.Text = engine.ServerOnline ? "服务器: 已连接" : "服务器: 未连接";
-        TradingStatusText.Text = engine.TradingActive ? "自动交易运行中" : "已停止";
-        TradingDot.Fill = new SolidColorBrush(
-            engine.TradingActive ? ThemeTokens.StatusGreen : ThemeTokens.StatusRed);
+        var online = engine.ServerOnline;
+        ServerStatusText.Text = $"服务器状态：{(online ? "已连接" : "未连接")}";
+        ServerStatusText.Foreground = new SolidColorBrush(
+            online ? ThemeTokens.StatusGreen : ThemeTokens.StatusRed);
 
         ShowStartBlockedIssuesIfNeeded();
     }
@@ -275,8 +305,14 @@ public sealed partial class MainWindow : Window
         RootGrid.Background = new SolidColorBrush(palette.Canvas);
         TopBar.Background = new SolidColorBrush(palette.Chrome);
         TopBar.BorderBrush = new SolidColorBrush(palette.Hairline);
-        StatusBar.Background = new SolidColorBrush(palette.Chrome);
-        StatusBar.BorderBrush = new SolidColorBrush(palette.Hairline);
+        ServerPill.BorderBrush = new SolidColorBrush(palette.Hairline);
+        ServerHelpButton.Foreground = new SolidColorBrush(palette.Primary);
+        ServerHelpButton.BorderBrush = new SolidColorBrush(palette.Hairline);
+        ServerHelpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        AutoTradeHelpButton.Foreground = new SolidColorBrush(palette.Primary);
+        AutoTradeHelpButton.BorderBrush = new SolidColorBrush(palette.Hairline);
+        AutoTradeHelpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        AutoTradePill.BorderBrush = new SolidColorBrush(palette.Hairline);
         QuitButton.Foreground = new SolidColorBrush(palette.Danger);
         ThemeButton.Content = IsDark ? "浅色" : "深色";
     }

@@ -18,8 +18,6 @@ struct SettingsView: View {
 
     // 服务器测试（对应 ServerUrlTestRow）
     @State private var testing = false
-    @State private var testMessage = ""
-    @State private var testSuccess: Bool?  // nil = 进行中
     @State private var showHelp = false
     @State private var helpHover = false
 
@@ -103,20 +101,14 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // MARK: 服务器地址行（对应 ServerUrlTestRow：? 按钮 + 输入框 + 测试连接 + 结果行）
+    // MARK: 服务器地址行（对应 ServerUrlTestRow：? 按钮 + 输入框 + 测试连接；结果走弹窗）
 
     private var serverTestRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                helpButton
-                AppTextField(placeholder: "https://itrader.redboil.us.ci", text: $serverUrl)
-                AppButton("测试连接", variant: .secondary, disabled: testing) { testServer() }
-            }
-            if !testMessage.isEmpty {
-                Text(testMessage)
-                    .font(AppTheme.bodyFont)
-                    .foregroundColor(statusColor(testSuccess))
-                    .fixedSize(horizontal: false, vertical: true)
+        HStack(spacing: 8) {
+            helpButton
+            AppTextField(placeholder: "https://itrader.redboil.us.ci", text: $serverUrl)
+            AppButton(testing ? "测试中..." : "测试连接", variant: .secondary, disabled: testing) {
+                testServer()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -252,30 +244,17 @@ struct SettingsView: View {
 
     // MARK: - 动作
 
-    /// Qt set_update_status 同款状态色（固定值，不随主题）
-    private func statusColor(_ success: Bool?) -> Color {
-        switch success {
-        case .none: return Color(hex: 0xE8A33D)
-        case .some(true): return Color(hex: 0x34C759)
-        case .some(false): return Color(hex: 0xE3342F)
-        }
-    }
-
     private func testServer() {
         let url = serverUrl.trimmingCharacters(in: .whitespaces)
         guard !url.isEmpty else {
-            testMessage = "请先输入服务器地址"
-            testSuccess = false
+            alert = .inputError("服务器地址不能为空")
             return
         }
         testing = true
-        testMessage = "正在测试连接..."
-        testSuccess = nil
         Task {
             let message = await appState.testServer(url: url)
             testing = false
-            testMessage = message
-            testSuccess = message.contains("成功")
+            alert = .testResult(message: message)
         }
     }
 
