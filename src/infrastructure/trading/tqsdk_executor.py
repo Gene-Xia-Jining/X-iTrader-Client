@@ -19,6 +19,94 @@ def test_tq_auth_connection(account: str, password: str) -> None:
     api.close()
 
 
+class TradingGatewayUnavailableError(RuntimeError):
+    """交易柜台网关明确拒绝了连接，属于天勤服务端侧故障。
+
+    单独成类是为了让上层把责任方说清楚：tqsdk 自己只会抛
+    TqTimeoutError("接收数据超时，请检查客户端及网络是否正常")，会让用户
+    往自己的网络方向排查。
+    """
+
+
+# 快期模拟账户在快期配置里的 broker id（与 TqKq 内部一致）
+_SIM_BROKER_ID = "快期模拟"
+
+
+def _lookup_trading_gateway(broker_id: str, timeout: float = 3.0) -> Optional[str]:
+    """从快期配置文件取该 broker 的交易网关地址。
+
+    该文件由 tqsdk 自己用来解析网关（见 TqAuth._get_td_url），这里复用同一
+    来源，避免与 tqsdk 走两条不同的地址。查不到时返回 None 而不是抛错：
+    这是纯辅助信息，地址解析的失败应交给 tqsdk 原流程去报错。
+
+    用 urllib 而非 requests：后者不在 requirements 里（只是 tqsdk 的间接
+    依赖），不为一次探测新增直接依赖。代理行为与 tqsdk 可能不同（本模块
+    只设置 NO_PROXY/WSS_PROXY），查不到时按「跳过预探测」降级即可。
+    """
+    import json
+    import urllib.parse
+    import urllib.request
+
+    url = "https://files.shinnytech.com/" + urllib.parse.quote(broker_id) + ".json"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            data = json.load(resp)
+    except (OSError, ValueError):
+        # URLError/HTTPError 都是 OSError；JSON 解析失败是 ValueError
+        return None
+    entry = data.get(broker_id)
+    if not isinstance(entry, dict):
+        return None
+    gateway = entry.get("url")
+    return gateway if isinstance(gateway, str) else None
+
+
+def _check_trading_gateway(td_url: str, timeout: float = 5.0) -> None:
+    """对交易网关做一次只握手、不登录的连通性探测。
+
+    只有网关自身故障（HTTP 5xx）才抛 TradingGatewayUnavailableError。
+    其余情况一律放行：
+    - 4xx（典型是实盘网关对未认证握手返回 401）说明网关本身活着并且在
+      正常拒客，这是预期行为，不能当成故障；
+    - 超时、DNS 失败等模糊情况可能是本地瞬时抖动，探测没有足够证据下结论。
+    """
+    from websockets.exceptions import InvalidStatus, WebSocketException
+    from websockets.sync.client import connect
+
+    try:
+        with connect(td_url, open_timeout=timeout):
+            return
+    except InvalidStatus as exc:
+        status = exc.response.status_code
+        if status < 500:
+            # 4xx = 网关在工作，只是拒绝了这次匿名握手
+            return
+        body = bytes(exc.response.body or b"").decode("utf-8", "replace").strip()
+        detail = f"：{body[:80]}" if body else ""
+        raise TradingGatewayUnavailableError(
+            f"天勤交易柜台暂时不可用（{td_url} 返回 HTTP {status}{detail}），"
+            "这是天勤服务端故障，不是本地网络问题，请稍后重试"
+        ) from exc
+    except (OSError, TimeoutError, WebSocketException):
+        # 探测只是辅助判断：握手没完成不代表网关有问题（可能是本地一时抖动），
+        # 交给 tqsdk 主流程去处理，不在这里阻断启动
+        return
+
+
+def _preflight_trading_gateway(account: Account) -> None:
+    """启动前先确认交易网关可用，不可用则立刻失败而不是等 tqsdk 的 60 秒兜底。
+
+    模拟账户的 broker id 固定；实盘用账户里保存的期货公司名（与传给 TqAccount
+    的值一致）。地址解析失败即视为「不掌握该 broker 的网关地址」，直接跳过。
+    """
+    broker_id = account.broker if account.kind == "live" else _SIM_BROKER_ID
+    if not broker_id:
+        return
+    td_url = _lookup_trading_gateway(broker_id)
+    if td_url:
+        _check_trading_gateway(td_url)
+
+
 def test_account_session(account: Account, auth: tuple[Optional[str], Optional[str]]) -> None:
     """验证某账户的完整 TqApi 会话能否建立（auth + 账户对象）。
 
@@ -28,9 +116,14 @@ def test_account_session(account: Account, auth: tuple[Optional[str], Optional[s
     使用——区别于 test_tq_auth_connection 只验快期权限账户，本函数能发现
     实盘期货公司/资金账号配置错误（tqsdk 在构造时即校验账户授权）。
 
+    另做一次交易网关预探测：tqsdk 在交易柜台连不上时会一直重试到 60 秒
+    超时，最后只报「请检查客户端及网络」，既慢又指向错误方向。
+
     阻塞调用，需在工作线程中执行（与 test_tq_auth_connection 一致）。
     """
-    from tqsdk import TqAccount, TqApi, TqAuth, TqKq
+    from tqsdk import TqAccount, TqApi, TqAuth, TqKq, TqTimeoutError
+
+    _preflight_trading_gateway(account)
 
     if account.kind == "live":
         account_obj = TqAccount(account.broker, account.trade_account, account.trade_password)
@@ -38,10 +131,21 @@ def test_account_session(account: Account, auth: tuple[Optional[str], Optional[s
         # 模拟账户全局仅一个（快期多模拟账户需专业版，暂不支持），用主模拟账号
         account_obj = TqKq()
 
-    api = TqApi(
-        account_obj,
-        auth=TqAuth(auth[0], auth[1]) if auth[0] and auth[1] else None,
-    )
+    try:
+        api = TqApi(
+            account_obj,
+            auth=TqAuth(auth[0], auth[1]) if auth[0] and auth[1] else None,
+        )
+    except TqTimeoutError as exc:
+        # tqsdk 走到这里时已解析出网关地址（auth 与名称服务都通过了），
+        # 补一次探测把「网关挂了」与「确实只是数据慢」区分开
+        td_url = getattr(account_obj, "_td_url", None)
+        if td_url:
+            _check_trading_gateway(td_url)
+            raise TqTimeoutError(
+                f"{exc}（交易网关 {td_url} 握手正常，可能是行情或账户数据延迟）"
+            ) from exc
+        raise
     api.close()
 
 
