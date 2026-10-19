@@ -181,7 +181,7 @@ final class AppState: ObservableObject {
     @Published var serverSymbolNames: [String: String] = [:]
     @Published var symbolsMessage = ""
     @Published var symbolsFetching = false
-    /// 服务器提供的交易策略（模拟/实盘页第 6 步单选）
+    /// 服务器提供的交易策略（模拟页第 7 步、实盘页单选）
     @Published var serverStrategies: [StrategyInfo] = []
     @Published var strategiesMessage = ""
     @Published var strategiesFetching = false

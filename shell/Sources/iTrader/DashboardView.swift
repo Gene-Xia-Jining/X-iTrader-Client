@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 仪表盘：状态指标卡 + 最近信号 + 最近日志（像素级对应 Qt DashboardPage）。
+/// 仪表盘：状态指标卡 + 最近信号（像素级对应 Qt DashboardPage）。
 struct DashboardView: View {
     @EnvironmentObject var appState: AppState
     @Binding var selection: AppRoute
@@ -49,21 +49,6 @@ struct DashboardView: View {
                 .padding(.horizontal, 20)
             }
 
-            AppCard {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 10) {
-                        Text("最近日志")
-                            .font(AppTheme.bodyFont)
-                            .foregroundColor(AppTheme.dim(scheme))
-                        Spacer()
-                        AppButton("清空日志", variant: .flat) { appState.logs.removeAll() }
-                    }
-                    logPreview
-                }
-                .padding(.vertical, 16)
-                .padding(.horizontal, 20)
-            }
-
             HStack(spacing: 10) {
                 AppButton("配置设置", variant: .secondary) { selection = .settings }
                 AppButton("Token 管理", variant: .secondary) { selection = .token }
@@ -97,28 +82,6 @@ struct DashboardView: View {
             symbols.formUnion(account.symbols)
         }
         return symbols.count
-    }
-
-    /// 最近 4 条日志预览（Qt logPreview maximumBlockCount=4，高 120）
-    private var logPreview: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(appState.logs.suffix(4)) { line in
-                    Text("\(timeText(line.time)) [\(line.level)] \(line.message)")
-                        .font(AppTheme.monoFont)
-                        .foregroundColor(line.color(for: scheme))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 2)
-                }
-            }
-        }
-        .frame(height: 120)
-    }
-
-    private func timeText(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter.string(from: date)
     }
 }
 

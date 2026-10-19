@@ -8,7 +8,7 @@ using XTrader.Shell.Theme;
 namespace XTrader.Shell.Views;
 
 /// <summary>
-/// 仪表盘：状态指标卡 + 最近信号 + 最近日志（对应 mac 壳的 DashboardView）。
+/// 仪表盘：状态指标卡 + 最近信号（对应 mac 壳的 DashboardView）。
 /// </summary>
 public sealed partial class DashboardPage : Page
 {
@@ -24,9 +24,6 @@ public sealed partial class DashboardPage : Page
     private SolidColorBrush Brush(Windows.UI.Color color) => _theme.Brush(color);
 
     private static Windows.UI.Color Hex(uint value) => ThemedPage.Hex(value);
-
-    private static Windows.UI.Color LogLevelColor(string level, bool dark) =>
-        ThemedPage.LogLevelColor(level, dark);
     public DashboardPage()
     {
         InitializeComponent();
@@ -45,7 +42,7 @@ public sealed partial class DashboardPage : Page
         PageTitle.Foreground = Brush(Palette.Ink);
         Subtitle.Foreground = Brush(Palette.Dim);
 
-        foreach (var card in new[] { ServerCard, TradingCard, AccountsCard, SymbolsCard, SignalCard, LogCard })
+        foreach (var card in new[] { ServerCard, TradingCard, AccountsCard, SymbolsCard, SignalCard })
         {
             card.Background = Brush(Palette.Card);
             card.BorderBrush = Brush(Palette.Hairline);
@@ -55,7 +52,7 @@ public sealed partial class DashboardPage : Page
                  {
                      ServerCardTitle, TradingCardTitle, AccountsCardTitle, SymbolsCardTitle,
                      ServerSecondary, TradingSecondary, AccountsSecondary, SymbolsSecondary,
-                     SignalTitle, SignalEmpty, LogTitle,
+                     SignalTitle, SignalEmpty,
                  })
         {
             label.Foreground = Brush(Palette.Dim);
@@ -70,9 +67,6 @@ public sealed partial class DashboardPage : Page
         TradingPill.BorderBrush = Brush(Palette.Hairline);
         ServerPill.BorderThickness = new Thickness(1);
         TradingPill.BorderThickness = new Thickness(1);
-
-        LogPreviewScroll.Background = Brush(Palette.LogBg);
-        LogPreviewScroll.BorderBrush = Brush(Palette.Hairline);
     }
 
     private void OnStateChanged()
@@ -107,27 +101,7 @@ public sealed partial class DashboardPage : Page
             symbols.UnionWith(account.Symbols);
         }
         SymbolsValue.Text = symbols.Count.ToString();
-
-        RefreshLogPreview();
     }
-
-    private void RefreshLogPreview()
-    {
-        LogPreviewPanel.Children.Clear();
-        foreach (var line in State.Logs.TakeLast(4))
-        {
-            LogPreviewPanel.Children.Add(new TextBlock
-            {
-                Text = $"{line.Time:HH:mm:ss} [{line.Level}] {line.Message}",
-                FontFamily = new FontFamily("Consolas"),
-                FontSize = 12,
-                Foreground = Brush(LogLevelColor(line.Level, Host.IsDark)),
-                TextWrapping = TextWrapping.NoWrap,
-            });
-        }
-    }
-
-    private void OnClearLogsClick(object sender, RoutedEventArgs e) => State.Logs.Clear();
 
     private void OnSettingsClick(object sender, RoutedEventArgs e) => Host.NavigateToTag("settings");
 

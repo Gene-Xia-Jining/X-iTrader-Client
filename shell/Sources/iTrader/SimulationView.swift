@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// 模拟交易页：快期模拟账户 6 步引导卡片（像素级对应 Qt SimulationPage）。
+/// 模拟交易页：快期模拟账户 7 步引导卡片（像素级对应 Qt SimulationPage）。
 struct SimulationView: View {
     @EnvironmentObject var appState: AppState
+    @Binding var selection: AppRoute
     @Environment(\.colorScheme) private var scheme
 
     // 表单
@@ -36,11 +37,14 @@ struct SimulationView: View {
     @State private var selectedStrategy = ""
     // 测试连接进行中（按钮置灰）
     @State private var testing = false
-    // 步骤 5 / 6 的说明弹窗（原步骤下方的提示行）
+    // 步骤 6 / 7 的说明弹窗（原步骤下方的提示行）
     @State private var showSymbolHelp = false
     @State private var symbolHelpHover = false
     @State private var showStrategyHelp = false
     @State private var strategyHelpHover = false
+    // 步骤 5「申请 Token」的说明弹窗
+    @State private var showTokenHelp = false
+    @State private var tokenHelpHover = false
     // 弹窗（对应 Qt QMessageBox）
     @State private var alert: ActiveAlert?
 
@@ -55,17 +59,11 @@ struct SimulationView: View {
                     linkRow("    App Store：", "https://itunes.apple.com/us/app/快期小q/id1187762307?l=zh&ls=1&mt=8")
                     linkRow("Windows：", "https://www.shinnytech.com/products/q73")
 
-                    HairlineDivider()
-
                     guideLabel("2，在快期客户端或天勤官网注册：")
                     linkRow("天勤官网：", "https://account.shinnytech.com/")
 
-                    HairlineDivider()
-
                     guideLabel("3，在这里填入：")
                     inputRow
-
-                    HairlineDivider()
 
                     HStack(spacing: 6) {
                         guideLabel("4，服务器地址：")
@@ -73,18 +71,23 @@ struct SimulationView: View {
                     }
                     serverRow
 
-                    HairlineDivider()
+                    HStack(spacing: 6) {
+                        guideLabel("5，Token 管理页面可以申请 Token。")
+                        helpButton(tokenHelpText, isPresented: $showTokenHelp, isHovering: $tokenHelpHover)
+                        AppButton("前往 Token 管理", variant: .secondary, size: .inline) {
+                            selection = .token
+                        }
+                        .padding(.leading, 6)
+                    }
 
                     HStack(spacing: 6) {
-                        guideLabel("5，选择交易品种：")
+                        guideLabel("6，选择交易品种：")
                         helpButton(symbolHelpText, isPresented: $showSymbolHelp, isHovering: $symbolHelpHover)
                     }
                     symbolPicker
 
-                    HairlineDivider()
-
                     HStack(spacing: 6) {
-                        guideLabel("6，选择交易策略：")
+                        guideLabel("7，选择交易策略：")
                         helpButton(strategyHelpText, isPresented: $showStrategyHelp, isHovering: $strategyHelpHover)
                     }
                     strategyPicker
@@ -133,7 +136,7 @@ struct SimulationView: View {
             .textSelection(.enabled)
     }
 
-    /// 20x20 圆形问号按钮，点击弹出说明文案（样式同设置页 helpButton）；步骤 4 / 5 / 6 共用
+    /// 20x20 圆形问号按钮，点击弹出说明文案（样式同设置页 helpButton）；步骤 4–7 共用
     private func helpButton(
         _ text: String,
         isPresented: Binding<Bool>,
@@ -357,6 +360,11 @@ struct SimulationView: View {
         }
     }
 
+    /// 步骤 5 问号弹窗文案：说明 Token 与服务器鉴权的关系
+    private var tokenHelpText: String {
+        "客户端连接服务器需要有效的 Token。请在「Token 管理」页提交申请，等待服务器审批通过后即可使用。"
+    }
+
     // MARK: - 品种区（单选胶囊，对应 Qt SymbolPicker；刷新入口在顶部栏）
 
     private var symbolPicker: some View {
@@ -373,7 +381,7 @@ struct SimulationView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            // 数量提示已移入步骤 5 问号弹窗，行内只保留获取中 / 失败等瞬时状态
+            // 数量提示已移入步骤 6 问号弹窗，行内只保留获取中 / 失败等瞬时状态
             if !pickerHint.isEmpty {
                 Text(pickerHint)
                     .font(AppTheme.dimFont)
@@ -402,7 +410,7 @@ struct SimulationView: View {
         return "尚未获取品种"
     }
 
-    /// 步骤 5 问号弹窗文案：模拟账户范围说明 + 可选品种数量
+    /// 步骤 6 问号弹窗文案：模拟账户范围说明 + 可选品种数量
     private var symbolHelpText: String {
         let note = "提示：模拟帐户不支持组合/套利和期权交易，仅国内商品和股指国债。"
         guard !appState.serverSymbols.isEmpty else { return note }
@@ -442,7 +450,7 @@ struct SimulationView: View {
                     .help(strategy.description)
                 }
             }
-            // 数量与提示文案已移入步骤 6 问号弹窗，行内只保留获取中 / 失败等瞬时状态
+            // 数量与提示文案已移入步骤 7 问号弹窗，行内只保留获取中 / 失败等瞬时状态
             if !strategyHint.isEmpty {
                 Text(strategyHint)
                     .font(AppTheme.dimFont)
@@ -462,7 +470,7 @@ struct SimulationView: View {
         return "尚未获取策略"
     }
 
-    /// 步骤 6 问号弹窗文案：策略来源说明 + 可选策略数量
+    /// 步骤 7 问号弹窗文案：策略来源说明 + 可选策略数量
     private var strategyHelpText: String {
         let note = "提示：策略由服务器计算交易信号，客户端按信号执行开仓 / 平仓。"
         guard !appState.serverStrategies.isEmpty else { return note }

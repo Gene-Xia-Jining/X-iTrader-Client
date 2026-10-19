@@ -11,7 +11,7 @@ using XTrader.Shell.State;
 namespace XTrader.Shell.Views;
 
 /// <summary>
-/// 模拟交易页：快期模拟账户六步引导卡片（对应 mac 壳的 SimulationView）。
+/// 模拟交易页：快期模拟账户七步引导卡片（对应 mac 壳的 SimulationView）。
 ///
 /// 已存密码不回传明文：后端只给「是否已设置」和长度，密码框按真实长度
 /// 自绘圆点掩码；点眼睛时才通过 accounts.get_password 受控取一次明文。
@@ -126,7 +126,7 @@ public sealed partial class SimulationPage : Page
         Card.Background = Brush(Palette.Card);
         Card.BorderBrush = Brush(Palette.Hairline);
 
-        foreach (var text in new[] { Intro, Step1, Step2, Step3, Step4, Step5, Step6, PhoneLabel, PasswordLabel })
+        foreach (var text in new[] { Intro, Step1, Step2, Step3, Step4, Step5, Step6, Step7, PhoneLabel, PasswordLabel })
         {
             text.Foreground = Brush(Palette.Ink);
             text.FontSize = 15;
@@ -140,11 +140,8 @@ public sealed partial class SimulationPage : Page
         SymbolHelpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
         StrategyHelpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
         ServerHelpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        TokenHelpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
 
-        foreach (var divider in new[] { Divider1, Divider2, Divider3, Divider4, Divider5 })
-        {
-            divider.Fill = Brush(Palette.Divider);
-        }
         foreach (var hint in new[] { SymbolHint, StrategyHint })
         {
             hint.Foreground = Brush(Palette.Dim);
@@ -158,7 +155,7 @@ public sealed partial class SimulationPage : Page
         PasswordFrame.Background = Brush(Palette.InputBg);
         PasswordFrame.BorderBrush = Brush(Palette.Hairline);
 
-        foreach (var help in new[] { SymbolHelpButton, StrategyHelpButton, ServerHelpButton })
+        foreach (var help in new[] { SymbolHelpButton, StrategyHelpButton, ServerHelpButton, TokenHelpButton })
         {
             help.Foreground = Brush(Palette.Primary);
             help.BorderBrush = Brush(Palette.Hairline);
@@ -391,6 +388,17 @@ public sealed partial class SimulationPage : Page
             "服务器地址",
             "这是 iTrader 智能交易服务器的地址，与「设置」页是同一份配置，输入完成（回车或点到别处）即时保存生效。");
     }
+
+    // -------- Token（引导用户去 Token 管理页申请）--------
+
+    private async void OnTokenHelpClick(object sender, RoutedEventArgs e)
+    {
+        await ShowInfoAsync(
+            "申请 Token",
+            "客户端连接服务器需要有效的 Token。请在「Token 管理」页提交申请，等待服务器审批通过后即可使用。");
+    }
+
+    private void OnTokenPageClick(object sender, RoutedEventArgs e) => Host.NavigateToTag("token");
 
     // -------- 引导文案与外链 --------
 

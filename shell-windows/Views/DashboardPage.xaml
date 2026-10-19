@@ -69,19 +69,6 @@
                 </StackPanel>
             </Border>
 
-            <Border x:Name="LogCard" BorderThickness="1" CornerRadius="18" Padding="20,16">
-                <StackPanel Spacing="10">
-                    <Grid>
-                        <TextBlock x:Name="LogTitle" Text="最近日志" HorizontalAlignment="Left" />
-                        <Button Content="清空日志" Click="OnClearLogsClick" HorizontalAlignment="Right" />
-                    </Grid>
-                    <ScrollViewer x:Name="LogPreviewScroll" Height="120" BorderThickness="1"
-                                  CornerRadius="11" Padding="8">
-                        <StackPanel x:Name="LogPreviewPanel" />
-                    </ScrollViewer>
-                </StackPanel>
-            </Border>
-
             <StackPanel Orientation="Horizontal" Spacing="10">
                 <Button Content="配置设置" Click="OnSettingsClick" />
                 <Button Content="Token 管理" Click="OnTokenClick" />

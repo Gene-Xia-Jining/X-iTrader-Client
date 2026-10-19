@@ -257,7 +257,7 @@ struct RootView: View {
         case .dashboard: DashboardView(selection: $selection)
         case .token: TokenManageView()
         case .log: TradingLogView()
-        case .sim: SimulationView()
+        case .sim: SimulationView(selection: $selection)
         case .live: AccountView()
         case .records: TradeRecordView()
         case .settings: SettingsView()

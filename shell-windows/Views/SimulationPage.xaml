@@ -16,12 +16,8 @@
                     <TextBlock x:Name="LinkAppStore" IsTextSelectionEnabled="True" />
                     <TextBlock x:Name="LinkWindows" IsTextSelectionEnabled="True" />
 
-                    <Rectangle x:Name="Divider1" Height="1" />
-
                     <TextBlock x:Name="Step2" Text="2，在快期客户端或天勤官网注册：" TextWrapping="Wrap" />
                     <TextBlock x:Name="LinkRegister" IsTextSelectionEnabled="True" />
-
-                    <Rectangle x:Name="Divider2" Height="1" />
 
                     <TextBlock x:Name="Step3" Text="3，在这里填入：" TextWrapping="Wrap" />
 
@@ -69,8 +65,6 @@
                     <TextBlock x:Name="AccountHint" FontSize="13" TextWrapping="Wrap"
                                IsTextSelectionEnabled="True" Visibility="Collapsed" />
 
-                    <Rectangle x:Name="Divider3" Height="1" />
-
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <TextBlock x:Name="Step4" Text="4，服务器地址：" VerticalAlignment="Center" />
                         <Button x:Name="ServerHelpButton" Content="?" Click="OnServerHelpClick"
@@ -86,10 +80,17 @@
                                    IsTextSelectionEnabled="True" Visibility="Collapsed" />
                     </StackPanel>
 
-                    <Rectangle x:Name="Divider4" Height="1" />
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock x:Name="Step5" Text="5，Token 管理页面可以申请 Token。"
+                                   VerticalAlignment="Center" TextWrapping="Wrap" />
+                        <Button x:Name="TokenHelpButton" Content="?" Click="OnTokenHelpClick"
+                                Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10" FontSize="12" />
+                        <Button x:Name="TokenPageButton" Content="前往 Token 管理" Click="OnTokenPageClick"
+                                Margin="6,0,0,0" />
+                    </StackPanel>
 
                     <StackPanel Orientation="Horizontal" Spacing="6">
-                        <TextBlock x:Name="Step5" Text="5，选择交易品种：" VerticalAlignment="Center" />
+                        <TextBlock x:Name="Step6" Text="6，选择交易品种：" VerticalAlignment="Center" />
                         <Button x:Name="SymbolHelpButton" Content="?" Click="OnSymbolHelpClick"
                                 Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10" FontSize="12" />
                     </StackPanel>
@@ -98,10 +99,8 @@
                         <TextBlock x:Name="SymbolHint" FontSize="13" TextWrapping="Wrap" Visibility="Collapsed" />
                     </StackPanel>
 
-                    <Rectangle x:Name="Divider5" Height="1" />
-
                     <StackPanel Orientation="Horizontal" Spacing="6">
-                        <TextBlock x:Name="Step6" Text="6，选择交易策略：" VerticalAlignment="Center" />
+                        <TextBlock x:Name="Step7" Text="7，选择交易策略：" VerticalAlignment="Center" />
                         <Button x:Name="StrategyHelpButton" Content="?" Click="OnStrategyHelpClick"
                                 Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10" FontSize="12" />
                     </StackPanel>
