@@ -3,7 +3,6 @@ import SwiftUI
 /// 模拟交易页：快期模拟账户 7 步引导卡片（像素级对应 Qt SimulationPage）。
 struct SimulationView: View {
     @EnvironmentObject var appState: AppState
-    @Binding var selection: AppRoute
     @Environment(\.colorScheme) private var scheme
 
     // 表单
@@ -38,11 +37,26 @@ struct SimulationView: View {
     // 步骤 6 / 7 的说明弹窗（原步骤下方的提示行）
     @State private var showSymbolHelp = false
     @State private var symbolHelpHover = false
-    @State private var showStrategyHelp = false
-    @State private var strategyHelpHover = false
-    // 步骤 5「申请 Token」的说明弹窗
+    // 步骤 6 的品种选择弹窗
+    @State private var showSymbolPicker = false
+    /// 品种胶囊列表换行后的实际高度：弹窗据此自适应高度
+    @State private var symbolListHeight: CGFloat = 0
+    // 步骤 5「申请 Token」的说明弹窗 + 申请中的回执
     @State private var showTokenHelp = false
     @State private var tokenHelpHover = false
+    @State private var tokenRequesting = false
+    /// 本次申请的返回值；空串时提示行改为跟随后端实时状态
+    @State private var tokenMessage = ""
+    // 步骤 1 的下载入口弹窗（手机端 / App Store / Windows 三个链接）
+    @State private var showDownloadLinks = false
+    // 步骤 3 的账号信息弹窗（手机号 / 密码 / 测试连接）
+    @State private var showAccountEditor = false
+    /// 步骤 3 胶囊右端问号的说明弹层
+    @State private var showAccountHelp = false
+    @State private var accountHelpHover = false
+    /// 弹窗内「测试连接」的结果：弹层开着时不再叠 alert，就地显示
+    @State private var testHint = ""
+    @State private var testHintError = false
     // 弹窗（对应 Qt QMessageBox）
     @State private var alert: ActiveAlert?
 
@@ -51,44 +65,45 @@ struct SimulationView: View {
             AppCard {
                 VStack(alignment: .leading, spacing: 12) {
                     guideLabel("在开始实盘交易之前，您应该通过 1-3 个月的模拟交易建立信心。\n\n我们支持快期的模拟交易，您需要：")
-                    guideLabel("1，下载快期客户端：")
-                    linkRow("手机端：", "https://www.shinnytech.com/products/app")
-                    // App Store 是手机端 iOS 渠道的子项，保留 Qt 版的 4 空格缩进
-                    linkRow("    App Store：", "https://itunes.apple.com/us/app/快期小q/id1187762307?l=zh&ls=1&mt=8")
-                    linkRow("Windows：", "https://www.shinnytech.com/products/q73")
 
-                    guideLabel("2，在快期客户端或天勤官网注册：")
-                    linkRow("天勤官网：", "https://account.shinnytech.com/")
-
-                    guideLabel("3，在这里填入：")
-                    inputRow
-
-                    HStack(spacing: 6) {
-                        guideLabel("4，服务器地址：")
-                        helpButton(serverHelpText, isPresented: $showServerHelp, isHovering: $serverHelpHover)
+                    HStack(spacing: 8) {
+                        guideLabel("1，")
+                        entryCapsule("下载快期客户端") { showDownloadLinks = true }
                     }
+
+                    guideLabelWithLink("2，在快期客户端或天勤官网注册：", "https://account.shinnytech.com/")
+
+                    HStack(spacing: 8) {
+                        guideLabel("3，")
+                        accountEntryCapsule
+                    }
+
                     serverRow
 
-                    HStack(spacing: 6) {
-                        guideLabel("5，Token 管理页面可以申请 Token。")
-                        helpButton(tokenHelpText, isPresented: $showTokenHelp, isHovering: $tokenHelpHover)
-                        AppButton("前往 Token 管理", variant: .secondary, size: .inline) {
-                            selection = .token
+                    // 第 5 步：胶囊内直接向服务器申请 Token，结果紧随其后显示
+                    HStack(spacing: 8) {
+                        guideLabel("5，")
+                        tokenEntryCapsule
+                        if !tokenHint.isEmpty {
+                            Text(tokenHint)
+                                .font(AppTheme.dimFont)
+                                .foregroundColor(tokenHintColor)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        .padding(.leading, 6)
                     }
 
-                    HStack(spacing: 6) {
-                        guideLabel("6，选择交易品种：")
-                        helpButton(symbolHelpText, isPresented: $showSymbolHelp, isHovering: $symbolHelpHover)
+                    HStack(spacing: 8) {
+                        guideLabel("6，")
+                        symbolEntryCapsule
                     }
-                    symbolPicker
 
-                    HStack(spacing: 6) {
+                    // 标题与策略胶囊同一行：策略多时在标题右侧换行，不再单占一行
+                    HStack(alignment: .top, spacing: 8) {
                         guideLabel("7，选择交易策略：")
-                        helpButton(strategyHelpText, isPresented: $showStrategyHelp, isHovering: $strategyHelpHover)
+                            .padding(.top, 5)
+                        strategyPicker
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    strategyPicker
                 }
                 .padding(20)
             }
@@ -96,15 +111,31 @@ struct SimulationView: View {
         .onAppear {
             fillFromAccount()
             fillServerUrl()
+            // 第 5 步要在胶囊后显示当前审批状态，进页面时拉一次
+            appState.refreshTokenStatus()
         }
         .onChange(of: appState.accounts) { _ in fillFromAccount() }
         .onChange(of: appState.config) { _ in fillServerUrl() }
+        .onChange(of: showAccountEditor) { presented in
+            // 弹窗被 Esc 等非按钮方式关闭时输入框不会失焦，补一次保存
+            if !presented { saveAccountIfChanged() }
+        }
         .alert(item: $alert) { alert in
             Alert(
                 title: Text(alert.title),
                 message: Text(alert.message),
                 dismissButton: .default(Text("好"))
             )
+        }
+        .sheet(isPresented: $showAccountEditor) {
+            accountEditor
+                .onAppear { setTestHint("", isError: false) }
+        }
+        .sheet(isPresented: $showDownloadLinks) {
+            downloadLinks
+        }
+        .sheet(isPresented: $showSymbolPicker) {
+            symbolPickerDialog
         }
     }
 
@@ -115,6 +146,22 @@ struct SimulationView: View {
             .font(AppTheme.bodyFont)
             .kerning(-0.1)
             .foregroundColor(AppTheme.ink(scheme))
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+    }
+
+    /// 正文后紧跟一条外链：两段拼在同一个 Text 里，行内折行时不会断开成两行
+    private func guideLabelWithLink(_ text: String, _ urlString: String) -> some View {
+        var plain = AttributedString(text)
+        plain.font = AppTheme.bodyFont
+        plain.foregroundColor = AppTheme.ink(scheme)
+        var link = AttributedString(urlString)
+        link.font = AppTheme.bodyFont
+        link.link = URL(string: urlString)
+        link.foregroundColor = AppTheme.link
+        link.underlineStyle = .single
+        return Text(plain + link)
+            .kerning(-0.1)
             .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
     }
@@ -163,23 +210,153 @@ struct SimulationView: View {
         }
     }
 
-    // MARK: - 输入行（手机号 / 密码 / 眼睛 / 测试连接；输入完成即保存）
+    // MARK: - 入口胶囊（文字按钮 + 可选右侧问号；步骤 1 与步骤 3 共用）
 
-    private var inputRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
+    /// 胶囊整体是描边圆角按钮：点文字区域执行 action，点右侧问号弹出说明。
+    private func entryCapsule(
+        _ title: String,
+        helpText: String? = nil,
+        isHelpPresented: Binding<Bool>? = nil,
+        isHelpHovering: Binding<Bool>? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 6) {
+            Button(action: action) {
+                Text(title)
+                    .font(AppTheme.dimFont.weight(.semibold))
+                    .foregroundColor(AppTheme.primary(scheme))
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+
+            if let helpText, let isHelpPresented, let isHelpHovering {
+                helpButton(helpText, isPresented: isHelpPresented, isHovering: isHelpHovering)
+            }
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, helpText == nil ? 14 : 10)
+        .frame(minHeight: 30)
+        .overlay(
+            Capsule().stroke(AppTheme.hairline(scheme), lineWidth: 1)
+        )
+    }
+
+    /// 步骤 3 入口胶囊：点文字打开账号弹窗，点右侧问号看说明。
+    /// 手机号与密码都填好后，文案改为当前用户手机号，避免再打开弹窗才知道登录的是谁。
+    private var accountEntryCapsule: some View {
+        entryCapsule(
+            accountEntryLabel,
+            helpText: accountHelpText,
+            isHelpPresented: $showAccountHelp,
+            isHelpHovering: $accountHelpHover
+        ) {
+            showAccountEditor = true
+        }
+    }
+
+    /// 手机号与密码都不为空即视为已填好（已存密码时输入框留空，按已设置计算）
+    private var accountEntryLabel: String {
+        let account = phone.trimmingCharacters(in: .whitespaces)
+        let hasPassword = !password.isEmpty || hasStoredPassword
+        guard !account.isEmpty, hasPassword else {
+            return "填入快期/天勤用户信息"
+        }
+        return "当前用户：\(account)"
+    }
+
+    /// 步骤 3 问号弹窗文案：说明这两个字段从哪来、什么时候保存
+    private var accountHelpText: String {
+        "填写快期（天勤）账号的注册手机号与密码，客户端用它登录模拟交易账户。输入完成即自动保存。"
+    }
+
+    // MARK: - 步骤 5 Token 申请胶囊
+
+    /// 步骤 5 入口胶囊：点文字直接向服务器提交申请，点右侧问号看说明。
+    private var tokenEntryCapsule: some View {
+        entryCapsule(
+            tokenRequesting ? "申请中..." : "申请 Token",
+            helpText: tokenHelpText,
+            isHelpPresented: $showTokenHelp,
+            isHelpHovering: $tokenHelpHover
+        ) {
+            applyToken()
+        }
+    }
+
+    /// 胶囊后的结果提示：本次申请的回执优先，其次跟随后端实时状态；
+    /// 「未申请 / 已通过」不显示，避免一行状态常驻。
+    private var tokenHint: String {
+        // 失败的申请后端不会更新状态，回执必须自己显示，不能被下面的过滤吞掉
+        if tokenMessage.contains("失败") { return tokenMessage }
+        let status = appState.tokenStatus
+        if status.contains("已通过") || status.isEmpty || status == "未申请" { return "" }
+        return tokenMessage.isEmpty ? status : tokenMessage
+    }
+
+    private var tokenHintColor: Color {
+        let text = tokenHint
+        if text.contains("失败") || text.contains("拒绝") || text.contains("错误") {
+            return AppTheme.statusRed
+        }
+        if text.contains("已通过") { return AppTheme.statusGreen }
+        return AppTheme.dim(scheme)
+    }
+
+    /// 与「Token 管理」页同一个入口：说明留默认值，提交后由后端事件刷新状态
+    private func applyToken() {
+        guard !tokenRequesting else { return }
+        tokenRequesting = true
+        tokenMessage = ""
+        Task {
+            tokenMessage = await appState.requestTokenResult(description: "iTrader 智能交易系统")
+            tokenRequesting = false
+        }
+    }
+
+    // MARK: - 步骤 1 下载入口弹窗（手机端 / App Store / Windows）
+
+    private var downloadLinks: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("下载快期客户端")
+                .font(AppTheme.bodyFont.weight(.semibold))
+                .foregroundColor(AppTheme.ink(scheme))
+
+            VStack(alignment: .leading, spacing: 6) {
+                linkRow("手机端：", "https://www.shinnytech.com/products/app")
+                // App Store 是手机端 iOS 渠道的子项，保留 Qt 版的 4 空格缩进
+                linkRow("    App Store：", "https://itunes.apple.com/us/app/快期小q/id1187762307?l=zh&ls=1&mt=8")
+                linkRow("Windows：", "https://www.shinnytech.com/products/q73")
+            }
+
+            HStack {
+                Spacer(minLength: 12)
+                AppButton("关闭", variant: .secondary, size: .inline) {
+                    showDownloadLinks = false
+                }
+            }
+            .padding(.top, 4)
+        }
+        .padding(20)
+        // 比账号弹窗略宽：App Store 那行链接很长，480 宽会折行
+        .frame(width: 580)
+    }
+
+    // MARK: - 账号信息弹窗（手机号 / 密码 / 眼睛 / 测试连接；输入完成即保存）
+
+    private var accountEditor: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("填入快期/天勤用户信息")
+                .font(AppTheme.bodyFont.weight(.semibold))
+                .foregroundColor(AppTheme.ink(scheme))
+
             HStack(spacing: 8) {
-                Text("手机号：")
-                    .font(AppTheme.bodyFont)
-                    .foregroundColor(AppTheme.ink(scheme))
+                fieldLabel("手机号：")
                 AppTextField(placeholder: "手机号", text: $phone, onCommit: saveAccountIfChanged)
-                Text("密码：")
-                    .font(AppTheme.bodyFont)
-                    .foregroundColor(AppTheme.ink(scheme))
+            }
+            HStack(spacing: 8) {
+                fieldLabel("密码：")
                 passwordField
                 eyeButton
-                AppButton(testing ? "测试中..." : "测试连接", variant: .secondary, size: .inline, disabled: testing) {
-                    testConnection()
-                }
             }
             if !accountHint.isEmpty {
                 Text(accountHint)
@@ -187,7 +364,38 @@ struct SimulationView: View {
                     .foregroundColor(accountHasError ? Color(hex: 0xE3342F) : Color(hex: 0x34C759))
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            // 底部一行：测试结果靠左，测试连接紧挨关闭之前（避免结果把按钮行推高）
+            HStack(alignment: .center, spacing: 8) {
+                if !testHint.isEmpty {
+                    Text(testHint)
+                        .font(AppTheme.bodyFont)
+                        .foregroundColor(testHintError ? Color(hex: 0xE3342F) : Color(hex: 0x34C759))
+                        .fixedSize(horizontal: false, vertical: true)
+                        // 长错误文案先占空间换行，不去挤右侧两个按钮
+                        .layoutPriority(1)
+                }
+                Spacer(minLength: 12)
+                AppButton(testing ? "测试中..." : "测试连接", variant: .secondary, size: .inline, disabled: testing) {
+                    testConnection()
+                }
+                AppButton("关闭", variant: .secondary, size: .inline) {
+                    // 保存由 onChange(of: showAccountEditor) 兜底，这里不重复提交
+                    showAccountEditor = false
+                }
+            }
+            .padding(.top, 4)
         }
+        .padding(20)
+        .frame(width: 480)
+    }
+
+    /// 弹窗内字段标签：固定宽度右对齐，让两个输入框左边界对齐
+    private func fieldLabel(_ text: String) -> some View {
+        Text(text)
+            .font(AppTheme.bodyFont)
+            .foregroundColor(AppTheme.ink(scheme))
+            .frame(width: 62, alignment: .trailing)
     }
 
     private var passwordField: some View {
@@ -274,10 +482,12 @@ struct SimulationView: View {
         .pointerCursor()
     }
 
-    // MARK: - 服务器地址行（输入框 + 测试连接；结果与手机号一致走弹窗；输入完成即保存）
+    // MARK: - 服务器地址行（标题 + 输入框 + 测试连接 + 问号同排；结果与手机号一致走弹窗；输入完成即保存）
 
     private var serverRow: some View {
         HStack(spacing: 8) {
+            guideLabel("4，服务器地址：")
+                .layoutPriority(1)
             AppTextField(
                 placeholder: "https://itrader.redboil.us.ci",
                 text: $serverUrl,
@@ -291,6 +501,7 @@ struct SimulationView: View {
             ) {
                 testServer()
             }
+            helpButton(serverHelpText, isPresented: $showServerHelp, isHovering: $serverHelpHover)
         }
     }
 
@@ -339,7 +550,56 @@ struct SimulationView: View {
 
     /// 步骤 5 问号弹窗文案：说明 Token 与服务器鉴权的关系
     private var tokenHelpText: String {
-        "客户端连接服务器需要有效的 Token。请在「Token 管理」页提交申请，等待服务器审批通过后即可使用。"
+        "客户端连接服务器需要有效的 Token。点「申请 Token」直接向服务器提交申请，"
+        + "等待审批通过后客户端会自动领取并保存；审批进度可在「Token 管理」页查看。"
+    }
+
+    // MARK: - 步骤 6 品种入口胶囊与选择弹窗
+
+    /// 步骤 6 入口胶囊：点文字打开品种选择弹窗，点右侧问号看说明。
+    /// 默认未选中显示「选择交易品种」；选中后显示已选品种，避免必须打开弹窗才知道当前订阅。
+    private var symbolEntryCapsule: some View {
+        entryCapsule(
+            symbolEntryLabel,
+            helpText: symbolHelpText,
+            isHelpPresented: $showSymbolHelp,
+            isHelpHovering: $symbolHelpHover
+        ) {
+            showSymbolPicker = true
+        }
+    }
+
+    /// 选中后与弹窗里的品种胶囊一致，显示「代码｜中文」（如「RB｜螺纹钢」）
+    private var symbolEntryLabel: String {
+        guard !selectedSymbol.isEmpty else { return "选择交易品种" }
+        return "已选择交易品种：\(appState.displaySymbol(selectedSymbol))"
+    }
+
+    /// 品种选择弹窗：选中即生效并关闭（无关闭按钮）；胶囊列表按内容自适应高度，
+    /// 品种过多、超过窗口高度时才在弹窗内滚动
+    private var symbolPickerDialog: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("选择交易品种")
+                .font(AppTheme.bodyFont.weight(.semibold))
+                .foregroundColor(AppTheme.ink(scheme))
+
+            ScrollView {
+                symbolPicker
+                    // 量的是换行后的真实内容高度，用它决定弹窗高度
+                    .background(GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: SymbolListHeightKey.self,
+                            value: proxy.size.height
+                        )
+                    })
+            }
+            // sheet 会按内容的理想高度收缩，ScrollView 的理想高度极小，
+            // 因此必须给出确定高度；上限避免品种过多时弹窗超出屏幕
+            .frame(height: min(max(symbolListHeight, 64), 720))
+            .onPreferenceChange(SymbolListHeightKey.self) { symbolListHeight = $0 }
+        }
+        .padding(20)
+        .frame(width: 640)
     }
 
     // MARK: - 品种区（单选胶囊，对应 Qt SymbolPicker；刷新入口在顶部栏）
@@ -353,6 +613,8 @@ struct SimulationView: View {
                         set: { isOn in
                             selectedSymbol = isOn ? symbol : ""
                             saveSymbolSelection()
+                            // 选中即生效：选完直接关掉弹窗（取消选中留给再次打开后取消）
+                            if isOn { showSymbolPicker = false }
                         }
                     ))
                 }
@@ -445,13 +707,6 @@ struct SimulationView: View {
         }
         if !appState.serverStrategies.isEmpty { return "" }
         return "尚未获取策略"
-    }
-
-    /// 步骤 7 问号弹窗文案：策略来源说明 + 可选策略数量
-    private var strategyHelpText: String {
-        let note = "提示：策略由服务器计算交易信号，客户端按信号执行开仓 / 平仓。"
-        guard !appState.serverStrategies.isEmpty else { return note }
-        return note + "\n共 \(appState.serverStrategies.count) 个策略，选择一个，选中即生效"
     }
 
     /// 策略选中/取消即生效：只提交 strategy（取消时传空串清除），symbols 等字段沿用已有值
@@ -565,20 +820,37 @@ struct SimulationView: View {
     private func testConnection() {
         let account = phone.trimmingCharacters(in: .whitespaces)
         guard !account.isEmpty else {
-            alert = .inputError("手机号不能为空")
+            setTestHint("手机号不能为空", isError: true)
             return
         }
         guard !password.isEmpty || hasStoredPassword else {
-            alert = .inputError("密码不能为空")
+            setTestHint("密码不能为空", isError: true)
             return
         }
         testing = true
+        setTestHint("", isError: false)
         let simId = appState.accounts.first(where: { $0.kind == "sim" })?.id
         Task {
             let message = await appState.testTqAuth(account: account, password: password, accountId: simId)
             testing = false
-            alert = .testResult(message: message)
+            // 弹层开着时不再叠 alert，结果就地显示在弹窗里
+            setTestHint(message, isError: message.hasPrefix("连接失败"))
         }
+    }
+
+    private func setTestHint(_ message: String, isError: Bool) {
+        testHint = message
+        testHintError = isError
+    }
+}
+
+// MARK: - 品种列表高度（弹窗自适应用）
+
+/// 收集换行后品种胶囊列表的真实高度
+private struct SymbolListHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 

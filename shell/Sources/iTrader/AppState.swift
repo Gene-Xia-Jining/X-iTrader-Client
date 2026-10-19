@@ -543,10 +543,18 @@ final class AppState: ObservableObject {
         cachedTokenIds.contains(tokenId)
     }
     func requestToken(description: String) {
-        Task {
-            if let resp = try? await call(method: "tokens.request", params: ["description": description]) {
-                tokenStatus = resp["status"] as? String ?? ""
-            }
+        Task { _ = await requestTokenResult(description: description) }
+    }
+
+    /// 提交 Token 申请并返回回执文案（模拟页第 5 步就地显示结果，不再弹窗）
+    func requestTokenResult(description: String) async -> String {
+        do {
+            let resp = try await call(method: "tokens.request", params: ["description": description])
+            let status = resp["status"] as? String ?? "已提交申请"
+            tokenStatus = status
+            return status
+        } catch {
+            return "申请失败: \(error.localizedDescription)"
         }
     }
 

@@ -963,6 +963,22 @@ public sealed class AppState : INotifyPropertyChanged
         }
     });
 
+    /// <summary>提交 Token 申请并返回回执文案（模拟页第 5 步就地显示结果，不再弹窗）</summary>
+    internal async Task<string> RequestTokenResultAsync(string description)
+    {
+        try
+        {
+            var resp = await CallAsync("tokens.request", new JsonObject { ["description"] = description });
+            var status = resp["status"]?.GetValue<string>() ?? "已提交申请";
+            Post(() => TokenStatus = status);
+            return status;
+        }
+        catch (Exception ex)
+        {
+            return $"申请失败: {ex.Message}";
+        }
+    }
+
     /// <summary>删除一条申请记录；成功返回 null，失败返回错误文案供页面弹窗展示</summary>
     internal async Task<string?> DeleteTokenRecordAsync(string tokenId)
     {

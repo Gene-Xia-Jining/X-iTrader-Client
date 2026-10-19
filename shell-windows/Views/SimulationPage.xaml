@@ -11,97 +11,93 @@
                 <StackPanel Spacing="12">
                     <TextBlock x:Name="Intro" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
 
-                    <TextBlock x:Name="Step1" Text="1，下载快期客户端：" TextWrapping="Wrap" />
-                    <TextBlock x:Name="LinkMobile" IsTextSelectionEnabled="True" />
-                    <TextBlock x:Name="LinkAppStore" IsTextSelectionEnabled="True" />
-                    <TextBlock x:Name="LinkWindows" IsTextSelectionEnabled="True" />
-
-                    <TextBlock x:Name="Step2" Text="2，在快期客户端或天勤官网注册：" TextWrapping="Wrap" />
-                    <TextBlock x:Name="LinkRegister" IsTextSelectionEnabled="True" />
-
-                    <TextBlock x:Name="Step3" Text="3，在这里填入：" TextWrapping="Wrap" />
-
-                    <!-- 手机号 / 密码 / 眼睛 / 测试连接（输入完成即保存） -->
-                    <Grid ColumnSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock x:Name="PhoneLabel" Text="手机号：" VerticalAlignment="Center" />
-                        <TextBox x:Name="PhoneBox" Grid.Column="1" PlaceholderText="手机号" MinHeight="36" />
-                        <TextBlock x:Name="PasswordLabel" Grid.Column="2" Text="密码："
-                                   VerticalAlignment="Center" />
-
-                        <!-- 密码框 + 眼睛按钮合成一组，边框与底色统一画在外层 -->
-                        <Border x:Name="PasswordFrame" Grid.Column="3" CornerRadius="8" MinHeight="36"
-                                BorderThickness="1">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <Grid>
-                                    <!-- 已存密码的自绘掩码（按真实长度），输入框叠在上层 -->
-                                    <StackPanel x:Name="PasswordMask" Orientation="Horizontal" Spacing="2.5"
-                                                VerticalAlignment="Center" Margin="12,0" IsHitTestVisible="False" />
-                                    <PasswordBox x:Name="PasswordHidden" BorderThickness="0"
-                                                 Background="Transparent" Padding="12,0" MinHeight="34" />
-                                    <TextBox x:Name="PasswordShown" BorderThickness="0"
-                                             Background="Transparent" Padding="12,0" MinHeight="34"
-                                             Visibility="Collapsed" />
-                                </Grid>
-                                <Button x:Name="EyeButton" Grid.Column="1" Width="40" MinWidth="40"
-                                        Padding="0" Click="OnEyeClick"
-                                        Background="Transparent" BorderThickness="0" CornerRadius="0" />
-                            </Grid>
-                        </Border>
-
-                        <Button x:Name="TestButton" Grid.Column="4" Content="测试连接" Click="OnTestClick" />
-                    </Grid>
-                    <TextBlock x:Name="AccountHint" FontSize="13" TextWrapping="Wrap"
-                               IsTextSelectionEnabled="True" Visibility="Collapsed" />
-
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <TextBlock x:Name="Step4" Text="4，服务器地址：" VerticalAlignment="Center" />
-                        <Button x:Name="ServerHelpButton" Content="?" Click="OnServerHelpClick"
-                                Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10" FontSize="12" />
-                    </StackPanel>
+                    <!-- 胶囊：点文字打开下载链接弹窗（样式同第 3 步） -->
                     <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock x:Name="Step1" Text="1，" TextWrapping="Wrap" VerticalAlignment="Center" />
+                        <Border x:Name="DownloadCapsule" BorderThickness="1" CornerRadius="15"
+                                Padding="12,0" MinHeight="30">
+                            <Button x:Name="DownloadButton" Content="下载快期客户端"
+                                    Click="OnDownloadClick" BorderThickness="0"
+                                    Background="Transparent" Padding="2,0" CornerRadius="0" FontSize="13" />
+                        </Border>
+                    </StackPanel>
+
+                    <!-- 正文与官网链接同行：链接在 BuildLinks 里追加，Text 仅作未初始化时的兜底 -->
+                    <TextBlock x:Name="Step2" Text="2，在快期客户端或天勤官网注册：" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+
+                    <!-- 胶囊：点文字打开账号弹窗，点右侧问号看说明 -->
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock x:Name="Step3" Text="3，" TextWrapping="Wrap" VerticalAlignment="Center" />
+                        <Border x:Name="AccountCapsule" BorderThickness="1" CornerRadius="15"
+                                Padding="12,0,8,0" MinHeight="30">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <!-- 文字部分做成无边框按钮：整颗胶囊只有一个外描边 -->
+                                <Button x:Name="AccountEditorButton" Content="填入快期/天勤用户信息"
+                                        Click="OnAccountEditorClick" BorderThickness="0"
+                                        Background="Transparent" Padding="2,0" CornerRadius="0" FontSize="13" />
+                                <Button x:Name="AccountHelpButton" Content="?" Click="OnAccountHelpClick"
+                                        Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10"
+                                        FontSize="12" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- 步骤 4：标题 + 输入框 + 测试连接 + 问号同一行 -->
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock x:Name="Step4" Text="4，服务器地址：" VerticalAlignment="Center" />
                         <TextBox x:Name="ServerBox" Width="380" MinHeight="36"
                                  PlaceholderText="https://itrader.redboil.us.ci" />
                         <Button x:Name="ServerTestButton" Content="测试连接" Click="OnTestServerClick" />
-                    </StackPanel>
-
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <TextBlock x:Name="Step5" Text="5，Token 管理页面可以申请 Token。"
-                                   VerticalAlignment="Center" TextWrapping="Wrap" />
-                        <Button x:Name="TokenHelpButton" Content="?" Click="OnTokenHelpClick"
-                                Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10" FontSize="12" />
-                        <Button x:Name="TokenPageButton" Content="前往 Token 管理" Click="OnTokenPageClick"
-                                Margin="6,0,0,0" />
-                    </StackPanel>
-
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <TextBlock x:Name="Step6" Text="6，选择交易品种：" VerticalAlignment="Center" />
-                        <Button x:Name="SymbolHelpButton" Content="?" Click="OnSymbolHelpClick"
+                        <Button x:Name="ServerHelpButton" Content="?" Click="OnServerHelpClick"
                                 Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10" FontSize="12" />
                     </StackPanel>
+
+                    <!-- 步骤 5：胶囊内直接向服务器申请 Token，结果紧随其后显示 -->
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock x:Name="Step5" Text="5，" VerticalAlignment="Center" TextWrapping="Wrap" />
+                        <Border x:Name="TokenCapsule" BorderThickness="1" CornerRadius="15"
+                                Padding="12,0,8,0" MinHeight="30">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Button x:Name="TokenRequestButton" Content="申请 Token"
+                                        Click="OnTokenRequestClick" BorderThickness="0"
+                                        Background="Transparent" Padding="2,0" CornerRadius="0" FontSize="13" />
+                                <Button x:Name="TokenHelpButton" Content="?" Click="OnTokenHelpClick"
+                                        Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10"
+                                        FontSize="12" />
+                            </StackPanel>
+                        </Border>
+                        <!-- 限宽换行：长提示文案不至于把整行撑得过宽 -->
+                        <TextBlock x:Name="TokenHint" FontSize="13" TextWrapping="Wrap" MaxWidth="360"
+                                   VerticalAlignment="Center" Visibility="Collapsed" />
+                    </StackPanel>
+
+                    <!-- 胶囊：点文字打开品种选择弹窗，点右侧问号看说明 -->
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock x:Name="Step6" Text="6，" VerticalAlignment="Center" />
+                        <Border x:Name="SymbolCapsule" BorderThickness="1" CornerRadius="15"
+                                Padding="12,0,8,0" MinHeight="30">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Button x:Name="SymbolPickerButton" Content="选择交易品种"
+                                        Click="OnSymbolPickerClick" BorderThickness="0"
+                                        Background="Transparent" Padding="2,0" CornerRadius="0" FontSize="13" />
+                                <Button x:Name="SymbolHelpButton" Content="?" Click="OnSymbolHelpClick"
+                                        Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10"
+                                        FontSize="12" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- 步骤 7：标题与策略胶囊同一行；策略多时在标题右侧换行 -->
                     <StackPanel Spacing="6">
-                        <views:WrapPanel x:Name="SymbolPanel" Spacing="10" />
-                        <TextBlock x:Name="SymbolHint" FontSize="13" TextWrapping="Wrap" Visibility="Collapsed" />
-                    </StackPanel>
-
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <TextBlock x:Name="Step7" Text="7，选择交易策略：" VerticalAlignment="Center" />
-                        <Button x:Name="StrategyHelpButton" Content="?" Click="OnStrategyHelpClick"
-                                Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10" FontSize="12" />
-                    </StackPanel>
-                    <StackPanel Spacing="6">
-                        <views:WrapPanel x:Name="StrategyPanel" Spacing="10" />
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="Step7" Text="7，选择交易策略：" VerticalAlignment="Top"
+                                       Margin="0,5,0,0" />
+                            <views:WrapPanel x:Name="StrategyPanel" Grid.Column="1" Spacing="10" />
+                        </Grid>
                         <TextBlock x:Name="StrategyHint" FontSize="13" TextWrapping="Wrap" Visibility="Collapsed" />
                     </StackPanel>
                 </StackPanel>
