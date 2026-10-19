@@ -7,6 +7,9 @@ from typing import Iterator, Optional
 from ...domain.entities import Account, TradingConfiguration
 from ..security.crypto import PasswordCipher, load_or_create_key
 
+# 首次运行写入的服务器地址；设置页 / 模拟页都读写同一行配置
+DEFAULT_SERVER_URL = "https://itrader.redboil.us.ci"
+
 
 class ConfigService:
     """配置持久化到 SQLite（与交易记录共用 data/client.db）。
@@ -167,7 +170,7 @@ class ConfigService:
             )
         # 首次运行：写入默认配置
         config = TradingConfiguration(
-            server_url="http://192.168.100.100:3080",
+            server_url=DEFAULT_SERVER_URL,
             auto_trade=False,
             proxy_url="",
             auto_check_update=True,

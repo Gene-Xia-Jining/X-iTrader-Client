@@ -221,6 +221,8 @@ struct AppTextField: View {
     var secure = false
     @Binding var text: String
     var disabled = false
+    /// 回车或失焦时回调（用于无需点击保存即生效的字段）
+    var onCommit: (() -> Void)? = nil
 
     @Environment(\.colorScheme) private var scheme
     @FocusState private var focused: Bool
@@ -247,6 +249,11 @@ struct AppTextField: View {
         )
         .disabled(disabled)
         .focused($focused)
+        .onSubmit { onCommit?() }
+        .onChange(of: focused) { isFocused in
+            // 失焦同样视为输入完成；未提供回调时保持纯展示
+            if !isFocused { onCommit?() }
+        }
     }
 }
 

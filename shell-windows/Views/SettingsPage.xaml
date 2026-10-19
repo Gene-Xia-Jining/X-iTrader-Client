@@ -19,7 +19,7 @@
                         <TextBlock x:Name="ServerLabel" Text="服务器地址:" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <TextBox x:Name="ServerBox" Width="380"
-                                     PlaceholderText="http://localhost:8000" />
+                                     PlaceholderText="https://itrader.redboil.us.ci" />
                             <Button Content="测试连接" Click="OnTestServerClick" />
                         </StackPanel>
                         <TextBlock x:Name="ServerHint"

@@ -7,7 +7,7 @@ from cryptography.fernet import Fernet
 
 from src.domain.entities import Account, TradingConfiguration
 from src.infrastructure.security.crypto import PasswordCipher, load_or_create_key
-from src.infrastructure.config.config_service import ConfigService
+from src.infrastructure.config.config_service import ConfigService, DEFAULT_SERVER_URL
 
 
 def _make_config(**overrides):
@@ -246,6 +246,13 @@ class ConfigServiceEncryptionTest(unittest.TestCase):
     def test_key_file_created_next_to_db(self):
         self.service.save(_make_config(database_path=str(self.db_path)))
         self.assertTrue((Path(self._tmp.name) / ".secret.key").exists())
+
+    def test_first_run_writes_default_server_url(self):
+        # 首次运行没有配置行：写入默认服务器地址，设置页与模拟页读的是同一行
+        config = self.service.load()
+        self.assertEqual(config.server_url, DEFAULT_SERVER_URL)
+        self.assertEqual(DEFAULT_SERVER_URL, "https://itrader.redboil.us.ci")
+        self.assertEqual(self.service.load().server_url, config.server_url)
 
 
 if __name__ == "__main__":

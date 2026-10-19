@@ -11,7 +11,7 @@ using XTrader.Shell.State;
 namespace XTrader.Shell.Views;
 
 /// <summary>
-/// 模拟交易页：快期模拟账户五步引导卡片（对应 mac 壳的 SimulationView）。
+/// 模拟交易页：快期模拟账户六步引导卡片（对应 mac 壳的 SimulationView）。
 ///
 /// 已存密码不回传明文：后端只给「是否已设置」和长度，密码框按真实长度
 /// 自绘圆点掩码；点眼睛时才通过 accounts.get_password 受控取一次明文。
@@ -47,6 +47,15 @@ public sealed partial class SimulationPage : Page
     private int _storedPasswordLength;
     private bool _passwordVisible;
     private bool _testing;
+    /// <summary>眼睛按钮取回的已存明文：按此值回填时不算用户修改</summary>
+    private string _revealedPassword = "";
+    /// <summary>上一次从账号回填的值：未被编辑时才跟随 accounts 刷新</summary>
+    private string _lastAccountPhone = "";
+    private bool _accountHintError;
+    private bool _serverTesting;
+    /// <summary>上一次从配置回填的服务器地址：输入框未被编辑时才跟随配置刷新</summary>
+    private string _lastConfigServerUrl = "";
+    private bool? _serverTestSuccess;
     private bool _filling;
 
     /// <summary>品种/策略胶囊的重建签名：数据或选中态变化才重建，避免频繁刷界面</summary>
@@ -63,6 +72,39 @@ public sealed partial class SimulationPage : Page
         PasswordHidden.LostFocus += (_, _) => PasswordFrame.BorderBrush = Brush(Palette.Hairline);
         PasswordShown.GotFocus += (_, _) => PasswordFrame.BorderBrush = Brush(Palette.Primary);
         PasswordShown.LostFocus += (_, _) => PasswordFrame.BorderBrush = Brush(Palette.Hairline);
+        // 手机号 / 密码 / 服务器地址无需点保存：回车或失焦即视为输入完成
+        PhoneBox.LostFocus += (_, _) => SaveAccountIfChanged();
+        PhoneBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Windows.System.VirtualKey.Enter)
+            {
+                SaveAccountIfChanged();
+            }
+        };
+        PasswordHidden.LostFocus += (_, _) => SaveAccountIfChanged();
+        PasswordShown.LostFocus += (_, _) => SaveAccountIfChanged();
+        PasswordHidden.KeyDown += (_, e) =>
+        {
+            if (e.Key == Windows.System.VirtualKey.Enter)
+            {
+                SaveAccountIfChanged();
+            }
+        };
+        PasswordShown.KeyDown += (_, e) =>
+        {
+            if (e.Key == Windows.System.VirtualKey.Enter)
+            {
+                SaveAccountIfChanged();
+            }
+        };
+        ServerBox.LostFocus += (_, _) => SaveServerIfChanged();
+        ServerBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Windows.System.VirtualKey.Enter)
+            {
+                SaveServerIfChanged();
+            }
+        };
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -74,6 +116,7 @@ public sealed partial class SimulationPage : Page
             return;
         }
         FillFromAccount();
+        FillServerUrl();
     }
 
     private void ApplyPalette()
@@ -83,7 +126,7 @@ public sealed partial class SimulationPage : Page
         Card.Background = Brush(Palette.Card);
         Card.BorderBrush = Brush(Palette.Hairline);
 
-        foreach (var text in new[] { Intro, Step1, Step2, Step3, Step4, Step5, PhoneLabel, PasswordLabel })
+        foreach (var text in new[] { Intro, Step1, Step2, Step3, Step4, Step5, Step6, PhoneLabel, PasswordLabel })
         {
             text.Foreground = Brush(Palette.Ink);
             text.FontSize = 15;
@@ -96,8 +139,9 @@ public sealed partial class SimulationPage : Page
         // 问号按钮的悬停底与描边随主题
         SymbolHelpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
         StrategyHelpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        ServerHelpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
 
-        foreach (var divider in new[] { Divider1, Divider2, Divider3, Divider4 })
+        foreach (var divider in new[] { Divider1, Divider2, Divider3, Divider4, Divider5 })
         {
             divider.Fill = Brush(Palette.Divider);
         }
@@ -105,13 +149,16 @@ public sealed partial class SimulationPage : Page
         {
             hint.Foreground = Brush(Palette.Dim);
         }
+        UpdateAccountHint();
 
         PhoneBox.Background = Brush(Palette.InputBg);
         PhoneBox.BorderBrush = Brush(Palette.Hairline);
+        ServerBox.Background = Brush(Palette.InputBg);
+        ServerBox.BorderBrush = Brush(Palette.Hairline);
         PasswordFrame.Background = Brush(Palette.InputBg);
         PasswordFrame.BorderBrush = Brush(Palette.Hairline);
 
-        foreach (var help in new[] { SymbolHelpButton, StrategyHelpButton })
+        foreach (var help in new[] { SymbolHelpButton, StrategyHelpButton, ServerHelpButton })
         {
             help.Foreground = Brush(Palette.Primary);
             help.BorderBrush = Brush(Palette.Hairline);
@@ -121,6 +168,7 @@ public sealed partial class SimulationPage : Page
         BuildLinks();
         UpdateEyeButton();
         UpdatePasswordMask();
+        UpdateServerTestResult();
 
         // 配色变化后胶囊需要重绘
         _symbolKey = "";
@@ -131,6 +179,7 @@ public sealed partial class SimulationPage : Page
     private void OnStateChanged()
     {
         FillFromAccount();
+        FillServerUrl();
         RefreshTransientState();
     }
 
@@ -147,6 +196,200 @@ public sealed partial class SimulationPage : Page
         StrategyHint.Visibility = StrategyHint.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         TestButton.Content = _testing ? "测试中..." : "测试连接";
         TestButton.IsEnabled = !_testing;
+        ServerTestButton.Content = _serverTesting ? "测试中..." : "测试连接";
+        ServerTestButton.IsEnabled = !_serverTesting;
+    }
+
+    // -------- 账户（手机号 / 密码，输入完成即保存）--------
+
+    /// <summary>第 3 步自动保存的结果提示：成功绿 / 失败红，空文案不显示</summary>
+    private void UpdateAccountHint()
+    {
+        AccountHint.Visibility = AccountHint.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        AccountHint.Foreground = Brush(_accountHintError ? Hex(0xE3342F) : Hex(0x34C759));
+    }
+
+    private void SetAccountHint(string message, bool isError)
+    {
+        _accountHintError = isError;
+        AccountHint.Text = message;
+        UpdateAccountHint();
+    }
+
+    /// <summary>
+    /// 输入完成即保存（回车或失焦）：手机号/密码任一有变化就提交。
+    /// 信息还不完整时静默跳过（不打断输入），失败才在行下方提示。
+    /// </summary>
+    private void SaveAccountIfChanged()
+    {
+        var account = PhoneBox.Text.Trim();
+        if (PhoneBox.Text != account)
+        {
+            PhoneBox.Text = account;
+        }
+        if (account.Length == 0)
+        {
+            SetAccountHint("", isError: false);
+            return;
+        }
+
+        // 眼睛按钮取回的已存明文不算用户修改，避免失焦时把同一密码再提交一遍
+        var password = CurrentPassword;
+        if (password == _revealedPassword)
+        {
+            password = "";
+        }
+        var isNew = !State.Accounts.Any(a => a.Kind == "sim");
+        // 新账户必须设置密码；已存且已有密码的账户留空沿用旧密码（后端约定）
+        if (password.Length == 0 && (isNew || !_hasStoredPassword))
+        {
+            SetAccountHint("", isError: false);
+            return;
+        }
+
+        var sim = State.Accounts.FirstOrDefault(a => a.Kind == "sim");
+        if (sim is not null && sim.TqAccount == account && password.Length == 0)
+        {
+            SetAccountHint("", isError: false);
+            return;
+        }
+
+        var parameters = new JsonObject
+        {
+            ["kind"] = "sim",
+            ["label"] = "模拟账户",
+            ["tq_account"] = account,
+        };
+        if (sim is not null)
+        {
+            parameters["account_id"] = sim.Id;
+        }
+        if (password.Length > 0)
+        {
+            parameters["tq_password"] = password;
+        }
+        // 账户尚未建立时品种/策略只在本地选中，随首次保存一起提交
+        var symbols = AllSymbols;
+        if (symbols.Count > 0 && _selectedSymbol.Length > 0)
+        {
+            parameters["symbols"] = ToJsonArray([_selectedSymbol]);
+        }
+        if (_selectedStrategy.Length > 0)
+        {
+            parameters["strategy"] = _selectedStrategy;
+        }
+
+        _ = SaveAccountFieldsAsync(parameters, password.Length);
+    }
+
+    private async Task SaveAccountFieldsAsync(JsonObject parameters, int newPasswordLength)
+    {
+        var error = await State.SaveAccountAsync(parameters);
+        if (error is not null)
+        {
+            SetAccountHint(error, isError: true);
+            return;
+        }
+        if (newPasswordLength > 0)
+        {
+            // 保存成功后清空输入框、改为掩码显示，长度用刚提交的值
+            PasswordHidden.Password = "";
+            PasswordShown.Text = "";
+            _revealedPassword = "";
+            _hasStoredPassword = true;
+            _storedPasswordLength = newPasswordLength;
+            _passwordVisible = false;
+            PasswordHidden.Visibility = Visibility.Visible;
+            PasswordShown.Visibility = Visibility.Collapsed;
+            UpdateEyeButton();
+            UpdatePasswordMask();
+        }
+        SetAccountHint("已保存", isError: false);
+    }
+
+    // -------- 服务器地址（与设置页共用同一份配置）--------
+
+    /// <summary>用配置回填服务器地址；输入框已被编辑（与上次回填值不同）时不覆盖</summary>
+    private void FillServerUrl()
+    {
+        var current = State.Config.ServerUrl;
+        if (ServerBox.Text.Length == 0 || ServerBox.Text == _lastConfigServerUrl)
+        {
+            ServerBox.Text = current;
+        }
+        _lastConfigServerUrl = current;
+    }
+
+    private void UpdateServerTestResult()
+    {
+        ServerTestResult.Visibility =
+            ServerTestResult.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        // 与设置页 testServer 同款状态色（固定值，不随主题）
+        ServerTestResult.Foreground = Brush(_serverTestSuccess switch
+        {
+            true => Hex(0x34C759),
+            false => Hex(0xE3342F),
+            null => Hex(0xE8A33D),
+        });
+    }
+
+    /// <summary>
+    /// 输入完成即保存（回车或失焦）：与当前生效地址相同则不提交，空值视为放弃修改。
+    /// </summary>
+    private void SaveServerIfChanged()
+    {
+        var url = ServerBox.Text.Trim();
+        if (url.Length == 0)
+        {
+            // 空值不落库，回退到仍在生效的地址
+            ServerBox.Text = State.Config.ServerUrl;
+            _lastConfigServerUrl = ServerBox.Text;
+            return;
+        }
+        if (ServerBox.Text != url)
+        {
+            ServerBox.Text = url;
+        }
+        // 与上次回填/提交的值相同则不重复提交
+        if (url == _lastConfigServerUrl)
+        {
+            return;
+        }
+        // 记为「已回填值」，避免 config_changed 回填把刚保存的地址又覆盖掉
+        _lastConfigServerUrl = url;
+        // 只提交服务器地址，代理与自动更新沿用设置页里的现有值（后端按未提供字段保留）
+        State.SaveConfig(url, null);
+    }
+
+    private async void OnTestServerClick(object sender, RoutedEventArgs e)
+    {
+        var url = ServerBox.Text.Trim();
+        if (url.Length == 0)
+        {
+            SetServerTestResult("请先输入服务器地址", success: false);
+            return;
+        }
+        _serverTesting = true;
+        RefreshTransientState();
+        SetServerTestResult("正在测试连接...", success: null);
+        var message = await State.TestServerAsync(url);
+        _serverTesting = false;
+        RefreshTransientState();
+        SetServerTestResult(message, message.Contains("成功"));
+    }
+
+    private void SetServerTestResult(string message, bool? success)
+    {
+        _serverTestSuccess = success;
+        ServerTestResult.Text = message;
+        UpdateServerTestResult();
+    }
+
+    private async void OnServerHelpClick(object sender, RoutedEventArgs e)
+    {
+        await ShowInfoAsync(
+            "服务器地址",
+            "这是 iTrader 智能交易服务器的地址，与「设置」页是同一份配置，输入完成（回车或点到别处）即时保存生效。");
     }
 
     // -------- 引导文案与外链 --------
@@ -210,6 +453,8 @@ public sealed partial class SimulationPage : Page
         {
             PasswordHidden.Password = saved;
             PasswordShown.Text = saved;
+            // 记为「已取回的明文」：失焦保存时据此判定用户是否真的改了密码
+            _revealedPassword = saved;
         }
         // 取回失败时密码仍为空，掩码保留，不让人误以为密码被清空
         SetPasswordVisible(true);
@@ -466,11 +711,11 @@ public sealed partial class SimulationPage : Page
             _storedPasswordLength = sim.TqPasswordLength;
             UpdatePasswordMask();
 
-            if (PhoneBox.Text.Length > 0)
+            if (PhoneBox.Text.Length == 0 || PhoneBox.Text == _lastAccountPhone)
             {
-                return;
+                PhoneBox.Text = sim.TqAccount;
             }
-            PhoneBox.Text = sim.TqAccount;
+            _lastAccountPhone = sim.TqAccount;
             // 只在本地还没记下选择时回填，避免状态刷新把用户刚选的品种/策略冲掉
             if (sim.Symbols.Count > 0 && _selectedSymbol.Length == 0)
             {
@@ -489,72 +734,6 @@ public sealed partial class SimulationPage : Page
         {
             _filling = false;
         }
-    }
-
-    private async void OnSaveClick(object sender, RoutedEventArgs e)
-    {
-        var account = PhoneBox.Text.Trim();
-        if (account.Length == 0)
-        {
-            await ShowInfoAsync("输入错误", "手机号不能为空");
-            return;
-        }
-        var password = CurrentPassword;
-        var isNew = !State.Accounts.Any(a => a.Kind == "sim");
-        // 新账户必须设置密码；已存且已有密码的账户留空沿用旧密码（后端约定）
-        if (password.Length == 0 && (isNew || !_hasStoredPassword))
-        {
-            await ShowInfoAsync("输入错误", "密码不能为空");
-            return;
-        }
-
-        var parameters = new JsonObject
-        {
-            ["kind"] = "sim",
-            ["label"] = "模拟账户",
-            ["tq_account"] = account,
-        };
-        var sim = State.Accounts.FirstOrDefault(a => a.Kind == "sim");
-        if (sim is not null)
-        {
-            parameters["account_id"] = sim.Id;
-        }
-        if (password.Length > 0)
-        {
-            parameters["tq_password"] = password;
-        }
-        var symbols = AllSymbols;
-        if (symbols.Count > 0 && _selectedSymbol.Length > 0)
-        {
-            parameters["symbols"] = ToJsonArray([_selectedSymbol]);
-        }
-        if (_selectedStrategy.Length > 0)
-        {
-            parameters["strategy"] = _selectedStrategy;
-        }
-
-        var newPasswordLength = password.Length;
-        var error = await State.SaveAccountAsync(parameters);
-        if (error is not null)
-        {
-            await ShowInfoAsync("输入错误", error);
-            return;
-        }
-
-        if (newPasswordLength > 0)
-        {
-            // 保存成功后清空输入框、改为掩码显示，长度用刚提交的值
-            PasswordHidden.Password = "";
-            PasswordShown.Text = "";
-            _hasStoredPassword = true;
-            _storedPasswordLength = newPasswordLength;
-            _passwordVisible = false;
-            PasswordHidden.Visibility = Visibility.Visible;
-            PasswordShown.Visibility = Visibility.Collapsed;
-            UpdateEyeButton();
-            UpdatePasswordMask();
-        }
-        await ShowInfoAsync("保存成功", "模拟交易账户配置已保存");
     }
 
     private async void OnTestClick(object sender, RoutedEventArgs e)

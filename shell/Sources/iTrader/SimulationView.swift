@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 模拟交易页：快期模拟账户 4 步引导卡片（像素级对应 Qt SimulationPage）。
+/// 模拟交易页：快期模拟账户 6 步引导卡片（像素级对应 Qt SimulationPage）。
 struct SimulationView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var scheme
@@ -9,9 +9,26 @@ struct SimulationView: View {
     @State private var phone = ""
     @State private var password = ""
     @State private var passwordVisible = false
+    /// 眼睛按钮取回的已存明文：按此值回填时不算用户修改，避免失焦重复提交密码
+    @State private var revealedPassword = ""
+    /// 上一次从后端回填的账号：只有输入框未被编辑时才跟随 accounts 刷新，避免冲掉正在输入的内容
+    @State private var lastAccountPhone = ""
+    /// 第 3 步自动保存的结果提示（成功 / 失败），空串不显示
+    @State private var accountHint = ""
+    @State private var accountHasError = false
+    @FocusState private var passwordFocused: Bool
     // 已存模拟账户 => 后端不回传密码，但会返回「已设置」与长度，用于按真实长度绘制掩码圆点
     @State private var hasStoredPassword = false
     @State private var storedPasswordLength = 0
+    // 服务器地址（与设置页同一份配置；留空时后端已写入默认地址）
+    @State private var serverUrl = ""
+    /// 上一次从后端回填的地址：只有输入框未被编辑时才跟随配置刷新，避免冲掉正在输入的内容
+    @State private var lastConfigServerUrl = ""
+    @State private var serverTesting = false
+    @State private var serverTestMessage = ""
+    @State private var serverTestSuccess: Bool?  // nil = 进行中
+    @State private var showServerHelp = false
+    @State private var serverHelpHover = false
     // 品种单选（服务器品种；已订阅但不在服务器列表的品种保留显示）
     @State private var selectedSymbol = ""
     @State private var keptSymbols: [String] = []
@@ -19,7 +36,7 @@ struct SimulationView: View {
     @State private var selectedStrategy = ""
     // 测试连接进行中（按钮置灰）
     @State private var testing = false
-    // 步骤 4 / 5 的说明弹窗（原步骤下方的提示行）
+    // 步骤 5 / 6 的说明弹窗（原步骤下方的提示行）
     @State private var showSymbolHelp = false
     @State private var symbolHelpHover = false
     @State private var showStrategyHelp = false
@@ -51,7 +68,15 @@ struct SimulationView: View {
                     HairlineDivider()
 
                     HStack(spacing: 6) {
-                        guideLabel("4，选择交易品种：")
+                        guideLabel("4，服务器地址：")
+                        helpButton(serverHelpText, isPresented: $showServerHelp, isHovering: $serverHelpHover)
+                    }
+                    serverRow
+
+                    HairlineDivider()
+
+                    HStack(spacing: 6) {
+                        guideLabel("5，选择交易品种：")
                         helpButton(symbolHelpText, isPresented: $showSymbolHelp, isHovering: $symbolHelpHover)
                     }
                     symbolPicker
@@ -59,7 +84,7 @@ struct SimulationView: View {
                     HairlineDivider()
 
                     HStack(spacing: 6) {
-                        guideLabel("5，选择交易策略：")
+                        guideLabel("6，选择交易策略：")
                         helpButton(strategyHelpText, isPresented: $showStrategyHelp, isHovering: $strategyHelpHover)
                     }
                     strategyPicker
@@ -67,8 +92,12 @@ struct SimulationView: View {
                 .padding(20)
             }
         }
-        .onAppear(perform: fillFromAccount)
+        .onAppear {
+            fillFromAccount()
+            fillServerUrl()
+        }
         .onChange(of: appState.accounts) { _ in fillFromAccount() }
+        .onChange(of: appState.config) { _ in fillServerUrl() }
         .alert(item: $alert) { alert in
             Alert(
                 title: Text(alert.title),
@@ -104,7 +133,7 @@ struct SimulationView: View {
             .textSelection(.enabled)
     }
 
-    /// 20x20 圆形问号按钮，点击弹出说明文案（样式同设置页 helpButton）；步骤 4 / 5 共用
+    /// 20x20 圆形问号按钮，点击弹出说明文案（样式同设置页 helpButton）；步骤 4 / 5 / 6 共用
     private func helpButton(
         _ text: String,
         isPresented: Binding<Bool>,
@@ -133,22 +162,29 @@ struct SimulationView: View {
         }
     }
 
-    // MARK: - 输入行（手机号 / 密码 / 眼睛 / 保存 / 测试连接）
+    // MARK: - 输入行（手机号 / 密码 / 眼睛 / 测试连接；输入完成即保存）
 
     private var inputRow: some View {
-        HStack(spacing: 8) {
-            Text("手机号：")
-                .font(AppTheme.bodyFont)
-                .foregroundColor(AppTheme.ink(scheme))
-            AppTextField(placeholder: "手机号", text: $phone)
-            Text("密码：")
-                .font(AppTheme.bodyFont)
-                .foregroundColor(AppTheme.ink(scheme))
-            passwordField
-            eyeButton
-            AppButton("保存", variant: .secondary, size: .inline) { save() }
-            AppButton(testing ? "测试中..." : "测试连接", variant: .secondary, size: .inline, disabled: testing) {
-                testConnection()
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text("手机号：")
+                    .font(AppTheme.bodyFont)
+                    .foregroundColor(AppTheme.ink(scheme))
+                AppTextField(placeholder: "手机号", text: $phone, onCommit: saveAccountIfChanged)
+                Text("密码：")
+                    .font(AppTheme.bodyFont)
+                    .foregroundColor(AppTheme.ink(scheme))
+                passwordField
+                eyeButton
+                AppButton(testing ? "测试中..." : "测试连接", variant: .secondary, size: .inline, disabled: testing) {
+                    testConnection()
+                }
+            }
+            if !accountHint.isEmpty {
+                Text(accountHint)
+                    .font(AppTheme.bodyFont)
+                    .foregroundColor(accountHasError ? Color(hex: 0xE3342F) : Color(hex: 0x34C759))
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -170,6 +206,8 @@ struct SimulationView: View {
             }
             .textFieldStyle(.plain)
             .font(AppTheme.bodyFont)
+            .focused($passwordFocused)
+            .onSubmit { saveAccountIfChanged() }
         }
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, minHeight: 36)
@@ -179,6 +217,10 @@ struct SimulationView: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(AppTheme.hairline(scheme), lineWidth: 1)
         )
+        .onChange(of: passwordFocused) { focused in
+            // 失焦同样视为输入完成
+            if !focused { saveAccountIfChanged() }
+        }
     }
 
     /// 已存密码的自绘掩码：按真实密码长度绘制圆点（后端只回传长度，不回传明文），
@@ -205,6 +247,7 @@ struct SimulationView: View {
                     let savedPwd = await appState.getAccountPassword(accountId: simId, kind: "sim", field: "tq_password")
                     if !savedPwd.isEmpty {
                         password = savedPwd
+                        revealedPassword = savedPwd
                     }
                     passwordVisible = true
                 }
@@ -230,6 +273,90 @@ struct SimulationView: View {
         .pointerCursor()
     }
 
+    // MARK: - 服务器地址行（同设置页：输入框 + 测试连接 + 结果行；输入完成即保存）
+
+    private var serverRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                AppTextField(
+                    placeholder: "https://itrader.redboil.us.ci",
+                    text: $serverUrl,
+                    onCommit: saveServerIfChanged
+                )
+                AppButton(
+                    serverTesting ? "测试中..." : "测试连接",
+                    variant: .secondary,
+                    size: .inline,
+                    disabled: serverTesting
+                ) {
+                    testServer()
+                }
+            }
+            if !serverTestMessage.isEmpty {
+                Text(serverTestMessage)
+                    .font(AppTheme.bodyFont)
+                    .foregroundColor(serverTestColor)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// 步骤 4 问号弹窗文案：说明地址与设置页共用同一份配置
+    private var serverHelpText: String {
+        "这是 iTrader 智能交易服务器的地址，与「设置」页是同一份配置，输入完成（回车或点到别处）即时保存生效。"
+    }
+
+    /// 与设置页 testServer 同款状态色（固定值，不随主题）
+    private var serverTestColor: Color {
+        switch serverTestSuccess {
+        case .none: return Color(hex: 0xE8A33D)
+        case .some(true): return Color(hex: 0x34C759)
+        case .some(false): return Color(hex: 0xE3342F)
+        }
+    }
+
+    /// 用配置回填服务器地址；输入框已被编辑（与上次回填值不同）时不覆盖
+    private func fillServerUrl() {
+        let current = appState.config.serverUrl
+        if serverUrl.isEmpty || serverUrl == lastConfigServerUrl {
+            serverUrl = current
+        }
+        lastConfigServerUrl = current
+    }
+
+    /// 输入完成即保存（回车或失焦）：与上次回填/提交的地址相同则不重复提交，空值视为放弃修改
+    private func saveServerIfChanged() {
+        let url = serverUrl.trimmingCharacters(in: .whitespaces)
+        guard !url.isEmpty else {
+            // 空值不落库，回退到仍在生效的地址
+            serverUrl = appState.config.serverUrl
+            lastConfigServerUrl = serverUrl
+            return
+        }
+        serverUrl = url
+        guard url != lastConfigServerUrl else { return }
+        lastConfigServerUrl = url
+        appState.saveConfig(serverUrl: url, proxyUrl: nil)
+    }
+
+    private func testServer() {
+        let url = serverUrl.trimmingCharacters(in: .whitespaces)
+        guard !url.isEmpty else {
+            serverTestMessage = "请先输入服务器地址"
+            serverTestSuccess = false
+            return
+        }
+        serverTesting = true
+        serverTestMessage = "正在测试连接..."
+        serverTestSuccess = nil
+        Task {
+            let message = await appState.testServer(url: url)
+            serverTesting = false
+            serverTestMessage = message
+            serverTestSuccess = message.contains("成功")
+        }
+    }
+
     // MARK: - 品种区（单选胶囊，对应 Qt SymbolPicker；刷新入口在顶部栏）
 
     private var symbolPicker: some View {
@@ -246,7 +373,7 @@ struct SimulationView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            // 数量提示已移入步骤 4 问号弹窗，行内只保留获取中 / 失败等瞬时状态
+            // 数量提示已移入步骤 5 问号弹窗，行内只保留获取中 / 失败等瞬时状态
             if !pickerHint.isEmpty {
                 Text(pickerHint)
                     .font(AppTheme.dimFont)
@@ -275,7 +402,7 @@ struct SimulationView: View {
         return "尚未获取品种"
     }
 
-    /// 步骤 4 问号弹窗文案：模拟账户范围说明 + 可选品种数量
+    /// 步骤 5 问号弹窗文案：模拟账户范围说明 + 可选品种数量
     private var symbolHelpText: String {
         let note = "提示：模拟帐户不支持组合/套利和期权交易，仅国内商品和股指国债。"
         guard !appState.serverSymbols.isEmpty else { return note }
@@ -315,7 +442,7 @@ struct SimulationView: View {
                     .help(strategy.description)
                 }
             }
-            // 数量与提示文案已移入步骤 5 问号弹窗，行内只保留获取中 / 失败等瞬时状态
+            // 数量与提示文案已移入步骤 6 问号弹窗，行内只保留获取中 / 失败等瞬时状态
             if !strategyHint.isEmpty {
                 Text(strategyHint)
                     .font(AppTheme.dimFont)
@@ -335,7 +462,7 @@ struct SimulationView: View {
         return "尚未获取策略"
     }
 
-    /// 步骤 5 问号弹窗文案：策略来源说明 + 可选策略数量
+    /// 步骤 6 问号弹窗文案：策略来源说明 + 可选策略数量
     private var strategyHelpText: String {
         let note = "提示：策略由服务器计算交易信号，客户端按信号执行开仓 / 平仓。"
         guard !appState.serverStrategies.isEmpty else { return note }
@@ -360,7 +487,7 @@ struct SimulationView: View {
     // MARK: - 数据与动作
 
     /// 用已存模拟账户回填（后端不回传密码，密码留空 = 沿用旧值）；
-    /// 仅在手机号为空时填充，避免覆盖用户正在编辑的内容
+    /// 手机号在未被编辑时跟随 accounts 刷新，避免覆盖正在输入的内容
     private func fillFromAccount() {
         guard let sim = appState.accounts.first(where: { $0.kind == "sim" }) else {
             hasStoredPassword = false
@@ -370,8 +497,10 @@ struct SimulationView: View {
         // 后端不回传密码，但会返回「是否已设置」与长度，用于按真实长度绘制掩码圆点
         hasStoredPassword = sim.hasTqPassword
         storedPasswordLength = sim.tqPasswordLength
-        guard phone.isEmpty else { return }
-        phone = sim.tqAccount
+        if phone.isEmpty || phone == lastAccountPhone {
+            phone = sim.tqAccount
+        }
+        lastAccountPhone = sim.tqAccount
         if let first = sim.symbols.first {
             selectedSymbol = first
             if !appState.serverSymbols.contains(first) && keptSymbols.isEmpty {
@@ -387,16 +516,28 @@ struct SimulationView: View {
         !appState.serverSymbols.isEmpty || !keptSymbols.isEmpty
     }
 
-    private func save() {
+    /// 输入完成即保存（回车或失焦）：手机号/密码任一有变化就提交。
+    /// 信息还不完整时静默跳过（不打断输入），失败才在行下方提示。
+    private func saveAccountIfChanged() {
         let account = phone.trimmingCharacters(in: .whitespaces)
+        if phone != account { phone = account }
         guard !account.isEmpty else {
-            alert = .inputError("手机号不能为空")
+            accountHint = ""
             return
         }
-        // 新账户必须设置密码；已存且已有密码的账户留空沿用旧密码（后端约定）
+
+        // 眼睛按钮取回的已存明文不算用户修改，避免失焦时把同一密码再提交一遍
+        let newPassword = password == revealedPassword ? "" : password
         let isNew = !appState.accounts.contains { $0.kind == "sim" }
-        guard !password.isEmpty || (!isNew && hasStoredPassword) else {
-            alert = .inputError("密码不能为空")
+        // 新账户必须设置密码；已存且已有密码的账户留空沿用旧密码（后端约定）
+        guard !newPassword.isEmpty || (!isNew && hasStoredPassword) else {
+            accountHint = ""
+            return
+        }
+
+        let sim = appState.accounts.first(where: { $0.kind == "sim" })
+        guard sim?.tqAccount != account || !newPassword.isEmpty else {
+            accountHint = ""
             return
         }
 
@@ -405,10 +546,11 @@ struct SimulationView: View {
             "label": "模拟账户",
             "tq_account": account,
         ]
-        if let sim = appState.accounts.first(where: { $0.kind == "sim" }) {
+        if let sim {
             params["account_id"] = sim.id
         }
-        if !password.isEmpty { params["tq_password"] = password }
+        if !newPassword.isEmpty { params["tq_password"] = newPassword }
+        // 账户尚未建立时品种/策略只在本地选中，随首次保存一起提交
         if hasOptions && !selectedSymbol.isEmpty {
             params["symbols"] = [selectedSymbol]
         }
@@ -417,17 +559,20 @@ struct SimulationView: View {
         }
 
         Task {
-            let newPasswordLength = password.count
+            let newPasswordLength = newPassword.count
             await appState.runAction(method: "accounts.save", params: params)
             if appState.lastActionError.isEmpty {
-                alert = .saveSuccess
+                accountHint = "已保存"
+                accountHasError = false
                 if newPasswordLength > 0 {
                     password = ""
+                    revealedPassword = ""
                     hasStoredPassword = true
                     storedPasswordLength = newPasswordLength
                 }
             } else {
-                alert = .inputError(appState.lastActionError)
+                accountHint = appState.lastActionError
+                accountHasError = true
             }
         }
     }
@@ -456,7 +601,6 @@ struct SimulationView: View {
 
 enum ActiveAlert: Identifiable {
     case inputError(String)
-    case saveSuccess
     case testResult(message: String)
     case configSaved
     case accountSaved
@@ -464,7 +608,6 @@ enum ActiveAlert: Identifiable {
     var id: String {
         switch self {
         case .inputError(let msg): return "error-\(msg)"
-        case .saveSuccess: return "saved"
         case .testResult(let msg): return "test-\(msg)"
         case .configSaved: return "config-saved"
         case .accountSaved: return "account-saved"
@@ -474,7 +617,6 @@ enum ActiveAlert: Identifiable {
     var title: String {
         switch self {
         case .inputError: return "输入错误"
-        case .saveSuccess: return "保存成功"
         case .testResult: return "测试连接"
         case .configSaved, .accountSaved: return "保存成功"
         }
@@ -483,7 +625,6 @@ enum ActiveAlert: Identifiable {
     var message: String {
         switch self {
         case .inputError(let msg): return msg
-        case .saveSuccess: return "模拟交易账户配置已保存"
         case .testResult(let msg): return msg
         case .configSaved: return "配置已保存并生效"
         case .accountSaved: return "实盘账户已保存"

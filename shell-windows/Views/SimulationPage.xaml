@@ -25,14 +25,13 @@
 
                     <TextBlock x:Name="Step3" Text="3，在这里填入：" TextWrapping="Wrap" />
 
-                    <!-- 手机号 / 密码 / 眼睛 / 保存 / 测试连接 -->
+                    <!-- 手机号 / 密码 / 眼睛 / 测试连接（输入完成即保存） -->
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
@@ -65,14 +64,32 @@
                             </Grid>
                         </Border>
 
-                        <Button Grid.Column="4" Content="保存" Click="OnSaveClick" />
-                        <Button x:Name="TestButton" Grid.Column="5" Content="测试连接" Click="OnTestClick" />
+                        <Button x:Name="TestButton" Grid.Column="4" Content="测试连接" Click="OnTestClick" />
                     </Grid>
+                    <TextBlock x:Name="AccountHint" FontSize="13" TextWrapping="Wrap"
+                               IsTextSelectionEnabled="True" Visibility="Collapsed" />
 
                     <Rectangle x:Name="Divider3" Height="1" />
 
                     <StackPanel Orientation="Horizontal" Spacing="6">
-                        <TextBlock x:Name="Step4" Text="4，选择交易品种：" VerticalAlignment="Center" />
+                        <TextBlock x:Name="Step4" Text="4，服务器地址：" VerticalAlignment="Center" />
+                        <Button x:Name="ServerHelpButton" Content="?" Click="OnServerHelpClick"
+                                Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10" FontSize="12" />
+                    </StackPanel>
+                    <StackPanel Spacing="6">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBox x:Name="ServerBox" Width="380" MinHeight="36"
+                                     PlaceholderText="https://itrader.redboil.us.ci" />
+                            <Button x:Name="ServerTestButton" Content="测试连接" Click="OnTestServerClick" />
+                        </StackPanel>
+                        <TextBlock x:Name="ServerTestResult" FontSize="13" TextWrapping="Wrap"
+                                   IsTextSelectionEnabled="True" Visibility="Collapsed" />
+                    </StackPanel>
+
+                    <Rectangle x:Name="Divider4" Height="1" />
+
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock x:Name="Step5" Text="5，选择交易品种：" VerticalAlignment="Center" />
                         <Button x:Name="SymbolHelpButton" Content="?" Click="OnSymbolHelpClick"
                                 Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10" FontSize="12" />
                     </StackPanel>
@@ -81,10 +98,10 @@
                         <TextBlock x:Name="SymbolHint" FontSize="13" TextWrapping="Wrap" Visibility="Collapsed" />
                     </StackPanel>
 
-                    <Rectangle x:Name="Divider4" Height="1" />
+                    <Rectangle x:Name="Divider5" Height="1" />
 
                     <StackPanel Orientation="Horizontal" Spacing="6">
-                        <TextBlock x:Name="Step5" Text="5，选择交易策略：" VerticalAlignment="Center" />
+                        <TextBlock x:Name="Step6" Text="6，选择交易策略：" VerticalAlignment="Center" />
                         <Button x:Name="StrategyHelpButton" Content="?" Click="OnStrategyHelpClick"
                                 Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10" FontSize="12" />
                     </StackPanel>

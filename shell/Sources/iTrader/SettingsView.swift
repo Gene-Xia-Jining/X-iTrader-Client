@@ -109,7 +109,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 helpButton
-                AppTextField(placeholder: "http://localhost:8000", text: $serverUrl)
+                AppTextField(placeholder: "https://itrader.redboil.us.ci", text: $serverUrl)
                 AppButton("测试连接", variant: .secondary, disabled: testing) { testServer() }
             }
             if !testMessage.isEmpty {
