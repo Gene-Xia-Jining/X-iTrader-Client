@@ -30,25 +30,55 @@ public sealed class LogLine(DateTime time, string level, string message)
 
 /// <summary>
 /// 「测试连接」验证通过的一组快期凭据：手机号 + 密码摘要。
-/// 只留摘要，避免为了一个 UI 状态在内存里多存一份明文。
+/// 只留摘要，避免为了一个 UI 状态多存一份明文。
 /// </summary>
 public sealed class VerifiedTqCredentials
 {
+    /// <summary>
+    /// 落盘键：重启后模拟页步骤 3 胶囊仍要显示为已验证。
+    /// 手机号与摘要存同一个键（<c>手机号|摘要</c>），写入一次完成，
+    /// 不会出现「号码是新的、摘要是旧的」这种跨两次写的中间态。
+    /// </summary>
+    private const string PrefKey = "sim.verifiedTqCredentials";
+
     public VerifiedTqCredentials(string account, string password)
     {
         Account = account.Trim();
         PasswordDigest = Digest(password);
     }
 
-    public string Account { get; }
+    /// <summary>回读落盘记录时用（摘要已是摘要，不再二次计算）</summary>
+    private VerifiedTqCredentials()
+    {
+    }
+
+    public string Account { get; private set; } = "";
 
     /// <summary>空串表示这次验证沿用的是已存密码</summary>
-    public string PasswordDigest { get; }
+    public string PasswordDigest { get; private set; } = "";
 
     public bool Matches(string account, string password) =>
         Account == account.Trim() && PasswordDigest == Digest(password);
 
-    /// <summary>凭据只在进程内比较，不涉及落盘或传输</summary>
+    /// <summary>恢复上次验证通过的记录；只回读手机号与摘要，没有任何明文</summary>
+    internal static VerifiedTqCredentials? Load()
+    {
+        var raw = ShellPrefs.Get(PrefKey);
+        if (string.IsNullOrEmpty(raw))
+        {
+            return null;
+        }
+        var parts = raw.Split('|', 2);
+        return parts.Length != 2 || parts[0].Length == 0
+            ? null
+            : new VerifiedTqCredentials { Account = parts[0], PasswordDigest = parts[1] };
+    }
+
+    internal void Save() => ShellPrefs.Set(PrefKey, $"{Account}|{PasswordDigest}");
+
+    internal static void Clear() => ShellPrefs.Set(PrefKey, "");
+
+    /// <summary>只用于本地比较与记忆验证结果，不涉及任何传输</summary>
     private static string Digest(string password) =>
         Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(password)));
@@ -422,15 +452,27 @@ public sealed class AppState : INotifyPropertyChanged
 
     internal void ClearStartBlockedIssues() => StartBlockedIssues = [];
 
-    private VerifiedTqCredentials? _verifiedTqCredentials;
+    private VerifiedTqCredentials? _verifiedTqCredentials = XTrader.Shell.State.VerifiedTqCredentials.Load();
     /// <summary>
-    /// 「测试连接」验证通过的那组快期凭据，会话内跨页面保留：
+    /// 「测试连接」验证通过的那组快期凭据，跨页面、跨重启保留：
     /// 模拟页第 3 步胶囊据此显示绿色。只存摘要，不参与任何登录。
     /// </summary>
     public VerifiedTqCredentials? VerifiedTqCredentials
     {
         get => _verifiedTqCredentials;
-        private set => Set(ref _verifiedTqCredentials, value);
+        private set
+        {
+            // 属性与类型同名，类内只能用完全限定名引用类型
+            if (value is null)
+            {
+                XTrader.Shell.State.VerifiedTqCredentials.Clear();
+            }
+            else
+            {
+                value.Save();
+            }
+            Set(ref _verifiedTqCredentials, value);
+        }
     }
 
     private UpdatePhase _updatePhase = new UpdatePhase.Idle();
@@ -552,7 +594,7 @@ public sealed class AppState : INotifyPropertyChanged
                 {
                     ConnState = ConnState.Connected;
                     BackendVersion = info.Version;
-                    AppendLog("SUCCESS", $"已连接后端 v{info.Version} (pid {info.Pid})");
+                    AppendLog("SUCCESS", $"已连接后端 {info.Version} (pid {info.Pid})");
                     // 差量更新安装完成后的首次连接：暂存包已生效，状态回到 idle
                     if (UpdatePhase is UpdatePhase.Ready)
                     {

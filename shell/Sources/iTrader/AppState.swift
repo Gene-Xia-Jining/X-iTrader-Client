@@ -69,13 +69,18 @@ struct StrategyInfo: Identifiable, Equatable {
 }
 
 /// 「测试连接」验证通过的一组快期凭据：手机号 + 密码摘要。
-/// 密码只留摘要，避免为了一个 UI 状态在内存里多存一份明文。
+/// 密码只留摘要，避免为了一个 UI 状态多存一份明文。
 struct VerifiedTqCredentials: Equatable {
     let account: String
     let passwordDigest: String
 
+    /// 落盘位置：重启后模拟页步骤 3 胶囊仍要显示为已验证。
+    /// 手机号与摘要存在同一个键里（`手机号|摘要`），写入是一次原子的，
+    /// 不会出现「号码更新了、摘要还是旧的」这种跨越两次写的中间态
+    private static let defaultsKey = "sim.verifiedTqCredentials"
+
     static func digest(_ password: String) -> String {
-        // 凭据只在进程内比较，用 SHA256 足够，不涉及落盘或传输
+        // 只用于本地比较与记忆验证结果，SHA256 足够；不涉及任何传输
         SHA256.hash(data: Data(password.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
@@ -85,9 +90,31 @@ struct VerifiedTqCredentials: Equatable {
         passwordDigest = Self.digest(password)
     }
 
+    private init(account: String, passwordDigest: String) {
+        self.account = account
+        self.passwordDigest = passwordDigest
+    }
+
     func matches(account: String, password: String) -> Bool {
         self.account == account.trimmingCharacters(in: .whitespaces)
             && passwordDigest == Self.digest(password)
+    }
+
+    /// 恢复上次验证通过的记录；只回读手机号与摘要，没有任何明文。
+    /// 手机号为空即视为未验证（摘要空串是合法值，表示沿用已存密码）
+    static func loadFromDefaults() -> VerifiedTqCredentials? {
+        guard let raw = UserDefaults.standard.string(forKey: defaultsKey) else { return nil }
+        let parts = raw.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2, !parts[0].isEmpty else { return nil }
+        return VerifiedTqCredentials(account: String(parts[0]), passwordDigest: String(parts[1]))
+    }
+
+    func saveToDefaults() {
+        UserDefaults.standard.set("\(account)|\(passwordDigest)", forKey: Self.defaultsKey)
+    }
+
+    static func clearDefaults() {
+        UserDefaults.standard.removeObject(forKey: defaultsKey)
     }
 }
 
@@ -229,9 +256,10 @@ final class AppState: ObservableObject {
     @Published var startBlockedIssues: [String] = []
     /// 启动检查进行中（顶栏按钮置灰防重复点击）
     @Published var startChecking = false
-    /// 「测试连接」验证通过的那组快期凭据（手机号 + 密码摘要），会话内跨页面保留。
+    /// 「测试连接」验证通过的那组快期凭据（手机号 + 密码摘要），跨页面、跨重启保留。
     /// 只存摘要不存明文：这里只用于让步骤 3 胶囊显示绿色，不参与任何登录
-    @Published private(set) var verifiedTqCredentials: VerifiedTqCredentials?
+    @Published private(set) var verifiedTqCredentials: VerifiedTqCredentials? =
+        VerifiedTqCredentials.loadFromDefaults()
 
     private var backend: BackendProcess?
     private var client: RpcClient?
@@ -317,7 +345,7 @@ final class AppState: ObservableObject {
                 client = rpc
                 connState = .connected
                 connectedBackendPid = Int32(info.pid)
-                appendLog(level: "SUCCESS", message: "已连接后端 v\(info.version) (pid \(info.pid))")
+                appendLog(level: "SUCCESS", message: "已连接后端 \(info.version) (pid \(info.pid))")
                 backendVersion = info.version
                 // 差量更新安装完成后的首次连接：暂存包已生效，状态回到 idle
                 if case .ready = updatePhase {
@@ -612,12 +640,23 @@ final class AppState: ObservableObject {
                 params: params
             )
             // 验证通过即记下这组凭据：模拟页步骤 3 胶囊据此显示绿色，
-            // 切页面回来仍然有效；凭据被改动则自动失配
-            verifiedTqCredentials = VerifiedTqCredentials(account: account, password: password)
+            // 切页面回来、重启之后仍然有效；凭据被改动则自动失配
+            setVerifiedTqCredentials(VerifiedTqCredentials(account: account, password: password))
             return resp["message"] as? String ?? "连接成功"
         } catch {
-            verifiedTqCredentials = nil
+            setVerifiedTqCredentials(nil)
             return "连接失败: \(error.localizedDescription)"
+        }
+    }
+
+    /// 验证结果的唯一写入口：内存与落盘保持一致，
+    /// 调用的地方不会出现「界面绿了但重启后丢失」的情况
+    private func setVerifiedTqCredentials(_ credentials: VerifiedTqCredentials?) {
+        verifiedTqCredentials = credentials
+        if let credentials {
+            credentials.saveToDefaults()
+        } else {
+            VerifiedTqCredentials.clearDefaults()
         }
     }
 
@@ -626,9 +665,11 @@ final class AppState: ObservableObject {
     /// 否则凭据已经变了，清掉验证记录
     func settleVerifiedTqCredentials(afterSavingPassword password: String, for account: String) {
         guard let verified = verifiedTqCredentials else { return }
-        verifiedTqCredentials = verified.matches(account: account, password: password)
-            ? VerifiedTqCredentials(account: account, password: "")
-            : nil
+        setVerifiedTqCredentials(
+            verified.matches(account: account, password: password)
+                ? VerifiedTqCredentials(account: account, password: "")
+                : nil
+        )
     }
 
     func getAccountPassword(accountId: String? = nil, kind: String? = nil, field: String = "tq_password") async -> String {

@@ -63,7 +63,7 @@ class RpcServer:
         self._service.attach_broadcast(self.broadcast)
         self._write_info_file()
         print(
-            f"iTrader 后端已启动: {self._host}:{self._port} (pid={os.getpid()}, v{__version__})",
+            f"iTrader 后端已启动: {self._host}:{self._port} (pid={os.getpid()}, {__version__})",
             flush=True,
         )
 

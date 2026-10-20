@@ -12,7 +12,7 @@ struct iTraderApp: App {
             RootView()
                 .environmentObject(appState)
                 .environment(\.dynamicTypeSize, .xLarge)
-                .frame(minWidth: 960, minHeight: 620)
+                .frame(minWidth: 0, minHeight: 620)
                 .onAppear {
                     appState.start()
                     appDelegate.appState = appState
@@ -199,9 +199,9 @@ struct RootView: View {
 
     private var headBar: some View {
         HStack(spacing: 12) {
+            versionPill
             serverStatusPill
             Spacer()
-            versionPill
             autoTradePill
             AppButton(dark ? "浅色" : "深色", variant: .secondary) { dark.toggle() }
             // 刷新服务器品种与策略（模拟/实盘页共用），获取中置灰防重复点击
@@ -319,7 +319,7 @@ struct RootView: View {
     private var versionPill: some View {
         Button { showVersionSheet = true } label: {
             HStack(spacing: 6) {
-                Text("v\(appState.backendVersion.isEmpty ? "-" : appState.backendVersion)")
+                Text(appState.backendVersion.isEmpty ? "-" : appState.backendVersion)
                     .font(AppTheme.bodyFont.weight(.semibold))
                     .foregroundColor(AppTheme.dim(scheme))
                     .contentShape(Rectangle())
@@ -525,17 +525,22 @@ private struct StartBlockedSheet: View {
     }
 }
 
-// MARK: - 版本弹窗：当前版本 + 检查更新 + 确认更新
+// MARK: - 版本弹窗：当前版本 + 检查更新 + 确认更新 + 自动检查开关
 
-/// 顶栏版本胶囊点开的弹窗。
+/// 顶栏版本胶囊点开的弹窗：当前版本 + 检查更新 + 确认更新 + 启动时自动检查开关。
 ///
 /// 确认一次即可：点「确认更新」后自动下载并在完成后安装重启，不需要用户再去
-/// 设置页点第二次。设置页原有的检查更新入口保留，两处共用同一份 updatePhase。
+/// 别处点第二次。软件更新相关的入口全部集中在这里（设置页已不再提供）。
+/// 标题栏与「关闭」按钮的排布同模拟页各弹窗：标题靠左，关闭在右上角。
 private struct VersionSheet: View {
     let onClose: () -> Void
 
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var scheme
+
+    /// 开关的本地镜像：配置要等后端 config_changed 回传，直接绑 config 会闪一下
+    @State private var autoCheckUpdate = true
+    @State private var savedAutoCheck = true
 
     private var busy: Bool {
         switch appState.updatePhase {
@@ -545,26 +550,30 @@ private struct VersionSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 12) {
+            // 标题行：标题靠左、「关闭」在右上角（与模拟页各弹窗一致）
             HStack(spacing: 10) {
-                Image(systemName: "arrow.triangle.2.circlepath")
-                    .foregroundColor(AppTheme.primary(scheme))
                 Text("软件更新")
-                    .font(AppTheme.titleFont)
+                    .font(AppTheme.bodyFont.weight(.semibold))
                     .foregroundColor(AppTheme.ink(scheme))
-                Spacer()
-                Text("当前版本 v\(appState.backendVersion.isEmpty ? "-" : appState.backendVersion)")
-                    .font(AppTheme.bodyFont)
-                    .foregroundColor(AppTheme.dim(scheme))
+                Spacer(minLength: 12)
+                AppButton("关闭", variant: .secondary, size: .inline) { onClose() }
+                    .keyboardShortcut(.cancelAction)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 20)
-            .padding(.bottom, 14)
 
-            content
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 16)
+            HairlineDivider()
+
+            Text("当前版本 \(appState.backendVersion.isEmpty ? "-" : appState.backendVersion)")
+                .font(AppTheme.dimFont)
+                .foregroundColor(AppTheme.dim(scheme))
+
+            // 未检查过时不留提示语，也不占位
+            if appState.updatePhase != .idle {
+                content
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            autoCheckRow
 
             HStack(spacing: 8) {
                 AppButton("检查更新", variant: .secondary, disabled: busy) {
@@ -572,22 +581,22 @@ private struct VersionSheet: View {
                 }
                 Spacer()
                 if case .available(let version, _) = appState.updatePhase {
-                    AppButton("确认更新 v\(version)") { appState.confirmUpdate() }
+                    AppButton("确认更新 \(version)") { appState.confirmUpdate() }
                         .keyboardShortcut(.defaultAction)
                 } else if case .ready(let kind) = appState.updatePhase, !appState.updateInstalling {
-                    // 从设置页发起下载（没有勾选自动安装）时，这里补一个安装入口
+                    // 下载已完成但还没安装（例如启动静默探活发现新版本后手动下载）
                     AppButton("安装并重启（\(kind)）") { appState.applyUpdate() }
                         .keyboardShortcut(.defaultAction)
                 } else if case .downloading = appState.updatePhase {
                     AppButton("取消", variant: .secondary) { appState.cancelUpdate() }
                 }
-                AppButton("关闭", variant: .secondary) { onClose() }
-                    .keyboardShortcut(.cancelAction)
             }
-            .padding(20)
         }
+        .padding(20)
         .frame(width: 520)
         .background(AppTheme.canvas(scheme))
+        .onAppear(perform: fillFromConfig)
+        .onChange(of: appState.config) { _ in fillFromConfig() }
     }
 
     @ViewBuilder
@@ -596,12 +605,13 @@ private struct VersionSheet: View {
         VStack(alignment: .leading, spacing: 10) {
             switch phase {
             case .idle:
-                message("点击「检查更新」查看是否有新版本。", color: AppTheme.dim(scheme))
+                // 未检查过时不显示提示语，直接留空
+                EmptyView()
             case .checking:
                 message("正在检查更新…", color: AppTheme.warning(scheme))
             case .available(let version, let hasPatch):
                 message(
-                    "发现新版本 v\(version)（\(hasPatch ? "差量更新包" : "完整更新包")）。"
+                    "发现新版本 \(version)（\(hasPatch ? "差量更新包" : "完整更新包")）。"
                     + "确认后自动下载并安装，完成后客户端会自动重启。",
                     color: AppTheme.ink(scheme)
                 )
@@ -623,6 +633,38 @@ private struct VersionSheet: View {
                 message(text, color: AppTheme.danger(scheme))
             }
         }
+    }
+
+    /// 启动时自动检查更新：勾选即落库，下次启动生效。
+    private var autoCheckRow: some View {
+        Button {
+            autoCheckUpdate.toggle()
+            saveAutoCheckIfChanged()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: autoCheckUpdate ? "checkmark.square.fill" : "square")
+                    .foregroundColor(autoCheckUpdate ? AppTheme.primary(scheme) : AppTheme.dim(scheme))
+                Text("启动时自动检查更新，发现新版本时提示")
+                    .font(AppTheme.bodyFont)
+                    .foregroundColor(AppTheme.ink(scheme))
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: 30)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+    }
+
+    private func saveAutoCheckIfChanged() {
+        guard autoCheckUpdate != savedAutoCheck else { return }
+        savedAutoCheck = autoCheckUpdate
+        appState.saveConfig(serverUrl: nil, proxyUrl: nil, autoCheckUpdate: autoCheckUpdate)
+    }
+
+    private func fillFromConfig() {
+        autoCheckUpdate = appState.config.autoCheckUpdate
+        savedAutoCheck = appState.config.autoCheckUpdate
     }
 
     private func message(_ text: String, color: Color) -> some View {

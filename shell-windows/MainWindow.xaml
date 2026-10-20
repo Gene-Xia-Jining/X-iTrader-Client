@@ -11,31 +11,15 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 顶部操作栏：服务器状态 + 自动交易开关 / 深色浅色 / 刷新 / 退出 -->
+        <!-- 顶部操作栏：版本胶囊 + 服务器状态 / 自动交易开关 / 深色浅色 / 刷新 / 退出 -->
         <Border x:Name="TopBar" Grid.Row="0" BorderThickness="0,0,0,1" Padding="16,10">
             <Grid>
-                <Border x:Name="ServerPill"
-                        HorizontalAlignment="Left"
-                        VerticalAlignment="Center"
-                        MinHeight="36"
-                        BorderThickness="1"
-                        CornerRadius="18"
-                        Padding="14,0,22,0">
-                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                        <Button x:Name="ServerHelpButton" Content="?" Click="OnServerHelpClick"
-                                Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10" FontSize="12" />
-                        <TextBlock x:Name="ServerStatusText"
-                                   Text="服务器状态：未连接"
-                                   FontSize="15"
-                                   FontWeight="SemiBold"
-                                   VerticalAlignment="Center" />
-                    </StackPanel>
-                </Border>
-                <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Right">
+                <StackPanel Orientation="Horizontal" Spacing="10"
+                            HorizontalAlignment="Left" VerticalAlignment="Center">
                     <!-- 版本胶囊：显示当前版本，有新版本时右上角红点；点击弹出更新弹窗 -->
                     <Button x:Name="VersionButton" VerticalAlignment="Center" Click="OnVersionClick">
                         <StackPanel Orientation="Horizontal" Spacing="6">
-                            <TextBlock x:Name="VersionText" Text="v-" VerticalAlignment="Center" />
+                            <TextBlock x:Name="VersionText" Text="-" VerticalAlignment="Center" />
                             <Ellipse x:Name="VersionBadge"
                                      Width="7" Height="7"
                                      VerticalAlignment="Top"
@@ -43,6 +27,24 @@
                                      Visibility="Collapsed" />
                         </StackPanel>
                     </Button>
+                    <Border x:Name="ServerPill"
+                            VerticalAlignment="Center"
+                            MinHeight="36"
+                            BorderThickness="1"
+                            CornerRadius="18"
+                            Padding="14,0,22,0">
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <Button x:Name="ServerHelpButton" Content="?" Click="OnServerHelpClick"
+                                    Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10" FontSize="12" />
+                            <TextBlock x:Name="ServerStatusText"
+                                       Text="服务器状态：未连接"
+                                       FontSize="15"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Right">
                     <Border x:Name="AutoTradePill"
                             VerticalAlignment="Center"
                             MinHeight="36"

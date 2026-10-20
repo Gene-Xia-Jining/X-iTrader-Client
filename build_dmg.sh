@@ -21,7 +21,7 @@ VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/__init__.py)"
 # 文件名与 CI Release asset 一致（updater 按 "macos" + ".dmg" 匹配全量包）
 DMG="$OUT_DIR/x-itrader-client-$VERSION-macos.dmg"
 
-echo "==> 封装 $DMG (v$VERSION)"
+echo "==> 封装 $DMG ($VERSION)"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 ditto "$APP" "$STAGE/X-iTrader-Client.app"

@@ -8,7 +8,8 @@ using XTrader.Shell.State;
 namespace XTrader.Shell.Views;
 
 /// <summary>
-/// 设置页：服务器连接 + 代理 + 软件更新（对应 mac 壳的 SettingsView / Qt SettingsPage）。
+/// 设置页：服务器连接 + 代理（对应 mac 壳的 SettingsView / Qt SettingsPage）。
+/// 软件更新已合并到顶栏版本胶囊的弹窗。
 /// </summary>
 public sealed partial class SettingsPage : Page
 {
@@ -23,8 +24,6 @@ public sealed partial class SettingsPage : Page
 
     private SolidColorBrush Brush(Windows.UI.Color color) => _theme.Brush(color);
 
-    private static Windows.UI.Color Hex(uint value) => ThemedPage.Hex(value);
-
     private static Windows.UI.Color LogLevelColor(string level, bool dark) =>
         ThemedPage.LogLevelColor(level, dark);
     private bool _filling;
@@ -32,7 +31,6 @@ public sealed partial class SettingsPage : Page
     // 表单当前展示值对应的已落库值：既用于「未改动才回填」，也用于避免重复提交
     private string _savedServerUrl = "";
     private string _savedProxy = "";
-    private bool _savedAutoCheck = true;
 
     public SettingsPage()
     {
@@ -47,8 +45,6 @@ public sealed partial class SettingsPage : Page
         ProxyDirect.Checked += (_, _) => OnProxyModeChecked(ProxyMode.Direct);
         ProxySystem.Checked += (_, _) => OnProxyModeChecked(ProxyMode.System);
         ProxyCustom.Checked += (_, _) => OnProxyModeChecked(ProxyMode.Custom);
-        AutoCheckBox.Checked += (_, _) => SaveAutoCheckIfChanged();
-        AutoCheckBox.Unchecked += (_, _) => SaveAutoCheckIfChanged();
     }
 
     private enum ProxyMode { Direct, System, Custom }
@@ -75,11 +71,10 @@ public sealed partial class SettingsPage : Page
             hint.Foreground = Brush(Palette.Dim);
             hint.FontSize = 13;
         }
-        foreach (var divider in new[] { Divider1, Divider2 })
+        foreach (var divider in new[] { Divider1 })
         {
             divider.Fill = Brush(Palette.Divider);
         }
-        VersionText.Foreground = Brush(Palette.Ink);
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -95,13 +90,11 @@ public sealed partial class SettingsPage : Page
 
     private void OnStateChanged()
     {
-        VersionText.Text = $"当前版本 v{State.BackendVersion}";
         if (!_filling)
         {
             // 配置事件（config_changed）引起的外部变更回填表单
             FillFromConfig();
         }
-        RefreshUpdateArea();
     }
 
     // -------- 表单回填（对应 Qt set_config）--------
@@ -147,9 +140,6 @@ public sealed partial class SettingsPage : Page
         }
         _savedProxy = proxy;
         ProxyBox.IsEnabled = ProxyCustom.IsChecked == true;
-
-        AutoCheckBox.IsChecked = config.AutoCheckUpdate;
-        _savedAutoCheck = config.AutoCheckUpdate;
         _filling = false;
     }
 
@@ -232,21 +222,6 @@ public sealed partial class SettingsPage : Page
         State.SaveConfig(null, value);
     }
 
-    private void SaveAutoCheckIfChanged()
-    {
-        if (_filling)
-        {
-            return;
-        }
-        var value = AutoCheckBox.IsChecked == true;
-        if (value == _savedAutoCheck)
-        {
-            return;
-        }
-        _savedAutoCheck = value;
-        State.SaveConfig(null, null, value);
-    }
-
     // -------- 动作 --------
 
     private async void OnTestServerClick(object sender, RoutedEventArgs e)
@@ -259,68 +234,6 @@ public sealed partial class SettingsPage : Page
         }
         var message = await State.TestServerAsync(url);
         await ShowInfoAsync("测试连接", message);
-    }
-
-    private void OnCheckUpdateClick(object sender, RoutedEventArgs e) => State.CheckUpdate();
-
-    private void OnUpdateActionClick(object sender, RoutedEventArgs e)
-    {
-        switch (State.UpdatePhase)
-        {
-            case UpdatePhase.Available:
-                State.DownloadUpdate();
-                break;
-            case UpdatePhase.Ready:
-                State.ApplyUpdate();
-                break;
-        }
-    }
-
-    private void RefreshUpdateArea()
-    {
-        var phase = State.UpdatePhase;
-        ActionButton.Visibility = Visibility.Collapsed;
-        UpdateStatus.Visibility = Visibility.Collapsed;
-        CheckUpdateButton.IsEnabled = phase is not (UpdatePhase.Checking or UpdatePhase.Downloading);
-
-        switch (phase)
-        {
-            case UpdatePhase.Available available:
-                ActionButton.Content = $"下载 v{available.Version}{(available.HasPatch ? "（差量）" : "")}";
-                ActionButton.Visibility = Visibility.Visible;
-                break;
-            case UpdatePhase.Ready ready:
-                ActionButton.Content = $"安装并重启后端（{ready.Kind}）";
-                ActionButton.Visibility = Visibility.Visible;
-                break;
-            case UpdatePhase.Checking:
-                SetStatus("正在检查更新...", UpdateStatusKind.Pending);
-                break;
-            case UpdatePhase.Downloading:
-                SetStatus("正在下载更新...", UpdateStatusKind.Pending);
-                break;
-            case UpdatePhase.Latest latest:
-                SetStatus(latest.Message, UpdateStatusKind.Success);
-                break;
-            case UpdatePhase.Failed failed:
-                SetStatus(failed.Message, UpdateStatusKind.Danger);
-                break;
-        }
-    }
-
-    private enum UpdateStatusKind { Pending, Success, Danger }
-
-    private void SetStatus(string message, UpdateStatusKind kind)
-    {
-        UpdateStatus.Text = message;
-        // Qt set_update_status：进行中 WARNING / 成功 SUCCESS / 失败 DANGER（固定色，不随主题）
-        UpdateStatus.Foreground = Brush(kind switch
-        {
-            UpdateStatusKind.Success => Hex(0x34C759),
-            UpdateStatusKind.Danger => Hex(0xE3342F),
-            _ => Hex(0xE8A33D),
-        });
-        UpdateStatus.Visibility = Visibility.Visible;
     }
 
     private async Task ShowInfoAsync(string title, string message)

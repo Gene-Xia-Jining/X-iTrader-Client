@@ -805,14 +805,14 @@ class BackendService:
                 raise RuntimeError("未找到可用的更新包")
             return {"status": "none", "message": "未找到可用的更新包"}
         if not is_newer(release.version, __version__):
-            return {"status": "latest", "message": f"已是最新版本（v{__version__}）"}
+            return {"status": "latest", "message": f"已是最新版本（{__version__}）"}
         # 静默检查尊重「跳过此版本」；手动检查不受影响
         if silent and release.version == self.bootstrap.config.skipped_version:
-            return {"status": "skipped", "message": f"已跳过版本 v{release.version}"}
+            return {"status": "skipped", "message": f"已跳过版本 {release.version}"}
         self._release = release
         return {
             "status": "available",
-            "message": f"发现新版本 v{release.version}",
+            "message": f"发现新版本 {release.version}",
             "version": release.version,
             "has_patch": release.has_patch,
         }

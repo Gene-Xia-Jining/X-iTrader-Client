@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// 设置页：服务器连接 + 代理 + 软件更新（像素级对应 Qt SettingsPage）。
+/// 设置页：服务器连接 + 代理（像素级对应 Qt SettingsPage）。
+/// 软件更新已合并到顶栏版本胶囊的弹窗（VersionSheet）。
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var scheme
@@ -14,12 +15,10 @@ struct SettingsView: View {
     @State private var serverUrl = ""
     @State private var proxyMode: ProxyMode = .direct
     @State private var proxyUrl = ""
-    @State private var autoCheckUpdate = true
 
     // 表单当前展示值对应的已落库值：既用于「未改动才回填」，也用于避免重复提交
     @State private var savedServerUrl = ""
     @State private var savedProxy = ""
-    @State private var savedAutoCheck = true
 
     // 服务器测试（对应 ServerUrlTestRow）
     @State private var testing = false
@@ -67,18 +66,6 @@ struct SettingsView: View {
             GridRow {
                 formLabel("")
                 hintLabel("仅影响天勤行情/交易连接，iTrader 服务器始终直连；直连会忽略系统代理。socks5 代理需安装 python-socks")
-            }
-            GridRow {
-                formLabel("")
-                HairlineDivider()
-            }
-            GridRow {
-                formLabel("软件更新:")
-                updateRow
-            }
-            GridRow {
-                formLabel("")
-                autoCheckRow
             }
         }
     }
@@ -164,89 +151,6 @@ struct SettingsView: View {
         )
     }
 
-    // MARK: 软件更新行（当前版本 + 检查更新 + 状态；新版本时提供下载/安装入口）
-
-    private var updateRow: some View {
-        HStack(spacing: 8) {
-            Text("当前版本 v\(appState.backendVersion)")
-                .font(AppTheme.bodyFont)
-                .foregroundColor(AppTheme.ink(scheme))
-            AppButton(
-                "检查更新",
-                variant: .secondary,
-                disabled: appState.updatePhase == .checking || appState.updatePhase == .downloading
-            ) {
-                appState.checkUpdate()
-            }
-            updateStatusArea
-        }
-    }
-
-    /// 状态区（对应 update_status_label，占满剩余宽度）；新版本就绪时给出操作按钮
-    @ViewBuilder
-    private var updateStatusArea: some View {
-        switch appState.updatePhase {
-        case .available(let version, let hasPatch):
-            AppButton("下载 v\(version)\(hasPatch ? "（差量）" : "")") { appState.downloadUpdate() }
-        case .ready(let kind):
-            AppButton("安装并重启后端（\(kind)）") { appState.applyUpdate() }
-        default:
-            HStack(spacing: 0) {
-                if let message = updateStatusMessage {
-                    Text(message)
-                        .font(AppTheme.bodyFont)
-                        .foregroundColor(updateStatusColor)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-            }
-        }
-    }
-
-    private var updateStatusMessage: String? {
-        switch appState.updatePhase {
-        case .checking:
-            return "正在检查更新..."
-        case .downloading:
-            return "正在下载更新..."
-        case .latest(let message):
-            return message
-        case .failed(let message):
-            return message
-        default:
-            return nil
-        }
-    }
-
-    /// Qt set_update_status：None 进行中 WARNING / 成功 SUCCESS / 失败 DANGER（固定色，不随主题）
-    private var updateStatusColor: Color {
-        switch appState.updatePhase {
-        case .latest: return Color(hex: 0x34C759)
-        case .failed: return Color(hex: 0xE3342F)
-        default: return Color(hex: 0xE8A33D)
-        }
-    }
-
-    private var autoCheckRow: some View {
-        Button {
-            autoCheckUpdate.toggle()
-            saveAutoCheckIfChanged()
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: autoCheckUpdate ? "checkmark.square.fill" : "square")
-                    .foregroundColor(autoCheckUpdate ? AppTheme.primary(scheme) : AppTheme.dim(scheme))
-                Text("启动时自动检查更新，发现新版本时提示")
-                    .font(AppTheme.bodyFont)
-                    .foregroundColor(AppTheme.ink(scheme))
-                Spacer(minLength: 0)
-            }
-            .frame(minHeight: 30)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .pointerCursor()
-    }
-
     // MARK: - 动作
 
     private func testServer() {
@@ -312,12 +216,6 @@ struct SettingsView: View {
         appState.saveConfig(serverUrl: nil, proxyUrl: value)
     }
 
-    private func saveAutoCheckIfChanged() {
-        guard autoCheckUpdate != savedAutoCheck else { return }
-        savedAutoCheck = autoCheckUpdate
-        appState.saveConfig(serverUrl: nil, proxyUrl: nil, autoCheckUpdate: autoCheckUpdate)
-    }
-
     /// 用当前配置回填表单（对应 Qt set_config：启动时及 config_changed 后调用）。
     /// 用户正在编辑（与已落库值不同）的字段不回填，避免把输入到一半的内容覆盖掉。
     private func fillFromConfig() {
@@ -348,8 +246,5 @@ struct SettingsView: View {
             }
         }
         savedProxy = proxy
-
-        autoCheckUpdate = config.autoCheckUpdate
-        savedAutoCheck = config.autoCheckUpdate
     }
 }

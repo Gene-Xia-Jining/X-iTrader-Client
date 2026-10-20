@@ -674,10 +674,11 @@ struct SimulationView: View {
             guideLabel("4，服务器地址：")
                 .layoutPriority(1)
             AppTextField(
-                placeholder: "https://itrader.redboil.us.ci",
+                placeholder: Self.serverPlaceholder,
                 text: $serverUrl,
                 onCommit: saveServerIfChanged
             )
+            .frame(width: serverFieldWidth)
             AppButton(
                 serverTesting ? "测试中..." : "测试连接",
                 variant: .secondary,
@@ -688,6 +689,20 @@ struct SimulationView: View {
             }
             helpButton(serverHelpText, isPresented: $showServerHelp, isHovering: $serverHelpHover)
         }
+    }
+
+    /// 地址输入框的占位文案；同时作为输入框最小宽度的度量基准
+    private static let serverPlaceholder = "https://itrader.redboil.us.ci"
+
+    /// 输入框宽度按当前内容自适应：AppTextField 内部是 maxWidth 撑满，
+    /// 这里显式给宽度才能让它随输入增长。上下限防止空值时过窄、
+    /// 长地址把同行的「测试连接」和问号挤出卡片。
+    private var serverFieldWidth: CGFloat {
+        let font = NSFont.systemFont(ofSize: 15)
+        let text = serverUrl.isEmpty ? Self.serverPlaceholder : serverUrl
+        let textWidth = (text as NSString).size(withAttributes: [.font: font]).width
+        // +16 吸收 SwiftUI 与 NSFont 的字距差异并留出光标位置，+24 是控件左右各 12 的内边距
+        return min(ceil(textWidth) + 16 + 24, 420)
     }
 
     /// 步骤 4 问号弹窗文案：说明地址与设置页共用同一份配置

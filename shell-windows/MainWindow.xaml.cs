@@ -282,11 +282,10 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 版本弹窗（对应 mac 壳的 VersionSheet）：当前版本 + 检查更新 + 确认更新。
+    /// 版本弹窗（对应 mac 壳的 VersionSheet）：当前版本 + 检查更新 + 确认更新 + 自动检查开关。
     ///
     /// 确认一次即可：点「确认更新」后自动下载并在完成后安装重启，不需要用户再去
-    /// 设置页点第二次。设置页原有的检查更新入口保留，两处共用同一份 UpdatePhase——
-    /// 弹窗打开期间订阅状态变化就地刷新文案与按钮。
+    /// 别处点第二次。软件更新相关的入口全部集中在这里（设置页已不再提供）。
     /// </summary>
     private async void OnVersionClick(object sender, RoutedEventArgs e)
     {
@@ -309,7 +308,6 @@ public sealed partial class MainWindow : Window
             {
                 TextWrapping = TextWrapping.Wrap,
                 IsTextSelectionEnabled = true,
-                MinHeight = 48,
             };
             var progress = new ProgressBar { Minimum = 0, Maximum = 100, Visibility = Visibility.Collapsed };
             var progressText = new TextBlock
@@ -324,6 +322,59 @@ public sealed partial class MainWindow : Window
             var install = new Button { Visibility = Visibility.Collapsed, Style = accent };
             var cancel = new Button { Content = "取消下载", Visibility = Visibility.Collapsed };
 
+            // 标题行自己画在内容顶部：标题靠左、「关闭」在右上角（与模拟页各弹窗一致），
+            // 因此不再使用 ContentDialog 自带的 Title / CloseButtonText
+            ContentDialog? dialog = null;
+            var close = new Button
+            {
+                Content = "关闭",
+                FontSize = 13,
+                MinHeight = 32,
+                Padding = new Thickness(14, 0, 14, 0),
+                CornerRadius = new CornerRadius(8),
+                HorizontalAlignment = HorizontalAlignment.Right,
+            };
+            close.Click += (_, _) => dialog?.Hide();
+
+            var title = new TextBlock
+            {
+                Text = "软件更新",
+                FontSize = 20,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            var titleRow = new Grid { ColumnSpacing = 12 };
+            titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            titleRow.Children.Add(title);
+            Grid.SetColumn(close, 1);
+            titleRow.Children.Add(close);
+            var divider = new Microsoft.UI.Xaml.Shapes.Rectangle
+            {
+                Height = 1,
+                Fill = new SolidColorBrush(palette.Divider),
+            };
+
+            // 启动时自动检查更新：勾选即落库，下次启动生效
+            var autoCheck = new CheckBox
+            {
+                Content = "启动时自动检查更新，发现新版本时提示",
+                IsChecked = _state.Config.AutoCheckUpdate,
+            };
+            var savedAutoCheck = _state.Config.AutoCheckUpdate;
+            void SaveAutoCheck()
+            {
+                var value = autoCheck.IsChecked == true;
+                if (value == savedAutoCheck)
+                {
+                    return;
+                }
+                savedAutoCheck = value;
+                _state.SaveConfig(null, null, value);
+            }
+            autoCheck.Checked += (_, _) => SaveAutoCheck();
+            autoCheck.Unchecked += (_, _) => SaveAutoCheck();
+
             check.Click += (_, _) => _state.CheckUpdate();
             confirm.Click += (_, _) => _state.ConfirmUpdate();
             install.Click += (_, _) => _state.ApplyUpdate();
@@ -336,10 +387,13 @@ public sealed partial class MainWindow : Window
             buttons.Children.Add(cancel);
 
             var panel = new StackPanel { Spacing = 12, MinWidth = 420 };
+            panel.Children.Add(titleRow);
+            panel.Children.Add(divider);
             panel.Children.Add(current);
             panel.Children.Add(message);
             panel.Children.Add(progress);
             panel.Children.Add(progressText);
+            panel.Children.Add(autoCheck);
             panel.Children.Add(buttons);
 
             void Refresh()
@@ -354,13 +408,14 @@ public sealed partial class MainWindow : Window
                 cancel.Visibility = phase is UpdatePhase.Downloading ? Visibility.Visible : Visibility.Collapsed;
                 progress.Visibility = Visibility.Collapsed;
                 progressText.Visibility = Visibility.Collapsed;
-
+                // idle 时整行不留（无提示语），其余状态都要显示
+                message.Visibility = Visibility.Visible;
                 switch (phase)
                 {
                     case UpdatePhase.Available available:
-                        confirm.Content = $"确认更新 v{available.Version}";
+                        confirm.Content = $"确认更新 {available.Version}";
                         SetDialogMessage(message, palette.Ink,
-                            $"发现新版本 v{available.Version}（{(available.HasPatch ? "差量更新包" : "完整更新包")}）。"
+                            $"发现新版本 {available.Version}（{(available.HasPatch ? "差量更新包" : "完整更新包")}）。"
                             + "确认后自动下载并安装，完成后客户端会自动重启。");
                         break;
                     case UpdatePhase.Checking:
@@ -388,7 +443,9 @@ public sealed partial class MainWindow : Window
                         SetDialogMessage(message, palette.Danger, failed.Message);
                         break;
                     default:
-                        SetDialogMessage(message, palette.Dim, "点击「检查更新」查看是否有新版本。");
+                        // 未检查过时不显示提示语
+                        message.Visibility = Visibility.Collapsed;
+                        SetDialogMessage(message, palette.Dim, "");
                         break;
                 }
             }
@@ -398,15 +455,16 @@ public sealed partial class MainWindow : Window
             _state.PropertyChanged += OnStateChanged;
             try
             {
-                var dialog = new ContentDialog
+                // 标题与「关闭」都自绘在内容里，不再用系统标题栏和底部按钮行
+                var versionDialog = new ContentDialog
                 {
                     XamlRoot = RootGrid.XamlRoot,
-                    Title = "软件更新",
                     Content = panel,
-                    CloseButtonText = "关闭",
-                    DefaultButton = ContentDialogButton.Close,
+                    // 弹窗在独立的 popup 根下，不继承窗口根的主题
+                    RequestedTheme = IsDark ? ElementTheme.Dark : ElementTheme.Light,
                 };
-                await dialog.ShowAsync();
+                dialog = versionDialog;
+                await versionDialog.ShowAsync();
             }
             finally
             {
@@ -423,7 +481,7 @@ public sealed partial class MainWindow : Window
         Application.Current.Resources.TryGetValue("AccentButtonStyle", out var style) ? (Style)style : null;
 
     private string VersionLine() =>
-        _state.BackendVersion.Length > 0 ? $"当前版本 v{_state.BackendVersion}" : "当前版本未知";
+        _state.BackendVersion.Length > 0 ? $"当前版本 {_state.BackendVersion}" : "当前版本未知";
 
     private static void SetDialogMessage(TextBlock block, Windows.UI.Color color, string text)
     {
@@ -496,7 +554,7 @@ public sealed partial class MainWindow : Window
             online ? ThemeTokens.StatusGreen : ThemeTokens.StatusRed);
 
         // 版本胶囊：文字取后端上报的版本，红点表示已发现新版本
-        VersionText.Text = _state.BackendVersion.Length > 0 ? $"v{_state.BackendVersion}" : "v-";
+        VersionText.Text = _state.BackendVersion.Length > 0 ? _state.BackendVersion : "-";
         VersionText.Foreground = new SolidColorBrush(ThemeTokens.For(IsDark).Dim);
         VersionBadge.Visibility = _state.UpdateBadgeVisible ? Visibility.Visible : Visibility.Collapsed;
         VersionBadge.Fill = new SolidColorBrush(ThemeTokens.For(IsDark).Danger);

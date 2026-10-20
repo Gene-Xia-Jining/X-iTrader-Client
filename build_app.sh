@@ -35,7 +35,7 @@ OUT_DIR="$(cd .. && pwd)"
 APP="$OUT_DIR/X-iTrader-Client.app"
 CONTENTS="$APP/Contents"
 
-echo "==> 组装 $APP (v$VERSION)"
+echo "==> 组装 $APP ($VERSION)"
 rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp "$BIN_PATH" "$CONTENTS/MacOS/X-iTrader-Client"
