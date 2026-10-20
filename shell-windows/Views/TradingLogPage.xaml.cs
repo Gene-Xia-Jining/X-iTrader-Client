@@ -9,7 +9,7 @@ using XTrader.Shell.State;
 namespace XTrader.Shell.Views;
 
 /// <summary>
-/// 交易日志页：内存会话日志（对应 mac 壳的 TradingLogView / Qt LogPage）。
+/// 系统日志页：内存会话日志（对应 mac 壳的 TradingLogView / Qt LogPage）。
 ///
 /// 直接订阅 AppState.Logs 的集合变更增量追加 TextBlock，而不是每次全量重建：
 /// 日志可达 500 行，全量重建在滚动时会明显掉帧。

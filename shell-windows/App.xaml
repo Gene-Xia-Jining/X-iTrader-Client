@@ -37,6 +37,38 @@
                     </Setter.Value>
                 </Setter>
             </Style>
+
+            <!--
+              侧栏导航项：Button 退化成纯 Border + 文字，选中/悬停底色由代码
+              按 Palette 设置。保留 Button 是为了键盘焦点与 Space/Enter 激活，
+              原生按钮模板会叠 PointerOver/Pressed 灰底，盖掉主题色。
+            -->
+            <Style x:Key="SidebarNavItemStyle" TargetType="Button">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Padding" Value="24,0" />
+                <Setter Property="MinHeight" Value="44" />
+                <!--
+                  Auto 列在测量阶段取各子项的 desired width（内边距 + 文字），
+                  排布阶段再把 Button 撑满列宽，因此各行胶囊等宽——与 mac 壳
+                  侧栏里 maxWidth: .infinity 的效果一致。
+                -->
+                <Setter Property="HorizontalAlignment" Value="Stretch" />
+                <Setter Property="HorizontalContentAlignment" Value="Left" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}"
+                                    CornerRadius="8"
+                                    Padding="{TemplateBinding Padding}">
+                                <ContentPresenter Content="{TemplateBinding Content}"
+                                                  HorizontalAlignment="Left"
+                                                  VerticalAlignment="Center" />
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

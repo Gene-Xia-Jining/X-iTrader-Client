@@ -12,7 +12,7 @@
         </Grid.RowDefinitions>
 
         <StackPanel Grid.Row="0" Spacing="4">
-            <TextBlock x:Name="PageTitle" Text="交易日志" FontSize="22" FontWeight="SemiBold" />
+            <TextBlock x:Name="PageTitle" Text="系统日志" FontSize="22" FontWeight="SemiBold" />
             <TextBlock x:Name="Subtitle" Text="实时查看客户端连接、信号、下单和异常信息。" />
         </StackPanel>
 

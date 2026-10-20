@@ -6,11 +6,6 @@
 
     <ScrollViewer>
         <StackPanel x:Name="Root" Spacing="16" Padding="24">
-            <StackPanel Spacing="4">
-                <TextBlock x:Name="PageTitle" Text="设置" FontSize="22" FontWeight="SemiBold" />
-                <TextBlock x:Name="Subtitle" Text="服务器连接配置，保存后即时生效。" />
-            </StackPanel>
-
             <Border x:Name="Card" BorderThickness="1" CornerRadius="18" Padding="20">
                 <StackPanel Spacing="14">
 
@@ -56,10 +51,6 @@
                         </StackPanel>
                         <CheckBox x:Name="AutoCheckBox" Content="启动时自动检查更新，发现新版本时提示" />
                     </StackPanel>
-
-                    <Rectangle Height="1" x:Name="Divider3" />
-
-                    <Button Content="保存" Click="OnSaveClick" HorizontalAlignment="Right" />
                 </StackPanel>
             </Border>
         </StackPanel>

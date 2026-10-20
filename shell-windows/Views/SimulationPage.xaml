@@ -112,22 +112,25 @@
         -->
         <Grid x:Name="SymbolOverlay" Visibility="Collapsed" Background="#33000000"
               KeyDown="OnSymbolOverlayKeyDown">
+            <!-- 顶边固定（代码里按「全部品种」那一档算 Margin），切换过滤器只让下边距变化 -->
             <Border x:Name="SymbolDialogCard" BorderThickness="1" CornerRadius="14"
-                    Padding="20" HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Padding="20" HorizontalAlignment="Center" VerticalAlignment="Top"
                     Width="620">
                 <StackPanel Spacing="12">
-                    <!-- 标题行右侧与遮罩空白处都能关闭 -->
+                    <!-- 顶栏：左侧品类过滤器胶囊（全部品种 / 国内商品 / 股指 / 国债，单选），右侧关闭 -->
                     <Grid ColumnSpacing="12">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <TextBlock x:Name="SymbolDialogTitle" Text="选择交易品种" FontSize="15"
-                                   FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <StackPanel x:Name="SymbolFilterBar" Orientation="Horizontal" Spacing="10"
+                                    VerticalAlignment="Center" />
                         <Button x:Name="SymbolDialogClose" Grid.Column="1" Content="关闭"
                                 Click="OnSymbolDialogCloseClick" FontSize="13" MinHeight="32"
-                                Padding="14,0" CornerRadius="8" />
+                                Padding="14,0" CornerRadius="8" VerticalAlignment="Center" />
                     </Grid>
+                    <!-- 顶栏与品种列表之间的分隔线（颜色随主题在 ApplyPalette 里设） -->
+                    <Rectangle x:Name="SymbolDialogDivider" Height="1" />
                     <!-- 尽量一屏放下全部品种：只有在窗口较矮时才滚动 -->
                     <ScrollViewer x:Name="SymbolScroll" MaxHeight="460"
                                   HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled">

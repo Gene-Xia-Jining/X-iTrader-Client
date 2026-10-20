@@ -232,6 +232,9 @@ public abstract record UpdatePhase
     public sealed record Downloading : UpdatePhase;
     public sealed record Ready(string Kind) : UpdatePhase;
     public sealed record Failed(string Message) : UpdatePhase;
+
+    /// <summary>检查/下载/安装进行中：此时不应重复触发检查</summary>
+    public bool IsBusy => this is Checking or Downloading or Ready;
 }
 
 // MARK: - AppState
@@ -252,6 +255,19 @@ public sealed class AppState : INotifyPropertyChanged
     private bool _started;
     private int _shutdown;
     private readonly CancellationTokenSource _lifetime = new();
+    /// <summary>本次启动是否已做过静默更新检查（顶栏角标只在启动时探一次）</summary>
+    private bool _didAutoCheckUpdate;
+    /// <summary>弹窗里已确认更新：下载完成后自动安装并重启</summary>
+    private bool _autoApplyUpdate;
+    /// <summary>已下载更新包的类型（"patch"/"full"）；安装后据此决定重连还是退出</summary>
+    private string _pendingUpdateMode = "";
+    /// <summary>
+    /// 差量更新后的重连等待窗口：期间忽略断链/进程退出触发的重连，
+    /// 否则壳会抢在 updater 拉起新后端前自己 spawn 一个，两个后端互相拒绝
+    /// </summary>
+    private bool _waitingForUpdateBackend;
+    /// <summary>更新前那一个后端进程的 pid：用来识别「新后端已接管」</summary>
+    private int _oldBackendPid;
 
     internal AppState(DispatcherQueue dispatcher)
     {
@@ -259,6 +275,12 @@ public sealed class AppState : INotifyPropertyChanged
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
+
+    /// <summary>
+    /// 请求壳进程退出（完整更新装好、新壳已启动时用）。由主窗口订阅后
+    /// 收尾托盘并 Application.Exit——AppState 不直接持有 UI 生命周期。
+    /// </summary>
+    internal event Action? ExitRequested;
 
     // -------- 状态 --------
 
@@ -415,7 +437,39 @@ public sealed class AppState : INotifyPropertyChanged
     public UpdatePhase UpdatePhase
     {
         get => _updatePhase;
-        private set => Set(ref _updatePhase, value);
+        private set
+        {
+            if (Set(ref _updatePhase, value))
+            {
+                // 角标由 phase 派生，需随 phase 一起通知
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UpdateBadgeVisible)));
+            }
+        }
+    }
+
+    /// <summary>
+    /// 顶栏版本按钮是否显示新版本角标（仅「发现新版本」态；
+    /// 下载/就绪阶段已在弹窗内展示进度）
+    /// </summary>
+    public bool UpdateBadgeVisible => _updatePhase is UpdatePhase.Available;
+
+    private int _updateProgress = -1;
+    /// <summary>下载进度百分比；-1 表示总大小未知</summary>
+    public int UpdateProgress
+    {
+        get => _updateProgress;
+        private set => Set(ref _updateProgress, value);
+    }
+
+    private bool _updateInstalling;
+    /// <summary>
+    /// 正在安装（update.apply 已发出，等后端替换文件并退出）。
+    /// 弹窗据此区分「已下载待安装」与「安装中」。
+    /// </summary>
+    public bool UpdateInstalling
+    {
+        get => _updateInstalling;
+        private set => Set(ref _updateInstalling, value);
     }
 
     private string _lastActionError = "";
@@ -499,8 +553,19 @@ public sealed class AppState : INotifyPropertyChanged
                     ConnState = ConnState.Connected;
                     BackendVersion = info.Version;
                     AppendLog("SUCCESS", $"已连接后端 v{info.Version} (pid {info.Pid})");
+                    // 差量更新安装完成后的首次连接：暂存包已生效，状态回到 idle
+                    if (UpdatePhase is UpdatePhase.Ready)
+                    {
+                        UpdateProgress = -1;
+                        _pendingUpdateMode = "";
+                        UpdateInstalling = false;
+                        UpdatePhase = new UpdatePhase.Idle();
+                    }
                 });
                 await RefreshAllAsync(ct);
+                // 静默检查要读「启动时自动检查更新」开关，必须排在 RefreshAllAsync
+                // 回填 Config 之后（Post 按入队顺序执行）
+                Post(CheckUpdateOnConnect);
                 return;
             }
             catch (OperationCanceledException)
@@ -541,6 +606,10 @@ public sealed class AppState : INotifyPropertyChanged
             return;
         }
         ConnState = ConnState.Disconnected;
+        if (_waitingForUpdateBackend)
+        {
+            return;
+        }
         AppendLog("WARNING", "与后端断开，正在重连…");
         _ = Task.Run(() => ConnectLoopAsync(_lifetime.Token));
     }
@@ -553,7 +622,44 @@ public sealed class AppState : INotifyPropertyChanged
             return;
         }
         ConnState = ConnState.Disconnected;
+        if (_waitingForUpdateBackend)
+        {
+            return;
+        }
         AppendLog("ERROR", "后端进程已退出，正在重启…");
+        _ = Task.Run(() => ConnectLoopAsync(_lifetime.Token));
+    }
+
+    /// <summary>
+    /// 差量更新安装后：后端由 updater 重新拉起，等它写出新的 backend.json 再重连。
+    /// 不能固定等几秒：旧后端退出时会删掉 backend.json，壳若抢先调 connectOrStart
+    /// 会自己 spawn 一个后端，与 updater 拉起的那个互相拒绝。
+    /// </summary>
+    private async Task ReconnectAfterUpdateAsync(CancellationToken ct)
+    {
+        _waitingForUpdateBackend = true;
+        try
+        {
+            var infoFile = _backend?.InfoFile;
+            // 最多等 30 秒；超时仍重连，由 ConnectOrStartAsync 兜底
+            for (var i = 0; infoFile is not null && i < 150; i++)
+            {
+                var info = BackendProcess.ReadInfoFrom(infoFile);
+                if (info is not null && info.Pid != _oldBackendPid && BackendProcess.IsPidAlive(info.Pid))
+                {
+                    break;
+                }
+                await Task.Delay(200, ct);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        finally
+        {
+            _waitingForUpdateBackend = false;
+        }
         _ = Task.Run(() => ConnectLoopAsync(_lifetime.Token));
     }
 
@@ -660,7 +766,8 @@ public sealed class AppState : INotifyPropertyChanged
             case "signal_received":
                 if (data["signal"] is JsonObject signal)
                 {
-                    AppendLog("INFO", $"收到信号: {signal["symbol"]?.GetValue<string>() ?? "?"} 目标仓位 {signal["position"]?.GetValue<string>() ?? "?"}");
+                    // target_position 是 JSON 数字，GetValue<string>() 会抛异常
+                    AppendLog("INFO", $"收到信号: {signal["symbol"]?.GetValue<string>() ?? "?"} 目标仓位 {JsonHelpers.Int(signal["target_position"])?.ToString() ?? "?"}");
                 }
                 break;
             case "trade_executed":
@@ -670,19 +777,54 @@ public sealed class AppState : INotifyPropertyChanged
                 AppendLog("ERROR", $"交易失败: {data["symbol"]?.GetValue<string>() ?? "?"} {data["error"]?.GetValue<string>() ?? ""}");
                 break;
             case "update_progress":
-                break;  // 第一版不做进度条，完成/失败事件驱动状态
+                UpdateProgress = JsonHelpers.Int(data["pct"]) ?? -1;
+                break;
             case "update_ready":
-                UpdatePhase = new UpdatePhase.Ready(data["kind"]?.GetValue<string>() ?? "");
+                // mode 是后加的字段：旧版后端只发中文 kind，按文案回退判断，
+                // 否则差量更新会被误当成完整更新而直接退出壳
+                var kind = data["kind"]?.GetValue<string>() ?? "";
+                _pendingUpdateMode = data["mode"]?.GetValue<string>()
+                    ?? (kind.Contains("差量") ? "patch" : "full");
+                UpdateProgress = -1;
+                UpdatePhase = new UpdatePhase.Ready(kind);
+                // 用户确认过「更新」：下载完直接装，不再要求点第二次
+                if (_autoApplyUpdate)
+                {
+                    _autoApplyUpdate = false;
+                    ApplyUpdate();
+                }
                 break;
             case "update_failed":
+                _autoApplyUpdate = false;
+                _pendingUpdateMode = "";
+                UpdateProgress = -1;
                 UpdatePhase = new UpdatePhase.Failed(data["message"]?.GetValue<string>() ?? "下载失败");
                 break;
             case "update_cancelled":
+                _autoApplyUpdate = false;
+                _pendingUpdateMode = "";
+                UpdateProgress = -1;
                 UpdatePhase = new UpdatePhase.Idle();
                 break;
             case "backend_stopping":
-                ConnState = ConnState.Stopped;
                 AppendLog("WARNING", $"后端正在退出（{data["reason"]?.GetValue<string>() ?? ""}）");
+                if (data["reason"]?.GetValue<string>() == "update" && _pendingUpdateMode == "patch")
+                {
+                    // 差量更新只替换 src，后端由 updater 重新拉起：壳留在前台等重连
+                    _oldBackendPid = _backend?.Info?.Pid ?? 0;
+                    _client = null;
+                    ConnState = ConnState.Disconnected;
+                    AppendLog("INFO", "差量更新已安装，等待后端重启后重连");
+                    _ = Task.Run(() => ReconnectAfterUpdateAsync(_lifetime.Token));
+                }
+                else
+                {
+                    // 完整更新：updater 启动了新的壳进程，旧壳必须退出，
+                    // 否则两个壳会争同一个后端（单实例互斥也拦不住已运行的进程）
+                    _pendingUpdateMode = "";
+                    ConnState = ConnState.Stopped;
+                    _ = Task.Delay(1500).ContinueWith(_ => Post(() => ExitRequested?.Invoke()));
+                }
                 break;
         }
     }
@@ -1072,13 +1214,53 @@ public sealed class AppState : INotifyPropertyChanged
         }
     }
 
-    internal void CheckUpdate() => _ = Task.Run(async () =>
+    /// <summary>
+    /// 连接成功后的静默探活：每次启动只做一次，尊重「启动时自动检查更新」开关。
+    /// 失败不打扰用户——顶栏点开版本弹窗仍可手动检查。
+    /// </summary>
+    private void CheckUpdateOnConnect()
+    {
+        if (_didAutoCheckUpdate)
+        {
+            return;
+        }
+        _didAutoCheckUpdate = true;
+        if (!Config.AutoCheckUpdate)
+        {
+            return;
+        }
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var resp = await CallAsync("update.check", new JsonObject { ["silent"] = true });
+                if (resp["status"]?.GetValue<string>() != "available")
+                {
+                    return;
+                }
+                Post(() => UpdatePhase = new UpdatePhase.Available(
+                    resp["version"]?.GetValue<string>() ?? "",
+                    resp["has_patch"]?.GetValue<bool>() ?? false));
+            }
+            catch
+            {
+                // 静默检查失败保持 idle：用户点开版本弹窗可手动重试
+            }
+        });
+    }
+
+    /// <summary>
+    /// 手动检查更新。<paramref name="autoApply"/> 为 true 表示用户在版本弹窗里
+    /// 点了「确认更新」：查到新版本后直接下载，下载完成再自动安装重启。
+    /// </summary>
+    internal void CheckUpdate(bool autoApply = false) => _ = Task.Run(async () =>
     {
         Post(() => UpdatePhase = new UpdatePhase.Checking());
         try
         {
             var resp = await CallAsync("update.check");
-            Post(() => UpdatePhase = resp["status"]?.GetValue<string>() switch
+            var status = resp["status"]?.GetValue<string>();
+            Post(() => UpdatePhase = status switch
             {
                 "available" => new UpdatePhase.Available(
                     resp["version"]?.GetValue<string>() ?? "",
@@ -1086,6 +1268,10 @@ public sealed class AppState : INotifyPropertyChanged
                 "latest" => new UpdatePhase.Latest(resp["message"]?.GetValue<string>() ?? "已是最新版本"),
                 _ => new UpdatePhase.Failed(resp["message"]?.GetValue<string>() ?? "未找到可用更新"),
             });
+            if (autoApply && status == "available")
+            {
+                StartDownload(autoApply: true);
+            }
         }
         catch (Exception ex)
         {
@@ -1093,22 +1279,70 @@ public sealed class AppState : INotifyPropertyChanged
         }
     });
 
-    internal void DownloadUpdate() => _ = Task.Run(async () =>
+    /// <summary>弹窗里点了「确认更新」：有可用版本直接下载，否则先检查。</summary>
+    internal void ConfirmUpdate()
     {
+        if (UpdatePhase is UpdatePhase.Available)
+        {
+            StartDownload(autoApply: true);
+        }
+        else
+        {
+            CheckUpdate(autoApply: true);
+        }
+    }
+
+    internal void DownloadUpdate(bool autoApply = false) => StartDownload(autoApply);
+
+    private void StartDownload(bool autoApply)
+    {
+        _autoApplyUpdate = autoApply;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                Post(() => UpdateProgress = -1);
+                _ = await CallAsync("update.download");
+                Post(() => UpdatePhase = new UpdatePhase.Downloading());
+            }
+            catch (Exception ex)
+            {
+                _autoApplyUpdate = false;
+                Post(() => UpdatePhase = new UpdatePhase.Failed(ex.Message));
+            }
+        });
+    }
+
+    internal void CancelUpdate()
+    {
+        _autoApplyUpdate = false;
+        Post(() =>
+        {
+            UpdateProgress = -1;
+            UpdatePhase = new UpdatePhase.Idle();
+        });
+        _ = Task.Run(() => RunActionAsync("update.cancel"));
+    }
+
+    internal void ApplyUpdate() => _ = Task.Run(async () =>
+    {
+        Post(() => UpdateInstalling = true);
         try
         {
-            _ = await CallAsync("update.download");
-            Post(() => UpdatePhase = new UpdatePhase.Downloading());
+            _ = await CallAsync("update.apply");
         }
         catch (Exception ex)
         {
-            Post(() => UpdatePhase = new UpdatePhase.Failed(ex.Message));
+            // 安装失败（如 Windows 目录被占用）要把原因回给弹窗，
+            // 否则用户只看到界面停在「正在安装」
+            Post(() =>
+            {
+                _autoApplyUpdate = false;
+                UpdateInstalling = false;
+                UpdatePhase = new UpdatePhase.Failed($"安装更新失败：{ex.Message}");
+            });
         }
     });
-
-    internal void CancelUpdate() => _ = Task.Run(() => RunActionAsync("update.cancel"));
-
-    internal void ApplyUpdate() => _ = Task.Run(() => RunActionAsync("update.apply"));
 
     internal void QuitBackend()
     {

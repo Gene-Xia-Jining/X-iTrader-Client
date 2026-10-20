@@ -74,6 +74,8 @@ public sealed partial class SimulationPage : Page
     private TextBlock LinkMobile = null!;
     private TextBlock LinkAppStore = null!;
     private TextBlock LinkWindows = null!;
+    /// <summary>标题行与链接之间的分隔线</summary>
+    private Microsoft.UI.Xaml.Shapes.Rectangle _downloadDivider = null!;
 
     // -------- 第 3 步的账号弹窗（控件在代码里构建，对应 mac 壳的 accountEditor）--------
 
@@ -91,11 +93,18 @@ public sealed partial class SimulationPage : Page
     private TextBlock AccountHint = null!;
     /// <summary>弹窗内的「测试连接」结果：ContentDialog 打开时不能再叠一层对话框，只能就地显示</summary>
     private TextBlock TestHint = null!;
+    /// <summary>标题行与表单之间的分隔线</summary>
+    private Microsoft.UI.Xaml.Shapes.Rectangle _accountDivider = null!;
 
     // -------- 第 6 步的品种选择弹层（页面内遮罩层，对应 mac 壳的 symbolPicker）--------
 
     private WrapPanel SymbolPanel = null!;
     private TextBlock SymbolHint = null!;
+    private readonly Dictionary<SymbolFilter, Button> _symbolFilterButtons = [];
+    /// <summary>品类过滤器（全部品种 / 国内商品 / 股指 / 国债）：单选</summary>
+    private SymbolFilter _symbolFilter = SymbolFilter.All;
+    /// <summary>「全部品种」那一档的列表高度：弹窗顶边以它为准，切换过滤器只收缩下边距</summary>
+    private double _symbolMaxListHeight;
 
     // -------- 第 5 步的 Token 申请记录弹窗（已申请过时点胶囊打开）--------
 
@@ -194,7 +203,9 @@ public sealed partial class SimulationPage : Page
         };
 
         var content = new StackPanel { Spacing = 12, Width = 400 };
-        // 说明文案在胶囊右侧问号里，弹窗内只放字段
+        // 说明文案在胶囊右侧问号里，弹窗内只放字段；
+        // 标题仍由 ContentDialog 绘制，分隔线放在内容顶部即标题行之下
+        content.Children.Add(_accountDivider = new Microsoft.UI.Xaml.Shapes.Rectangle { Height = 1 });
         content.Children.Add(phoneRow);
         content.Children.Add(passwordRow);
         content.Children.Add(AccountHint);
@@ -352,6 +363,21 @@ public sealed partial class SimulationPage : Page
             Visibility = Visibility.Collapsed,
         };
 
+        // 品类过滤器只在构造时建一次，切换只是重排胶囊
+        foreach (var filter in SymbolFilters.All)
+        {
+            var chip = new Button
+            {
+                FontSize = 13,
+                MinHeight = 30,
+                Padding = new Thickness(14, 0, 14, 0),
+                CornerRadius = new CornerRadius(15),
+            };
+            chip.Click += (_, _) => SelectSymbolFilter(filter);
+            _symbolFilterButtons[filter] = chip;
+            SymbolFilterBar.Children.Add(chip);
+        }
+
         SymbolDialogBody.Children.Add(SymbolPanel);
         SymbolDialogBody.Children.Add(SymbolHint);
 
@@ -367,10 +393,89 @@ public sealed partial class SimulationPage : Page
         SymbolOverlay.SizeChanged += (_, args) =>
         {
             SymbolDialogCard.MaxWidth = Math.Max(args.NewSize.Width - 48, 320);
-            // 140 = 上下遮罩边距 + 卡片内边距 + 标题行
-            SymbolScroll.MaxHeight = Math.Clamp(args.NewSize.Height - 140, 120, 460);
+            // 149 = 上下遮罩边距（48）+ 卡片内边距（40）+ 顶栏（36）+ 分隔线（1）+ 两处间距（24）
+            SymbolScroll.MaxHeight = Math.Clamp(args.NewSize.Height - 149, 120, 460);
+            UpdateSymbolDialogPlacement();
         };
         // 弹层没有独立窗口，Esc 由遮罩层接管（打开时焦点在「关闭」按钮上，事件冒泡到遮罩）
+    }
+
+    /// <summary>单选：点哪颗就只看哪一类，「全部品种」不过滤</summary>
+    private void SelectSymbolFilter(SymbolFilter filter)
+    {
+        _symbolFilter = filter;
+        // 过滤条件变了必须重建胶囊，跳过「签名没变」的缓存判断
+        _symbolKey = "";
+        RenderCapsules();
+    }
+
+    /// <summary>
+    /// 顶边固定：按「全部品种」那一档的卡片高度居中算出上边距，
+    /// 之后切换过滤器卡片从同一条顶边往下收，只有下边距变化。
+    /// </summary>
+    private void UpdateSymbolDialogPlacement()
+    {
+        var overlayHeight = SymbolOverlay.ActualHeight;
+        if (overlayHeight <= 0)
+        {
+            return;
+        }
+
+        // 101 = 卡片上下内边距（40）+ 顶栏（36）+ 分隔线（1）+ 两处间距（24）
+        var listHeight = Math.Min(Math.Max(_symbolMaxListHeight, 31), SymbolScroll.MaxHeight);
+        var cardHeight = listHeight + 101;
+        var top = Math.Max((overlayHeight - cardHeight) / 2, 24);
+        SymbolDialogCard.Margin = new Thickness(0, top, 0, 0);
+    }
+
+    /// <summary>
+    /// 量出「全部品种」那一档的列表高度：临时按全部品种排一次胶囊、量完再恢复当前过滤器。
+    /// 只在打开弹窗时做，保证顶边始终按最高档算，切换过滤器只收缩下边距。
+    /// </summary>
+    private void RefreshSymbolMaxListHeight()
+    {
+        var current = _symbolFilter;
+        if (current != SymbolFilter.All)
+        {
+            _symbolFilter = SymbolFilter.All;
+            _symbolKey = "";
+            RenderCapsules();
+        }
+        // 卡片刚显示时布局可能还没跑完，强制排一次再量
+        SymbolPanel.UpdateLayout();
+        var height = SymbolPanel.ActualHeight;
+        if (height > 0)
+        {
+            _symbolMaxListHeight = height;
+        }
+        if (current != SymbolFilter.All)
+        {
+            _symbolFilter = current;
+            _symbolKey = "";
+            RenderCapsules();
+        }
+        UpdateSymbolDialogPlacement();
+    }
+
+    /// <summary>选中态实心主题色，未选中透明描边（与品种胶囊一致）</summary>
+    private void UpdateSymbolFilterStyles()
+    {
+        var all = AllSymbols;
+        foreach (var (filter, chip) in _symbolFilterButtons)
+        {
+            var isOn = _symbolFilter == filter;
+            // Content 只在数量变化时重设：每次赋新字符串会让按钮重新测量
+            var text = $"{filter.Title()} {SymbolFilters.Count(filter, all)}";
+            if ((chip.Content as string) != text)
+            {
+                chip.Content = text;
+            }
+            chip.Background = new SolidColorBrush(isOn ? Palette.Primary : Microsoft.UI.Colors.Transparent);
+            chip.BorderBrush = new SolidColorBrush(isOn ? Palette.Primary : Palette.Hairline);
+            chip.BorderThickness = new Thickness(1);
+            chip.Foreground = new SolidColorBrush(isOn ? Microsoft.UI.Colors.White : Palette.Ink);
+            chip.FontWeight = isOn ? FontWeights.SemiBold : FontWeights.Normal;
+        }
     }
 
     private void OnSymbolOverlayKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
@@ -386,6 +491,8 @@ public sealed partial class SimulationPage : Page
     {
         RenderCapsules();
         SymbolOverlay.Visibility = Visibility.Visible;
+        // 先按「全部品种」量一遍，顶边据此固定；之后切过滤器只收缩下边距
+        RefreshSymbolMaxListHeight();
         SymbolDialogClose.Focus(FocusState.Programmatic);
     }
 
@@ -472,14 +579,17 @@ public sealed partial class SimulationPage : Page
         {
             _tokenRecordsDialog.RequestedTheme = Host.IsDark ? ElementTheme.Dark : ElementTheme.Light;
         }
+        // 下载 / 账号弹窗标题行下的分隔线（控件在构造时建好，这里只刷颜色）
+        _downloadDivider.Fill = Brush(Palette.Divider);
+        _accountDivider.Fill = Brush(Palette.Divider);
 
         // 品种弹层画在页面内（不是 ContentDialog），直接按 Palette 上色
         SymbolDialogCard.Background = Brush(Palette.Card);
         SymbolDialogCard.BorderBrush = Brush(Palette.Hairline);
-        SymbolDialogTitle.Foreground = Brush(Palette.Ink);
         SymbolDialogClose.Foreground = Brush(Palette.Primary);
         SymbolDialogClose.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
         SymbolDialogClose.BorderBrush = Brush(Palette.Hairline);
+        SymbolDialogDivider.Fill = Brush(Palette.Divider);
 
         foreach (var help in new[] { SymbolHelpButton, ServerHelpButton, TokenHelpButton })
         {
@@ -775,7 +885,7 @@ public sealed partial class SimulationPage : Page
         RefreshTransientState();
         try
         {
-            // 与「Token 管理」页同一个入口：说明留默认值
+            // 走与后端 Token 申请相同的入口：说明留默认值
             _tokenMessage = await State.RequestTokenResultAsync("iTrader 智能交易系统");
         }
         finally
@@ -852,7 +962,7 @@ public sealed partial class SimulationPage : Page
         }
     }
 
-    /// <summary>Token 申请记录弹窗：只读展示进度，申请与删除等操作仍在「Token 管理」页。</summary>
+    /// <summary>Token 申请记录弹窗：只读展示进度，申请入口在步骤 5 的胶囊上。</summary>
     private void BuildTokenRecordsDialog()
     {
         TokenRecordsStatus = new TextBlock
@@ -871,19 +981,68 @@ public sealed partial class SimulationPage : Page
         TokenRecordsDivider = new Microsoft.UI.Xaml.Shapes.Rectangle { Height = 1 };
 
         var content = new StackPanel { Spacing = 12, Width = 460 };
+        // 标题行自己画在内容顶部：只有这样才能把「刷新状态」「关闭」和标题放进同一行
+        content.Children.Add(BuildTokenRecordsTitleRow());
         content.Children.Add(TokenRecordsStatus);
         content.Children.Add(TokenRecordsDivider);
         content.Children.Add(TokenRecordsEmptyHint);
         // 记录多时弹窗内滚动，避免窗口被撑高
         content.Children.Add(new ScrollViewer { Content = TokenRecordsPanel, MaxHeight = 320 });
 
-        _tokenRecordsDialog = new ContentDialog
+        // 不再用 ContentDialog 的 Title / CloseButtonText，系统按钮行会另起一行
+        _tokenRecordsDialog = new ContentDialog { Content = content };
+    }
+
+    /// <summary>
+    /// 标题行：标题靠左，「刷新状态」「关闭」靠右（与 mac 壳同布局），
+    /// 因此不再使用 ContentDialog 自带的底部按钮行。
+    /// </summary>
+    private Grid BuildTokenRecordsTitleRow()
+    {
+        var title = new TextBlock
         {
-            Title = "Token 申请记录",
-            Content = content,
-            CloseButtonText = "关闭",
-            DefaultButton = ContentDialogButton.Close,
+            Text = "Token 申请记录",
+            FontSize = 20,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
         };
+
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var refresh = new Button
+        {
+            Content = "刷新状态",
+            FontSize = 13,
+            MinHeight = 32,
+            Padding = new Thickness(14, 0, 14, 0),
+            CornerRadius = new CornerRadius(8),
+        };
+        refresh.Click += (_, _) => State.RefreshTokenStatus();
+        var close = new Button
+        {
+            Content = "关闭",
+            FontSize = 13,
+            MinHeight = 32,
+            Padding = new Thickness(14, 0, 14, 0),
+            CornerRadius = new CornerRadius(8),
+        };
+        // 按钮不再在底部，关闭只能走这里
+        close.Click += (_, _) => _tokenRecordsDialog?.Hide();
+        actions.Children.Add(refresh);
+        actions.Children.Add(close);
+
+        var row = new Grid { ColumnSpacing = 12 };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.Children.Add(title);
+        Grid.SetColumn(actions, 1);
+        row.Children.Add(actions);
+        return row;
     }
 
     private async Task ShowTokenRecordsAsync()
@@ -908,7 +1067,7 @@ public sealed partial class SimulationPage : Page
         }
     }
 
-    /// <summary>记录行：编号 + 说明/时间 + 状态（与 Token 管理页同口径，这里只读）</summary>
+    /// <summary>记录行：编号 + 说明/时间 + 状态（与 Token 页同口径，这里只读）</summary>
     private void RenderTokenRecords()
     {
         if (_tokenRecordsDialog is null)
@@ -991,7 +1150,7 @@ public sealed partial class SimulationPage : Page
         return grid;
     }
 
-    /// <summary>状态文案语义色（已通过绿 / 失败红 / 其余黄），与 Token 管理页一致</summary>
+    /// <summary>状态文案语义色（已通过绿 / 失败红 / 其余黄），与 Token 页一致</summary>
     private Windows.UI.Color TokenStatusColor(string status)
     {
         if (status.Length == 0 || status == "未申请") return Palette.Warning;
@@ -1025,18 +1184,50 @@ public sealed partial class SimulationPage : Page
         LinkAppStore = new TextBlock { IsTextSelectionEnabled = true, FontSize = 13, TextWrapping = TextWrapping.Wrap };
         LinkWindows = new TextBlock { IsTextSelectionEnabled = true, FontSize = 13, TextWrapping = TextWrapping.Wrap };
 
-        var content = new StackPanel { Spacing = 6 };
-        content.Children.Add(LinkMobile);
-        content.Children.Add(LinkAppStore);
-        content.Children.Add(LinkWindows);
+        var links = new StackPanel { Spacing = 6 };
+        links.Children.Add(LinkMobile);
+        links.Children.Add(LinkAppStore);
+        links.Children.Add(LinkWindows);
 
-        _downloadDialog = new ContentDialog
+        var content = new StackPanel { Spacing = 12 };
+        // 标题行自己画在内容顶部，才能把「关闭」和标题放进同一行（同 Token 申请记录弹窗）
+        content.Children.Add(BuildDownloadTitleRow());
+        content.Children.Add(_downloadDivider = new Microsoft.UI.Xaml.Shapes.Rectangle { Height = 1 });
+        content.Children.Add(links);
+
+        // 不再用 ContentDialog 的 Title / CloseButtonText，系统按钮行会另起一行
+        _downloadDialog = new ContentDialog { Content = content };
+    }
+
+    /// <summary>标题行：标题靠左，「关闭」靠右（与 mac 壳同布局）</summary>
+    private Grid BuildDownloadTitleRow()
+    {
+        var title = new TextBlock
         {
-            Title = "下载快期客户端",
-            Content = content,
-            CloseButtonText = "关闭",
-            DefaultButton = ContentDialogButton.Close,
+            Text = "下载快期客户端",
+            FontSize = 20,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
         };
+        var close = new Button
+        {
+            Content = "关闭",
+            FontSize = 13,
+            MinHeight = 32,
+            Padding = new Thickness(14, 0, 14, 0),
+            CornerRadius = new CornerRadius(8),
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        // 标题行是自绘的，没有系统底部按钮行，关闭只能走这里
+        close.Click += (_, _) => _downloadDialog?.Hide();
+
+        var row = new Grid { ColumnSpacing = 12 };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.Children.Add(title);
+        Grid.SetColumn(close, 1);
+        row.Children.Add(close);
+        return row;
     }
 
     private async void OnDownloadClick(object sender, RoutedEventArgs e)
@@ -1218,18 +1409,30 @@ public sealed partial class SimulationPage : Page
         var symbols = AllSymbols;
         // 入口胶囊：默认「选择交易品种」，选中后优先显示中文品种名（无映射时回退代码）
         SymbolPickerButton.Content = SymbolEntryLabel();
-        var symbolKey = string.Join(",", symbols) + $";{_selectedSymbol};{Host.IsDark}";
+        UpdateSymbolFilterStyles();
+        var visible = symbols.Where(_symbolFilter.Matches).ToList();
+        var symbolKey = string.Join(",", visible) + $";{_selectedSymbol};{Host.IsDark}";
         if (symbolKey != _symbolKey)
         {
             _symbolKey = symbolKey;
             SymbolPanel.Children.Clear();
-            foreach (var symbol in symbols)
+            foreach (var symbol in visible)
             {
                 SymbolPanel.Children.Add(BuildCapsule(
                     State.DisplaySymbol(symbol),
                     isOn: _selectedSymbol == symbol,
                     tooltip: null,
                     onToggle: on => OnSymbolToggled(symbol, on)));
+            }
+            // 过滤后一个都不剩时给出行内提示（加载中 / 失败的状态行由 SymbolHint 负责）
+            if (visible.Count == 0 && symbols.Count > 0)
+            {
+                SymbolPanel.Children.Add(new TextBlock
+                {
+                    Text = "该分类下暂无可选品种",
+                    FontSize = 13,
+                    Foreground = Brush(Palette.Dim),
+                });
             }
         }
 
@@ -1490,4 +1693,68 @@ public sealed partial class SimulationPage : Page
         }
         return array;
     }
+}
+
+/// <summary>品种品类：模拟账户只支持国内商品与中金所股指 / 国债。</summary>
+public enum SymbolCategory
+{
+    Commodity,
+    Index,
+    Bond,
+}
+
+/// <summary>
+/// 品类判定：服务器只给品种代码与中文名、没有分类字段，因此按代码判断——
+/// 中金所里 IF/IH/IC/IM 是股指，T/TF/TS/TL 是国债，其余都归国内商品。
+/// </summary>
+public static class SymbolCategories
+{
+    private static readonly HashSet<string> IndexCodes = ["IF", "IH", "IC", "IM"];
+    private static readonly HashSet<string> BondCodes = ["T", "TF", "TS", "TL"];
+
+    /// <summary>完整合约（SHFE.au2510）取品种码；裸品种码（RB）直接查表。空串按国内商品处理</summary>
+    public static SymbolCategory Of(string symbol)
+    {
+        var code = symbol.Length == 0 ? "" : symbol[(symbol.LastIndexOf('.') + 1)..];
+        var product = new string(code.TakeWhile(char.IsLetter).ToArray()).ToUpperInvariant();
+        if (IndexCodes.Contains(product))
+        {
+            return SymbolCategory.Index;
+        }
+        return BondCodes.Contains(product) ? SymbolCategory.Bond : SymbolCategory.Commodity;
+    }
+}
+
+/// <summary>弹窗顶部的过滤器：「全部品种」+ 三个品类，单选。</summary>
+public enum SymbolFilter
+{
+    All,
+    Commodity,
+    Index,
+    Bond,
+}
+
+public static class SymbolFilters
+{
+    public static readonly SymbolFilter[] All =
+        [SymbolFilter.All, SymbolFilter.Commodity, SymbolFilter.Index, SymbolFilter.Bond];
+
+    public static string Title(this SymbolFilter filter) => filter switch
+    {
+        SymbolFilter.Commodity => "国内商品",
+        SymbolFilter.Index => "股指",
+        SymbolFilter.Bond => "国债",
+        _ => "全部品种",
+    };
+
+    public static bool Matches(this SymbolFilter filter, string symbol) => filter switch
+    {
+        SymbolFilter.Commodity => SymbolCategories.Of(symbol) == SymbolCategory.Commodity,
+        SymbolFilter.Index => SymbolCategories.Of(symbol) == SymbolCategory.Index,
+        SymbolFilter.Bond => SymbolCategories.Of(symbol) == SymbolCategory.Bond,
+        _ => true,
+    };
+
+    public static int Count(SymbolFilter filter, IEnumerable<string> symbols) =>
+        symbols.Count(filter.Matches);
 }
