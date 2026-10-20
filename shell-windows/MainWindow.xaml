@@ -37,22 +37,26 @@
                                          IsHitTestVisible="False" />
                         </Grid>
                     </Button>
-                    <Border x:Name="ServerPill"
+                    <!-- 服务器状态胶囊：整颗可点，弹出服务器信息（地址 / 连通性 / 探测方式） -->
+                    <Button x:Name="ServerPill"
                             VerticalAlignment="Center"
                             MinHeight="36"
+                            MinWidth="0"
+                            Padding="22,0"
                             BorderThickness="1"
                             CornerRadius="18"
-                            Padding="14,0,22,0">
-                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                            <Button x:Name="ServerHelpButton" Content="?" Click="OnServerHelpClick"
-                                    Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10" FontSize="12" />
-                            <TextBlock x:Name="ServerStatusText"
-                                       Text="服务器状态：未连接"
-                                       FontSize="15"
-                                       FontWeight="SemiBold"
-                                       VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Border>
+                            Background="Transparent"
+                            Style="{StaticResource CapsuleButtonStyle}"
+                            Click="OnServerInfoClick"
+                            PointerEntered="OnServerPillPointerEntered"
+                            PointerExited="OnServerPillPointerExited"
+                            ToolTipService.ToolTip="点击查看服务器信息">
+                        <TextBlock x:Name="ServerStatusText"
+                                   Text="服务器状态：未连接"
+                                   FontSize="15"
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center" />
+                    </Button>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Right">
                     <Border x:Name="AutoTradePill"

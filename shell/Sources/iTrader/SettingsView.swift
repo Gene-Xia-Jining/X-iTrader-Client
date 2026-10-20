@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// 设置页：服务器连接 + 代理（像素级对应 Qt SettingsPage）。
+/// 设置页：代理服务器配置（像素级对应 Qt SettingsPage）。
+/// 服务器地址与测试连接已合并到顶栏服务器弹窗（点击服务器状态胶囊）；
 /// 软件更新已合并到顶栏版本胶囊（点击即检查更新）。
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
@@ -12,21 +13,11 @@ struct SettingsView: View {
     }
 
     // 表单
-    @State private var serverUrl = ""
     @State private var proxyMode: ProxyMode = .direct
     @State private var proxyUrl = ""
 
     // 表单当前展示值对应的已落库值：既用于「未改动才回填」，也用于避免重复提交
-    @State private var savedServerUrl = ""
     @State private var savedProxy = ""
-
-    // 服务器测试（对应 ServerUrlTestRow）
-    @State private var testing = false
-    @State private var showHelp = false
-    @State private var helpHover = false
-
-    // 弹窗
-    @State private var alert: ActiveAlert?
 
     var body: some View {
         PageContainer {
@@ -38,27 +29,12 @@ struct SettingsView: View {
         }
         .onAppear(perform: fillFromConfig)
         .onChange(of: appState.config) { _ in fillFromConfig() }
-        .alert(item: $alert) { alert in
-            Alert(
-                title: Text(alert.title),
-                message: Text(alert.message),
-                dismissButton: .default(Text("好"))
-            )
-        }
     }
 
     // MARK: - 表单（QFormLayout：label 列右对齐，字段列撑宽，行距 10）
 
     private var formGrid: some View {
         Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
-            GridRow {
-                formLabel("服务器地址:")
-                serverTestRow
-            }
-            GridRow {
-                formLabel("")
-                hintLabel("这是 iTrader 智能交易服务器的地址，需与服务器部署地址一致")
-            }
             GridRow {
                 formLabel("代理服务器:")
                 proxyRow
@@ -83,45 +59,6 @@ struct SettingsView: View {
             .foregroundColor(AppTheme.dim(scheme))
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    // MARK: 服务器地址行（对应 ServerUrlTestRow：? 按钮 + 输入框 + 测试连接；结果走弹窗）
-
-    private var serverTestRow: some View {
-        HStack(spacing: 8) {
-            helpButton
-            AppTextField(
-                placeholder: "https://itrader.redboil.us.ci",
-                text: $serverUrl,
-                onCommit: saveServerIfChanged
-            )
-            AppButton(testing ? "测试中..." : "测试连接", variant: .secondary, disabled: testing) {
-                testServer()
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// 20x20 圆形问号按钮，点击弹出地址说明（对应 Qt QToolTip）
-    private var helpButton: some View {
-        Button { showHelp = true } label: {
-            Text("?")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(AppTheme.primary(scheme))
-                .frame(width: 20, height: 20)
-                .background(helpHover ? AppTheme.sidebarHover(scheme) : .clear)
-                .cornerRadius(10)
-                .overlay(Circle().stroke(AppTheme.hairline(scheme), lineWidth: 1))
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .pointerCursor()
-        .onHover { helpHover = $0 }
-        .popover(isPresented: $showHelp, arrowEdge: .bottom) {
-            Text("这是 iTrader 智能交易服务器的地址")
-                .font(AppTheme.dimFont)
-                .padding(10)
-        }
     }
 
     // MARK: 代理服务器行（三选一 radio + 自定义地址输入框）
@@ -152,34 +89,6 @@ struct SettingsView: View {
     }
 
     // MARK: - 动作
-
-    private func testServer() {
-        let url = serverUrl.trimmingCharacters(in: .whitespaces)
-        guard !url.isEmpty else {
-            alert = .inputError("服务器地址不能为空")
-            return
-        }
-        testing = true
-        Task {
-            let message = await appState.testServer(url: url)
-            testing = false
-            alert = .testResult(message: message)
-        }
-    }
-
-    /// 服务器地址输入完成（回车或失焦）即保存；空值视为放弃修改，回退到仍在生效的地址。
-    /// 与已落库值相同则不重复提交（config_changed 会让同一套值再回填一次）。
-    private func saveServerIfChanged() {
-        let url = serverUrl.trimmingCharacters(in: .whitespaces)
-        guard !url.isEmpty else {
-            serverUrl = savedServerUrl
-            return
-        }
-        serverUrl = url
-        guard url != savedServerUrl else { return }
-        savedServerUrl = url
-        appState.saveConfig(serverUrl: url, proxyUrl: nil)
-    }
 
     /// 代理模式切换即保存：直连/系统代理本身就是完整取值；切到自定义时先等用户填地址
     private func changeProxyMode(_ mode: ProxyMode) {
@@ -220,12 +129,6 @@ struct SettingsView: View {
     /// 用户正在编辑（与已落库值不同）的字段不回填，避免把输入到一半的内容覆盖掉。
     private func fillFromConfig() {
         let config = appState.config
-
-        let trimmedServer = serverUrl.trimmingCharacters(in: .whitespaces)
-        if trimmedServer.isEmpty || trimmedServer == savedServerUrl {
-            serverUrl = config.serverUrl
-        }
-        savedServerUrl = config.serverUrl
 
         let proxy = config.proxyUrl.trimmingCharacters(in: .whitespaces)
         let trimmedProxy = proxyUrl.trimmingCharacters(in: .whitespaces)

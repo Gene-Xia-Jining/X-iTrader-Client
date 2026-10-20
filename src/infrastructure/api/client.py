@@ -37,6 +37,30 @@ async def check_server_health(server_url: str, timeout: float = 5.0) -> dict:
         return response.json()
 
 
+def describe_server_error(error: Exception) -> str:
+    """把健康探测的异常转成一句可读原因，供界面直接展示。
+
+    网络异常的原始 str() 常常只是 "[Errno 61] Connection refused"，而
+    HTTPStatusError 的原文会带上完整 URL 反而难读；这里按类型给出中文主因，
+    有额外信息时附在括号里，便于用户判断是地址、网络还是服务端的问题。
+    """
+    raw = str(error).strip()
+    if isinstance(error, (httpx.InvalidURL, httpx.UnsupportedProtocol)):
+        return f"服务器地址无效（{raw}）" if raw else "服务器地址无效"
+    if isinstance(error, httpx.TimeoutException):
+        main = "请求超时"
+    elif isinstance(error, httpx.ConnectError):
+        main = "无法建立连接"
+    elif isinstance(error, httpx.HTTPStatusError):
+        # 原文包含请求 URL 与状态行，对定位没有额外帮助，只留状态码
+        return f"服务器返回 HTTP {error.response.status_code}"
+    elif isinstance(error, ValueError):
+        main = "服务器返回内容无法解析"
+    else:
+        main = error.__class__.__name__
+    return f"{main}（{raw}）" if raw else main
+
+
 async def fetch_server_symbols(
     server_url: str,
     token_service: Optional["TokenApiService"] = None,

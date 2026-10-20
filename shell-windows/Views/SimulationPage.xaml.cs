@@ -816,7 +816,7 @@ public sealed partial class SimulationPage : Page
     {
         await ShowInfoAsync(
             "服务器地址",
-            "这是 iTrader 智能交易服务器的地址，与「设置」页是同一份配置，输入完成（回车或点到别处）即时保存生效。");
+            "这是 iTrader 智能交易服务器的地址，与顶栏「服务器状态」弹窗是同一份配置，输入完成（回车或点到别处）即时保存生效。");
     }
 
     // -------- Token（未申请时直接提交；已申请过则查看申请记录）--------

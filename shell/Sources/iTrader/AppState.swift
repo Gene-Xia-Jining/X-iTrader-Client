@@ -167,6 +167,8 @@ struct EngineStatus {
     var tradingActive = false
     /// iTrader 服务器连通性（后端心跳常驻探测，与引擎是否运行无关）
     var serverOnline = false
+    /// 最近一次探测失败的原因（在线时为空串），来自后端心跳
+    var serverError = ""
     var accounts: [AccountRuntime] = []
 
     static func from(_ dict: [String: Any]) -> EngineStatus {
@@ -174,6 +176,7 @@ struct EngineStatus {
         s.autoTrade = dict["auto_trade"] as? Bool ?? false
         s.tradingActive = dict["trading_active"] as? Bool ?? false
         s.serverOnline = dict["server_online"] as? Bool ?? false
+        s.serverError = dict["server_error"] as? String ?? ""
         s.accounts = (dict["accounts"] as? [[String: Any]] ?? []).compactMap { item in
             guard let id = item["account_id"] as? String else { return nil }
             return AccountRuntime(
@@ -445,6 +448,9 @@ final class AppState: ObservableObject {
             // 心跳广播只带全局 server_online（无 account_id）；引擎广播两者都带
             if let online = data["server_online"] as? Bool {
                 engineStatus.serverOnline = online
+            }
+            if let error = data["server_error"] as? String {
+                engineStatus.serverError = error
             }
             if let accountID = data["account_id"] as? String,
                let idx = engineStatus.accounts.firstIndex(where: { $0.id == accountID }) {

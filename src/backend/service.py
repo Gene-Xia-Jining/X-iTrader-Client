@@ -34,6 +34,7 @@ from ..domain.events import (
 )
 from ..infrastructure.api.client import (
     check_server_health,
+    describe_server_error,
     fetch_server_strategies,
     fetch_server_symbols,
 )
@@ -85,6 +86,8 @@ class BackendService:
         self._auto_trade = False
         # 服务器连通性：常驻心跳任务周期探测 /api/health，启动即连、断线自动恢复
         self._server_online = False
+        # 最近一次探测失败的原因（在线时为空串），随 status 事件与 engine.status 下发
+        self._server_error = ""
         self._server_watch_task: Optional[asyncio.Task] = None
         # save_config 置位后心跳立即探测一次（新地址即时生效，不等下个周期）
         self._server_check_now = asyncio.Event()
@@ -146,20 +149,28 @@ class BackendService:
     async def probe_server(self) -> None:
         server_url = self.bootstrap.config.server_url
         online = False
+        error = ""
         if server_url:
             try:
                 await check_server_health(server_url)
                 online = True
-            except Exception:
-                online = False
-        if online != self._server_online:
+            except Exception as e:
+                # 失败原因留给界面展示：只有布尔值的话用户只能看到「未连接」，
+                # 无法区分地址写错、网络不通还是服务端 5xx
+                error = describe_server_error(e)
+        if online != self._server_online or error != self._server_error:
+            was_online = self._server_online
             self._server_online = online
-            if server_url:
+            self._server_error = error
+            if server_url and online != was_online:
                 self._log(
-                    "服务器已连接" if online else f"服务器连接断开: {server_url}",
+                    "服务器已连接" if online else f"服务器连接断开: {server_url}（{error}）",
                     LogLevel.INFO if online else LogLevel.WARNING,
                 )
-            self._broadcast("status", {"server_online": online})
+            self._broadcast(
+                "status",
+                {"server_online": online, "server_error": error},
+            )
 
     # -------- Token 领取 --------
 
@@ -363,6 +374,7 @@ class BackendService:
             "auto_trade": self._auto_trade,
             "trading_active": any(e.is_running for e in self._engines.values()),
             "server_online": self._server_online,
+            "server_error": self._server_error,
             "accounts": accounts,
         }
 

@@ -124,6 +124,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 enum AppRoute: String, CaseIterable, Identifiable {
     // 声明顺序即侧栏顺序
+    // 服务器地址已并入顶栏服务器弹窗，「设置」页只保留代理配置
     case dashboard, token, sim, live, records, log, settings
 
     var id: String { rawValue }
@@ -151,8 +152,8 @@ struct RootView: View {
     @EnvironmentObject var appState: AppState
     @State private var selection: AppRoute = .dashboard
     @State private var dark = false
-    @State private var showServerHelp = false
-    @State private var serverHelpHovering = false
+    /// 服务器信息弹窗（点击顶栏服务器状态胶囊）
+    @State private var showServerInfo = false
     @State private var showAutoTradeHelp = false
     @State private var autoTradeHelpHovering = false
     @State private var autoTradeHovering = false
@@ -165,6 +166,8 @@ struct RootView: View {
     @State private var versionHint: String?
     /// 瞬时提示的序号：定时清除时用它判定期间是否已有新提示
     @State private var versionHintToken = 0
+    /// 服务器状态胶囊的悬停态（胶囊本身即弹窗入口，不再单独放问号）
+    @State private var serverPillHovering = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -179,6 +182,11 @@ struct RootView: View {
         .sheet(isPresented: startBlockedBinding) {
             StartBlockedSheet(issues: appState.startBlockedIssues) {
                 appState.startBlockedIssues = []
+            }
+        }
+        .sheet(isPresented: $showServerInfo) {
+            ServerInfoSheet(appState: appState) {
+                showServerInfo = false
             }
         }
         .alert(item: $updatePrompt) { prompt in
@@ -323,27 +331,28 @@ struct RootView: View {
         appState.engineStatus.serverOnline
     }
 
-    /// 服务器状态胶囊：尺寸与「自动交易」按钮一致（高 36、圆角 18）；问号在胶囊左侧
+    /// 服务器状态胶囊：尺寸与「自动交易」按钮一致（高 36、圆角 18）。
+    /// 整颗胶囊即入口，点击弹出服务器信息（地址、连通性、探测方式）。
     private var serverStatusPill: some View {
         let color = serverConnected ? AppTheme.statusGreen : AppTheme.statusRed
-        return HStack(spacing: 8) {
-            helpButton(
-                text: "这里的服务器指策略信号服务器，地址在「设置」中配置。客户端从它获取交易品种与交易信号，并每 10 秒探测一次连通性。",
-                isPresented: $showServerHelp,
-                isHovering: $serverHelpHovering
-            )
+        return Button { showServerInfo = true } label: {
             Text("服务器状态：\(serverConnected ? "已连接" : "未连接")")
                 .font(AppTheme.bodyFont.weight(.semibold))
                 .foregroundColor(color)
+                .padding(.horizontal, 22)
+                .frame(minHeight: 36)
+                .background(serverPillHovering ? AppTheme.canvas(scheme) : .clear)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18)
+                        .stroke(serverPillHovering ? AppTheme.dim(scheme) : AppTheme.hairline(scheme), lineWidth: 1)
+                )
+                .cornerRadius(18)
+                .contentShape(Rectangle())
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 22)
-        .frame(minHeight: 36)
-        .overlay(
-            RoundedRectangle(cornerRadius: 18)
-                .stroke(AppTheme.hairline(scheme), lineWidth: 1)
-        )
-        .cornerRadius(18)
+        .buttonStyle(.plain)
+        .onHover { serverPillHovering = $0 }
+        .pointerCursor()
+        .help("点击查看服务器信息")
     }
 
     /// 版本胶囊：平时显示当前版本；点击即检查更新，发现新版本弹确认框。
@@ -577,6 +586,306 @@ private struct SidebarNavButton: View {
         return hovering ? AppTheme.sidebarHover(scheme) : .clear
     }
 }
+// MARK: - 服务器信息弹窗
+
+/// 点击顶栏服务器状态胶囊后弹出的信息面板。
+///
+/// 只展示后端心跳探到的既有状态与配置，不发起额外请求：连通性由后端每 10 秒
+/// 探测 /api/health 后随 status 事件推送。直接观察 appState 而不是由调用方传值，
+/// 弹窗开着时状态变了也会跟着刷新。地址编辑走「编辑」按钮的二级弹窗，
+/// 代理只作用于天勤连接，留在「设置」页。
+private struct ServerInfoSheet: View {
+    @ObservedObject var appState: AppState
+    let onClose: () -> Void
+
+    @Environment(\.colorScheme) private var scheme
+
+    /// 「编辑服务器信息」二级弹窗
+    @State private var showEditor = false
+    @State private var closeHovering = false
+
+    private var connected: Bool { appState.engineStatus.serverOnline }
+    private var serverUrl: String { appState.config.serverUrl }
+    /// 最近一次探测失败的原因，由后端心跳随 status 事件下发
+    private var serverError: String { appState.engineStatus.serverError }
+
+    private var statusColor: Color {
+        connected ? AppTheme.statusGreen : AppTheme.statusRed
+    }
+
+    private var trimmedUrl: String {
+        serverUrl.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// 未连接时的原因文本：后端还没探过（空串）就说明还没拿到结果
+    private var failureReason: String {
+        guard !connected else { return "" }
+        return serverError.isEmpty ? "尚未探测到结果" : serverError
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 9, height: 9)
+                Text("服务器信息")
+                    .font(AppTheme.titleFont)
+                    .foregroundColor(AppTheme.ink(scheme))
+                Spacer(minLength: 0)
+                // 右上角关闭：弹窗不再有底部按钮行
+                Button { onClose() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(AppTheme.dim(scheme))
+                        .frame(width: 28, height: 28)
+                        .background(closeHovering ? AppTheme.sidebarHover(scheme) : .clear)
+                        .cornerRadius(14)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { closeHovering = $0 }
+                .pointerCursor()
+                .keyboardShortcut(.cancelAction)
+                .help("关闭")
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 12)
+
+            HairlineDivider()
+
+            VStack(alignment: .leading, spacing: 0) {
+                infoRow("服务器类型", value: "策略信号服务器")
+                // 地址行带「编辑」入口：紧跟在取值之后，编辑即打开二级弹窗
+                HStack(alignment: .top, spacing: 12) {
+                    Text("服务器地址")
+                        .font(AppTheme.dimFont)
+                        .foregroundColor(AppTheme.dim(scheme))
+                        .frame(width: 84, alignment: .leading)
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        valueText(
+                            trimmedUrl.isEmpty ? "未配置" : trimmedUrl,
+                            valueColor: trimmedUrl.isEmpty ? AppTheme.warning(scheme) : AppTheme.ink(scheme),
+                            selectable: true
+                        )
+                        editButton
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.vertical, 7)
+                infoRow("连接状态", value: connected ? "正常" : "不可达", valueColor: statusColor)
+                // 失败原因单独成行并允许选中复制，方便用户排查或发给运维
+                if !connected {
+                    infoRow(
+                        "失败原因",
+                        value: failureReason,
+                        valueColor: AppTheme.danger(scheme),
+                        selectable: true
+                    )
+                }
+                infoRow("探测方式", value: "每 10 秒请求 /api/health")
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 6)
+
+            Text("客户端从该服务器获取交易品种、交易策略与交易信号。")
+                .font(AppTheme.dimFont)
+                .foregroundColor(AppTheme.dim(scheme))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 20)
+                .padding(.top, 10)
+                .padding(.bottom, 20)
+        }
+        .frame(width: 460)
+        .background(AppTheme.canvas(scheme))
+        .sheet(isPresented: $showEditor) {
+            ServerEditSheet(appState: appState) { showEditor = false }
+        }
+    }
+
+    /// 地址行尾部的文字按钮（样式同 Token 列表里的「切换」）
+    private var editButton: some View {
+        Button { showEditor = true } label: {
+            Text("编辑")
+                .font(AppTheme.dimFont.weight(.semibold))
+                .foregroundColor(AppTheme.primary(scheme))
+                .frame(height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .help("修改服务器地址")
+    }
+
+    /// 一行「标签 + 取值」；长地址允许换行与选中复制
+    private func infoRow(
+        _ label: String,
+        value: String,
+        valueColor: Color? = nil,
+        selectable: Bool = false
+    ) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(label)
+                .font(AppTheme.dimFont)
+                .foregroundColor(AppTheme.dim(scheme))
+                .frame(width: 84, alignment: .leading)
+            valueText(value, valueColor: valueColor, selectable: selectable)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 7)
+    }
+
+    /// 取值文本：只有地址这类需要复制的行开启选中（`.enabled`/`.disabled` 是不同类型，不能三元取）
+    @ViewBuilder
+    private func valueText(_ value: String, valueColor: Color?, selectable: Bool) -> some View {
+        let text = Text(value)
+            .font(AppTheme.bodyFont)
+            .foregroundColor(valueColor ?? AppTheme.ink(scheme))
+            .fixedSize(horizontal: false, vertical: true)
+        if selectable {
+            text.textSelection(.enabled)
+        } else {
+            text.textSelection(.disabled)
+        }
+    }
+}
+
+// MARK: - 编辑服务器信息弹窗
+
+/// 服务器信息弹窗的「编辑服务器」二级弹窗：改地址 + 测试连接。
+/// 与模拟页第 4 步、设置页共用同一份配置：输入完成（回车或失焦）即保存。
+private struct ServerEditSheet: View {
+    @ObservedObject var appState: AppState
+    let onClose: () -> Void
+
+    @Environment(\.colorScheme) private var scheme
+
+    /// 地址输入框的占位文案（与后端首次运行写入的默认地址一致）
+    private static let urlPlaceholder = "https://itrader.redboil.us.ci"
+
+    @State private var urlDraft = ""
+    /// 当前展示值对应的已落库值：既用于「未改动才回填」，也用于避免重复提交
+    @State private var savedUrl = ""
+    @State private var testing = false
+    @State private var alert: ServerAlert?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("编辑服务器")
+                .font(AppTheme.titleFont)
+                .foregroundColor(AppTheme.ink(scheme))
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                .padding(.bottom, 14)
+
+            HairlineDivider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    AppTextField(
+                        placeholder: Self.urlPlaceholder,
+                        text: $urlDraft,
+                        onCommit: saveUrlIfChanged
+                    )
+                    AppButton(testing ? "测试中..." : "测试连接", variant: .secondary, size: .inline, disabled: testing) {
+                        testServer()
+                    }
+                }
+                Text("这是 iTrader 智能交易服务器的地址，需与服务器部署地址一致")
+                    .font(AppTheme.dimFont)
+                    .foregroundColor(AppTheme.dim(scheme))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+
+            HairlineDivider()
+
+            HStack {
+                Spacer()
+                AppButton("好", variant: .secondary) { onClose() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(20)
+        }
+        .frame(width: 480)
+        .background(AppTheme.canvas(scheme))
+        .onAppear(perform: fillFromConfig)
+        .onChange(of: appState.config) { _ in fillFromConfig() }
+        .alert(item: $alert) { alert in
+            Alert(
+                title: Text(alert.title),
+                message: Text(alert.message),
+                dismissButton: .default(Text("好"))
+            )
+        }
+    }
+
+    /// 输入完成即保存；空值视为放弃修改，回退到仍在生效的地址
+    private func saveUrlIfChanged() {
+        let url = urlDraft.trimmingCharacters(in: .whitespaces)
+        guard !url.isEmpty else {
+            urlDraft = savedUrl
+            return
+        }
+        urlDraft = url
+        guard url != savedUrl else { return }
+        savedUrl = url
+        appState.saveConfig(serverUrl: url, proxyUrl: nil)
+    }
+
+    private func testServer() {
+        let url = urlDraft.trimmingCharacters(in: .whitespaces)
+        guard !url.isEmpty else {
+            alert = .inputError("服务器地址不能为空")
+            return
+        }
+        testing = true
+        Task {
+            let message = await appState.testServer(url: url)
+            testing = false
+            alert = .testResult(message: message)
+        }
+    }
+
+    /// 用当前配置回填地址；用户正在编辑（与已落库值不同）时不覆盖
+    private func fillFromConfig() {
+        let config = appState.config
+        let trimmedDraft = urlDraft.trimmingCharacters(in: .whitespaces)
+        if trimmedDraft.isEmpty || trimmedDraft == savedUrl {
+            urlDraft = config.serverUrl
+        }
+        savedUrl = config.serverUrl
+    }
+}
+
+/// 服务器弹窗内的一次性提示（输入错误 / 测试连接结果）
+private enum ServerAlert: Identifiable {
+    case inputError(String)
+    case testResult(message: String)
+
+    var id: String {
+        switch self {
+        case .inputError(let msg): return "error-\(msg)"
+        case .testResult(let msg): return "test-\(msg)"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .inputError: return "输入错误"
+        case .testResult: return "测试连接"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .inputError(let msg), .testResult(let msg): return msg
+        }
+    }
+}
+
 // MARK: - 自动交易启动被拦截：问题清单弹窗
 
 /// 启动前预检未通过时展示的问题列表。

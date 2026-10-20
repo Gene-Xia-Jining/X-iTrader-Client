@@ -8,7 +8,8 @@ using XTrader.Shell.State;
 namespace XTrader.Shell.Views;
 
 /// <summary>
-/// 设置页：服务器连接 + 代理（对应 mac 壳的 SettingsView / Qt SettingsPage）。
+/// 设置页：代理服务器配置（对应 mac 壳的 SettingsView / Qt SettingsPage）。
+/// 服务器地址与测试连接已合并到顶栏服务器弹窗（点击服务器状态胶囊）；
 /// 软件更新已合并到顶栏版本胶囊（点击即检查更新）。
 /// </summary>
 public sealed partial class SettingsPage : Page
@@ -29,7 +30,6 @@ public sealed partial class SettingsPage : Page
     private bool _filling;
 
     // 表单当前展示值对应的已落库值：既用于「未改动才回填」，也用于避免重复提交
-    private string _savedServerUrl = "";
     private string _savedProxy = "";
 
     public SettingsPage()
@@ -38,8 +38,6 @@ public sealed partial class SettingsPage : Page
         _theme = new ThemedPage(this, ApplyPalette, OnStateChanged);
 
         // 设置页没有保存按钮：各字段输入完成（回车或失焦）/ 切换选项即落库
-        ServerBox.LostFocus += (_, _) => SaveServerIfChanged();
-        ServerBox.KeyDown += (_, e) => OnCommitKey(e, SaveServerIfChanged);
         ProxyBox.LostFocus += (_, _) => SaveProxyIfChanged();
         ProxyBox.KeyDown += (_, e) => OnCommitKey(e, SaveProxyIfChanged);
         ProxyDirect.Checked += (_, _) => OnProxyModeChecked(ProxyMode.Direct);
@@ -62,19 +60,9 @@ public sealed partial class SettingsPage : Page
         Card.Background = Brush(Palette.Card);
         Card.BorderBrush = Brush(Palette.Hairline);
 
-        foreach (var label in new[] { ServerLabel, ProxyLabel })
-        {
-            label.Foreground = Brush(Palette.Ink);
-        }
-        foreach (var hint in new[] { ServerHint, ProxyHint })
-        {
-            hint.Foreground = Brush(Palette.Dim);
-            hint.FontSize = 13;
-        }
-        foreach (var divider in new[] { Divider1 })
-        {
-            divider.Fill = Brush(Palette.Divider);
-        }
+        ProxyLabel.Foreground = Brush(Palette.Ink);
+        ProxyHint.Foreground = Brush(Palette.Dim);
+        ProxyHint.FontSize = 13;
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -108,13 +96,6 @@ public sealed partial class SettingsPage : Page
         _filling = true;
         var config = State.Config;
 
-        var trimmedServer = ServerBox.Text.Trim();
-        if (trimmedServer.Length == 0 || trimmedServer == _savedServerUrl)
-        {
-            ServerBox.Text = config.ServerUrl;
-        }
-        _savedServerUrl = config.ServerUrl;
-
         var proxy = config.ProxyUrl.Trim();
         var trimmedProxy = ProxyBox.Text.Trim();
         // 自定义模式下输入框为空：用户刚切过来还没填，别把单选跳回直连
@@ -144,28 +125,6 @@ public sealed partial class SettingsPage : Page
     }
 
     // -------- 落库（无保存按钮：输入完成 / 切换即生效）--------
-
-    /// <summary>服务器地址输入完成（回车或失焦）即保存；空值视为放弃修改，回退到仍在生效的地址。</summary>
-    private void SaveServerIfChanged()
-    {
-        var url = ServerBox.Text.Trim();
-        if (url.Length == 0)
-        {
-            ServerBox.Text = _savedServerUrl.Length > 0 ? _savedServerUrl : State.Config.ServerUrl;
-            return;
-        }
-        if (ServerBox.Text != url)
-        {
-            ServerBox.Text = url;
-        }
-        if (url == _savedServerUrl)
-        {
-            return;
-        }
-        // 只提交服务器地址，其余字段由后端沿用
-        _savedServerUrl = url;
-        State.SaveConfig(url, null);
-    }
 
     /// <summary>代理模式切换即保存；自定义模式的地址还没填时不落库，等输入完成。</summary>
     private void OnProxyModeChecked(ProxyMode mode)
@@ -220,31 +179,5 @@ public sealed partial class SettingsPage : Page
         }
         _savedProxy = value;
         State.SaveConfig(null, value);
-    }
-
-    // -------- 动作 --------
-
-    private async void OnTestServerClick(object sender, RoutedEventArgs e)
-    {
-        var url = ServerBox.Text.Trim();
-        if (url.Length == 0)
-        {
-            await ShowInfoAsync("输入错误", "服务器地址不能为空");
-            return;
-        }
-        var message = await State.TestServerAsync(url);
-        await ShowInfoAsync("测试连接", message);
-    }
-
-    private async Task ShowInfoAsync(string title, string message)
-    {
-        var dialog = new ContentDialog
-        {
-            XamlRoot = Root.XamlRoot,
-            Title = title,
-            Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true },
-            CloseButtonText = "好",
-        };
-        await dialog.ShowAsync();
     }
 }

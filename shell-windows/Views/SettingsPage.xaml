@@ -9,22 +9,7 @@
             <Border x:Name="Card" BorderThickness="1" CornerRadius="18" Padding="20">
                 <StackPanel Spacing="14">
 
-                    <!-- 服务器地址 -->
-                    <StackPanel Spacing="6">
-                        <TextBlock x:Name="ServerLabel" Text="服务器地址:" />
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <TextBox x:Name="ServerBox" Width="380"
-                                     PlaceholderText="https://itrader.redboil.us.ci" />
-                            <Button Content="测试连接" Click="OnTestServerClick" />
-                        </StackPanel>
-                        <TextBlock x:Name="ServerHint"
-                                   Text="这是 iTrader 智能交易服务器的地址，需与服务器部署地址一致"
-                                   TextWrapping="Wrap" />
-                    </StackPanel>
-
-                    <Rectangle Height="1" x:Name="Divider1" />
-
-                    <!-- 代理服务器 -->
+                    <!-- 代理服务器（服务器地址已并入顶栏服务器弹窗） -->
                     <StackPanel Spacing="6">
                         <TextBlock x:Name="ProxyLabel" Text="代理服务器:" />
                         <StackPanel Orientation="Horizontal" Spacing="16">

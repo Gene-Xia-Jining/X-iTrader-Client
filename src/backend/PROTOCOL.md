@@ -45,7 +45,7 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 | event | data | 说明 |
 |---|---|---|
 | `log` | `{message, level, timestamp}` | level: INFO/WARNING/ERROR/SUCCESS |
-| `status` | `{trading_active, server_connected, account_id}` | 引擎状态变化；心跳探测到连通性变化时仅含 `{server_online}` |
+| `status` | `{trading_active, server_connected, account_id}` | 引擎状态变化；心跳探测到连通性/失败原因变化时仅含 `{server_online, server_error}` |
 | `trading_started` / `trading_stopped` | `{account_id}` | |
 | `signal_received` | `{signal: {id, symbol, side, price, position, updated_at}}` | 服务器信号到达 |
 | `trade_executed` | `{symbol, target_position}` | 调仓指令已交付 |
@@ -77,7 +77,7 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 | `engine.start` | - | engines 状态。启动前预检（服务器连通、已启用账户字段齐全（品种、策略必选）、本地 token、天勤握手）；任一项不过抛 `EngineStartBlockedError`（`data.issues` 为问题列表），不置 `auto_trade`、不启动任何引擎 |
 | `engine.stop` | - | engines 状态。等价 UI 的"自动交易"关 |
 | `engine.set_auto_trade` | `{value}` | `{}` 只改自动执行标志，不动引擎 |
-| `engine.status` | - | `{auto_trade, trading_active, server_online, accounts: [{account_id, running, server_connected}]}`；`server_online` 为后端心跳探测的 iTrader 服务器连通性（启动即测、每 10s 周期、保存配置后立即重测），与引擎是否运行无关 |
+| `engine.status` | - | `{auto_trade, trading_active, server_online, server_error, accounts: [{account_id, running, server_connected}]}`；`server_online` 为后端心跳探测的 iTrader 服务器连通性（启动即测、每 10s 周期、保存配置后立即重测），与引擎是否运行无关；`server_error` 是最近一次探测失败的可读原因（在线时为空串），供界面展示 |
 | `trading.records` | `{kind?: "sim"\|"live", account_id?}` | `{accounts: [{account_id, kind, label, error?, account, positions, orders, trades}]}` 账户当日交易数据快照（字段见下）。不传 kind / account_id 时返回全部已配置账户；多账户并发取数，单账户失败只体现在该项 `error` |
 | `update.check` | `{silent?}` | `{status: "latest"\|"available"\|"none"\|"error"\|"skipped", message, version?, has_patch?}`；silent 尊重"跳过此版本" |
 | `update.download` | - | `{status: "downloading"}` 进度走 `update_progress` 事件 |

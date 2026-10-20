@@ -206,6 +206,9 @@ public sealed class EngineStatus
     /// <summary>iTrader 服务器连通性（后端心跳常驻探测，与引擎是否运行无关）</summary>
     public bool ServerOnline { get; set; }
 
+    /// <summary>最近一次探测失败的原因（在线时为空串），来自后端心跳</summary>
+    public string ServerError { get; set; } = "";
+
     public List<AccountRuntime> Accounts { get; set; } = [];
 
     public static EngineStatus From(JsonObject dict)
@@ -215,6 +218,7 @@ public sealed class EngineStatus
             AutoTrade = dict["auto_trade"]?.GetValue<bool>() ?? false,
             TradingActive = dict["trading_active"]?.GetValue<bool>() ?? false,
             ServerOnline = dict["server_online"]?.GetValue<bool>() ?? false,
+            ServerError = dict["server_error"]?.GetValue<string>() ?? "",
         };
         if (dict["accounts"] is JsonArray list)
         {
@@ -783,6 +787,10 @@ public sealed class AppState : INotifyPropertyChanged
                 if (data["server_online"]?.GetValue<bool>() is { } online)
                 {
                     engine.ServerOnline = online;
+                }
+                if (data["server_error"]?.GetValue<string>() is { } serverError)
+                {
+                    engine.ServerError = serverError;
                 }
                 if (data["account_id"]?.GetValue<string>() is { } accountId)
                 {

@@ -3,6 +3,7 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Shapes;
 using XTrader.Shell.State;
 using XTrader.Shell.Theme;
 using XTrader.Shell.Tray;
@@ -264,12 +265,326 @@ public sealed partial class MainWindow : Window
         _state.FetchStrategies();
     }
 
-    /// <summary>服务器状态胶囊里的问号：说明这里指的是哪个服务器（对应用户在 mac 壳的 popover）。</summary>
-    private async void OnServerHelpClick(object sender, RoutedEventArgs e)
+    /// <summary>服务器胶囊悬停：边框提亮一档，暗示整颗可点（同 mac 壳的胶囊悬停）</summary>
+    private void OnServerPillPointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
-        await ShowHelpAsync("服务器状态",
-            "这里的服务器指策略信号服务器，地址在「设置」中配置。"
-            + "客户端从它获取交易品种与交易信号，并每 10 秒探测一次连通性。");
+        var palette = ThemeTokens.For(IsDark);
+        ServerPill.BorderBrush = new SolidColorBrush(palette.Dim);
+        ServerPill.Background = new SolidColorBrush(palette.Canvas);
+    }
+
+    private void OnServerPillPointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        var palette = ThemeTokens.For(IsDark);
+        ServerPill.BorderBrush = new SolidColorBrush(palette.Hairline);
+        ServerPill.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+    }
+
+    /// <summary>
+    /// 服务器状态胶囊点击：弹出服务器信息（地址、连通性、探测方式、失败原因）。
+    /// 连通性读后端心跳（每 10 秒探测 /api/health 后推送），不额外发请求；
+    /// 改地址走地址行尾部的「编辑」（同 mac 壳）。代理只作用于天勤连接，留在设置页。
+    /// </summary>
+    private async void OnServerInfoClick(object sender, RoutedEventArgs e)
+    {
+        if (RootGrid.XamlRoot is null)
+        {
+            return;
+        }
+
+        var palette = ThemeTokens.For(IsDark);
+        var online = _state.EngineStatus.ServerOnline;
+        var statusColor = online ? ThemeTokens.StatusGreen : ThemeTokens.StatusRed;
+        var serverUrl = _state.Config.ServerUrl.Trim();
+        // 后端还没探过时 server_error 为空串，此时只能说「尚未探测到结果」
+        var serverError = _state.EngineStatus.ServerError;
+        var failureReason = serverError.Length == 0 ? "尚未探测到结果" : serverError;
+
+        var rows = new StackPanel();
+        ContentDialog? dialog = null;
+        var editRequested = false;
+
+        // 一行「标签 + 取值」：标签定宽对齐，地址等长文本允许选中复制。
+        // trailing 用于地址行的「编辑」入口，排在取值右侧。
+        void AddRow(string label, string value, Windows.UI.Color valueColor, bool selectable = false, FrameworkElement? trailing = null)
+        {
+            var row = new Grid { Margin = new Thickness(0, 6, 0, 6) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(84) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            row.Children.Add(new TextBlock
+            {
+                Text = label,
+                FontSize = 13,
+                Foreground = new SolidColorBrush(palette.Dim),
+                VerticalAlignment = VerticalAlignment.Top,
+            });
+            var valueText = new TextBlock
+            {
+                Text = value,
+                FontSize = 15,
+                Foreground = new SolidColorBrush(valueColor),
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = selectable,
+            };
+
+            if (trailing is null)
+            {
+                Grid.SetColumn(valueText, 1);
+                row.Children.Add(valueText);
+            }
+            else
+            {
+                // 地址与「编辑」顺序排、整体靠左（同 mac 壳：按钮紧跟地址之后）。
+                // 水平 StackPanel 按无限宽测量，换行必须靠 MaxWidth 兜住，
+                // 否则超长地址会把弹窗横向撑开。320 对齐 mac 460 宽弹窗里地址列的可用宽度。
+                valueText.MaxWidth = 320;
+                var valueRow = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 10,
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                };
+                valueRow.Children.Add(valueText);
+                valueRow.Children.Add(trailing);
+                Grid.SetColumn(valueRow, 1);
+                row.Children.Add(valueRow);
+            }
+            rows.Children.Add(row);
+        }
+
+        // 地址行尾部的「编辑」：二级对话框不能在 ContentDialog 打开期间叠加，
+        // 所以先收起本弹窗，等 ShowAsync 返回后再打开编辑器
+        var editButton = new Button
+        {
+            Content = "编辑",
+            FontSize = 13,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(palette.Primary),
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(0),
+            MinWidth = 0,
+            MinHeight = 0,
+            Height = 22,
+            VerticalAlignment = VerticalAlignment.Top,
+        };
+        ToolTipService.SetToolTip(editButton, "修改服务器地址");
+        editButton.Click += (_, _) =>
+        {
+            editRequested = true;
+            dialog?.Hide();
+        };
+
+        AddRow("服务器类型", "策略信号服务器", palette.Ink);
+        AddRow(
+            "服务器地址",
+            serverUrl.Length == 0 ? "未配置" : serverUrl,
+            serverUrl.Length == 0 ? palette.Warning : palette.Ink,
+            selectable: true,
+            trailing: editButton);
+        AddRow("连接状态", online ? "正常" : "不可达", statusColor);
+        // 失败原因单独成行并允许选中复制，方便用户排查或发给运维
+        if (!online)
+        {
+            AddRow("失败原因", failureReason, palette.Danger, selectable: true);
+        }
+        AddRow("探测方式", "每 10 秒请求 /api/health", palette.Ink);
+
+        var content = new StackPanel { Spacing = 0 };
+
+        // 标题行：状态圆点 + 标题，右上角关闭（不再用打勾行，也不再显示右侧状态文字）
+        var closeButton = new Button
+        {
+            Content = new FontIcon
+            {
+                Glyph = "\uE711",  // Segoe MDL2：Cancel
+                FontSize = 12,
+                Foreground = new SolidColorBrush(palette.Dim),
+            },
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            Width = 32,
+            Height = 32,
+            Padding = new Thickness(0),
+            CornerRadius = new CornerRadius(16),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTipService.SetToolTip(closeButton, "关闭");
+        closeButton.Click += (_, _) => dialog?.Hide();
+
+        var headerText = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 10,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        headerText.Children.Add(new Ellipse
+        {
+            Width = 9,
+            Height = 9,
+            Fill = new SolidColorBrush(statusColor),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        headerText.Children.Add(new TextBlock
+        {
+            Text = "服务器信息",
+            FontSize = 20,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(palette.Ink),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+
+        var header = new Grid { Margin = new Thickness(0, 0, 0, 14) };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.Children.Add(headerText);
+        Grid.SetColumn(closeButton, 1);
+        header.Children.Add(closeButton);
+
+        content.Children.Add(header);
+        content.Children.Add(rows);
+
+        content.Children.Add(new TextBlock
+        {
+            Text = "客户端从该服务器获取交易品种、交易策略与交易信号。",
+            FontSize = 13,
+            Foreground = new SolidColorBrush(palette.Dim),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 10, 0, 0),
+        });
+
+        dialog = new ContentDialog
+        {
+            XamlRoot = RootGrid.XamlRoot,
+            // 弹窗在独立的 popup 根下，不继承窗口根的主题，需要单独指定，
+            // 否则深色模式下标签文字与背景会用浅色模板
+            RequestedTheme = IsDark ? ElementTheme.Dark : ElementTheme.Light,
+            Content = content,
+        };
+        // 底部按钮行已移除，关闭只走右上角的叉（同 Token 记录 / 下载快期两个弹窗）
+        await dialog.ShowAsync();
+        if (editRequested)
+        {
+            // 上一个 ContentDialog 的关闭动画还没走完时再 ShowAsync 会抛
+            // 「同一时间只能打开一个 ContentDialog」，等一帧以上再开编辑器
+            await Task.Delay(150);
+            await ShowServerEditorAsync();
+        }
+    }
+
+    /// <summary>
+    /// 「编辑服务器」二级对话框：改地址 + 测试连接。
+    /// 输入完成（回车或失焦）即保存，与模拟页第 4 步共用同一份配置。
+    /// </summary>
+    private async Task ShowServerEditorAsync()
+    {
+        if (RootGrid.XamlRoot is null)
+        {
+            return;
+        }
+
+        var palette = ThemeTokens.For(IsDark);
+
+        var serverBox = new TextBox
+        {
+            Text = _state.Config.ServerUrl,
+            FontSize = 15,
+            PlaceholderText = "https://itrader.redboil.us.ci",
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var savedUrl = _state.Config.ServerUrl.Trim();
+
+        // 输入完成（回车或失焦）即保存；空值视为放弃修改，回退到仍在生效的地址
+        void SaveUrl()
+        {
+            var url = serverBox.Text.Trim();
+            if (url.Length == 0)
+            {
+                serverBox.Text = savedUrl;
+                return;
+            }
+            if (serverBox.Text != url)
+            {
+                serverBox.Text = url;
+            }
+            if (url == savedUrl)
+            {
+                return;
+            }
+            // 只提交服务器地址，代理沿用设置页里的现有值（后端按未提供字段保留）
+            savedUrl = url;
+            _state.SaveConfig(url, null);
+        }
+
+        serverBox.LostFocus += (_, _) => SaveUrl();
+
+        // 测试结果就地显示在地址下方：ContentDialog 打开期间不能再叠一个 ContentDialog
+        var testResult = new TextBlock
+        {
+            FontSize = 13,
+            TextWrapping = TextWrapping.Wrap,
+            Visibility = Visibility.Collapsed,
+            Margin = new Thickness(0, 6, 0, 0),
+        };
+
+        var testButton = new Button
+        {
+            Content = "测试连接",
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
+        };
+        testButton.Click += async (_, _) =>
+        {
+            var url = serverBox.Text.Trim();
+            if (url.Length == 0)
+            {
+                testResult.Text = "服务器地址不能为空";
+                testResult.Foreground = new SolidColorBrush(palette.Danger);
+                testResult.Visibility = Visibility.Visible;
+                return;
+            }
+            testButton.IsEnabled = false;
+            testButton.Content = "测试中...";
+            testResult.Visibility = Visibility.Collapsed;
+            var message = await _state.TestServerAsync(url);
+            testButton.Content = "测试连接";
+            testButton.IsEnabled = true;
+            testResult.Text = message;
+            testResult.Foreground = new SolidColorBrush(
+                message.StartsWith("连接失败", StringComparison.Ordinal) ? palette.Danger : ThemeTokens.StatusGreen);
+            testResult.Visibility = Visibility.Visible;
+        };
+
+        var inputRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0 };
+        inputRow.Children.Add(serverBox);
+        inputRow.Children.Add(testButton);
+
+        var content = new StackPanel { Spacing = 0 };
+        content.Children.Add(inputRow);
+        content.Children.Add(testResult);
+        content.Children.Add(new TextBlock
+        {
+            Text = "这是 iTrader 智能交易服务器的地址，需与服务器部署地址一致。输入完成（回车或点到别处）即时保存生效。",
+            FontSize = 13,
+            Foreground = new SolidColorBrush(palette.Dim),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0),
+        });
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = RootGrid.XamlRoot,
+            RequestedTheme = IsDark ? ElementTheme.Dark : ElementTheme.Light,
+            Title = "编辑服务器",
+            Content = content,
+            CloseButtonText = "好",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        await dialog.ShowAsync();
+        // 关闭（点「好」或按 Esc）即视为输入完成：把没失焦的改动一并保存
+        SaveUrl();
     }
 
     /// <summary>自动交易开关旁的问号：说明开关控制什么、启动检查项、关闭是否平仓。
@@ -626,9 +941,7 @@ public sealed partial class MainWindow : Window
         TopBar.Background = new SolidColorBrush(palette.Chrome);
         TopBar.BorderBrush = new SolidColorBrush(palette.Hairline);
         ServerPill.BorderBrush = new SolidColorBrush(palette.Hairline);
-        ServerHelpButton.Foreground = new SolidColorBrush(palette.Primary);
-        ServerHelpButton.BorderBrush = new SolidColorBrush(palette.Hairline);
-        ServerHelpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        ServerPill.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
         AutoTradeHelpButton.Foreground = new SolidColorBrush(palette.Primary);
         AutoTradeHelpButton.BorderBrush = new SolidColorBrush(palette.Hairline);
         AutoTradeHelpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
