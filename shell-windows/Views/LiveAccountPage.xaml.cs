@@ -85,7 +85,7 @@ public sealed partial class LiveAccountPage : Page
     private void RebuildCards()
     {
         var saved = State.Accounts.Where(a => a.Kind == "live").ToList();
-        var key = string.Join("|", saved.Select(a => $"{a.Id}:{a.Label}:{a.Broker}:{a.TradeAccount}:{a.TqAccount}:{a.Enabled}:{string.Join(",", a.Symbols)}"))
+        var key = string.Join("|", saved.Select(a => $"{a.Id}:{a.Label}:{a.Broker}:{a.TradeAccount}:{a.TqAccount}:{a.Enabled}:{string.Join(",", a.Symbols)}:{a.Strategy}"))
             + $";drafts:{string.Join(",", _draftIds)}";
         // 主题变化不进签名：卡片已有 Refresh(dark) 负责重新着色，重建会丢掉正在编辑的内容
         if (key == _accountsKey)

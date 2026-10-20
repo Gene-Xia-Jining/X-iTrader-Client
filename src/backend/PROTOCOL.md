@@ -74,7 +74,7 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 | `tokens.request` | `{description?}` | `{status}` 提交申请后立即触发一次后台领取轮询 |
 | `tokens.delete` | `{token_id}` | `{status, records, active_token_id, cached_token_ids}` 删除一条申请记录后返回刷新后的状态；删掉的若是当前生效记录，本地 token 与该记录的凭据缓存一并清除。记录不存在时抛错 |
 | `tokens.switch` | `{token_id}` | `{status, records, active_token_id, cached_token_ids}` 把该记录的 Token 设为当前使用：优先取本地缓存，没有则向服务器定向领取；两者都不可用时抛错。切换后若引擎在运行会被停止（信号流的请求头固定了旧 token），需重新开启自动交易 |
-| `engine.start` | - | engines 状态。启动前预检（服务器连通、已启用账户字段齐全、本地 token、天勤握手）；任一项不过抛 `EngineStartBlockedError`（`data.issues` 为问题列表），不置 `auto_trade`、不启动任何引擎 |
+| `engine.start` | - | engines 状态。启动前预检（服务器连通、已启用账户字段齐全（品种、策略必选）、本地 token、天勤握手）；任一项不过抛 `EngineStartBlockedError`（`data.issues` 为问题列表），不置 `auto_trade`、不启动任何引擎 |
 | `engine.stop` | - | engines 状态。等价 UI 的"自动交易"关 |
 | `engine.set_auto_trade` | `{value}` | `{}` 只改自动执行标志，不动引擎 |
 | `engine.status` | - | `{auto_trade, trading_active, server_online, accounts: [{account_id, running, server_connected}]}`；`server_online` 为后端心跳探测的 iTrader 服务器连通性（启动即测、每 10s 周期、保存配置后立即重测），与引擎是否运行无关 |

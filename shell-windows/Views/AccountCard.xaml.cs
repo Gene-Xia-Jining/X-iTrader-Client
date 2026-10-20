@@ -30,7 +30,9 @@ public sealed partial class AccountCard : UserControl
     private bool _filling;
     private string _broker = "";
     private string _selectedSymbol = "";
+    private string _selectedStrategy = "";
     private string _symbolKey = "";
+    private string _strategyKey = "";
 
     /// <summary>草稿卡保存成功或删除后通知宿主移除</summary>
     public event Action? Dismissed;
@@ -58,13 +60,14 @@ public sealed partial class AccountCard : UserControl
 
         foreach (var label in new[]
                  {
-                     TradeAccountLabel, TradePasswordLabel, TqAccountLabel, TqPasswordLabel, SymbolLabel,
+                     TradeAccountLabel, TradePasswordLabel, TqAccountLabel, TqPasswordLabel, SymbolLabel, StrategyLabel,
                  })
         {
             label.Foreground = new SolidColorBrush(palette.Dim);
             label.FontSize = 13;
         }
         SymbolHint.Foreground = new SolidColorBrush(palette.Dim);
+        StrategyHint.Foreground = new SolidColorBrush(palette.Dim);
         DeleteButton.Foreground = new SolidColorBrush(palette.Danger);
 
         // 期货公司行前缀与各卡片自身的组名标签
@@ -94,13 +97,17 @@ public sealed partial class AccountCard : UserControl
 
         RenderSymbols();
         SymbolHint.Text = PickerHint;
+        RenderStrategies();
+        StrategyHint.Text = StrategyPickerHint;
     }
 
-    /// <summary>品种数据变化后由页面调用（服务器品种列表、获取状态）。</summary>
+    /// <summary>品种/策略数据变化后由页面调用（服务器目录、获取状态）。</summary>
     internal void RefreshSymbols()
     {
         RenderSymbols();
         SymbolHint.Text = PickerHint;
+        RenderStrategies();
+        StrategyHint.Text = StrategyPickerHint;
     }
 
     // -------- 期货公司 --------
@@ -213,6 +220,70 @@ public sealed partial class AccountCard : UserControl
 
     private string DisplaySymbol(string symbol) => State?.DisplaySymbol(symbol) ?? symbol;
 
+    // -------- 策略 --------
+
+    private void RenderStrategies()
+    {
+        var palette = ThemeTokens.For(_dark);
+        var strategies = AllStrategies;
+        var key = string.Join(",", strategies.Select(s => $"{s.Id}:{s.Name}"))
+            + $";{_selectedStrategy};{_dark}";
+        if (key == _strategyKey)
+        {
+            return;
+        }
+        _strategyKey = key;
+
+        StrategyPanel.Children.Clear();
+        foreach (var strategy in strategies)
+        {
+            var isOn = _selectedStrategy == strategy.Id;
+            var button = new Button
+            {
+                Content = strategy.Name,
+                Style = WrapPanel.CapsuleStyle(),
+                Background = new SolidColorBrush(isOn ? palette.Primary : Microsoft.UI.Colors.Transparent),
+                BorderBrush = new SolidColorBrush(isOn ? palette.Primary : palette.Hairline),
+                Foreground = new SolidColorBrush(isOn ? Microsoft.UI.Colors.White : palette.Ink),
+            };
+            ToolTipService.SetToolTip(button, strategy.Description.Length == 0 ? null : strategy.Description);
+            // 与品种一致：单选语义，点击只换选，不取消
+            button.Click += (_, _) =>
+            {
+                _selectedStrategy = strategy.Id;
+                RenderStrategies();
+            };
+            StrategyPanel.Children.Add(button);
+        }
+    }
+
+    /// <summary>已选策略不在服务器目录里时保留显示，避免服务器临时不可用时选中态凭空消失</summary>
+    private List<StrategyInfo> AllStrategies
+    {
+        get
+        {
+            var result = State?.ServerStrategies.ToList() ?? [];
+            if (_selectedStrategy.Length > 0 && !result.Any(s => s.Id == _selectedStrategy))
+            {
+                result.Add(new StrategyInfo { Id = _selectedStrategy, Name = _selectedStrategy });
+            }
+            return result;
+        }
+    }
+
+    private string StrategyPickerHint
+    {
+        get
+        {
+            if (State is null) return "";
+            if (State.StrategiesFetching) return "正在获取策略...";
+            if (State.StrategiesMessage.StartsWith("获取失败")) return State.StrategiesMessage;
+            var merged = AllStrategies;
+            if (merged.Count > 0) return $"共 {merged.Count} 个策略，选择一个订阅，保存后生效";
+            return "服务器暂无可选策略";
+        }
+    }
+
     /// <summary>页面注入的状态引用（构造后立即赋值，供品种列表与显示名使用）。</summary>
     internal AppState? State { get; set; }
 
@@ -245,6 +316,7 @@ public sealed partial class AccountCard : UserControl
             TqAccountBox.Text = Account.TqAccount;
             EnabledCheck.IsChecked = Account.Enabled;
             _selectedSymbol = Account.Symbols.FirstOrDefault() ?? "";
+            _selectedStrategy = Account.Strategy;
         }
         finally
         {
@@ -293,6 +365,11 @@ public sealed partial class AccountCard : UserControl
             await ShowInfoAsync("输入错误", "请选择一个交易品种");
             return;
         }
+        if (AllStrategies.Count > 0 && _selectedStrategy.Length == 0)
+        {
+            await ShowInfoAsync("输入错误", "请选择一个交易策略");
+            return;
+        }
 
         var parameters = new JsonObject
         {
@@ -310,6 +387,11 @@ public sealed partial class AccountCard : UserControl
         if (AllSymbols.Count > 0 && _selectedSymbol.Length > 0)
         {
             parameters["symbols"] = new JsonArray(_selectedSymbol);
+        }
+        // 空串是后端的「清除选择」语义，只有确实有选中值时才提交
+        if (_selectedStrategy.Length > 0)
+        {
+            parameters["strategy"] = _selectedStrategy;
         }
 
         var error = await (State?.SaveAccountAsync(parameters) ?? Task.FromResult<string?>("应用状态未就绪"));

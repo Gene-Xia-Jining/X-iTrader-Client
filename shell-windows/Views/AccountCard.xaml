@@ -38,6 +38,12 @@
                 <TextBlock x:Name="SymbolHint" FontSize="13" TextWrapping="Wrap" />
             </StackPanel>
 
+            <TextBlock x:Name="StrategyLabel" Text="交易策略:" FontSize="13" />
+            <StackPanel Spacing="6">
+                <views:WrapPanel x:Name="StrategyPanel" Spacing="10" />
+                <TextBlock x:Name="StrategyHint" FontSize="13" TextWrapping="Wrap" />
+            </StackPanel>
+
             <Button Content="保存" Click="OnSaveClick" HorizontalAlignment="Right" />
         </StackPanel>
     </Border>

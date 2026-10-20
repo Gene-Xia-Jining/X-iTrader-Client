@@ -30,6 +30,7 @@ def _sim_account(**overrides) -> Account:
         tq_account="13800000000",
         tq_password="secret",
         symbols=["SHFE.au2601"],
+        strategy="supertrend",
         enabled=True,
     )
     base.update(overrides)
@@ -47,6 +48,7 @@ def _live_account(**overrides) -> Account:
         trade_account="022631",
         trade_password="123456",
         symbols=["SHFE.au2601"],
+        strategy="supertrend",
         enabled=True,
     )
     base.update(overrides)
@@ -124,6 +126,21 @@ class EngineStartPreflightTest(unittest.TestCase):
         error = _start_with(service)
         self.assertIsNotNone(error)
         self.assertTrue(any("未选择交易品种" in i for i in error.issues))
+
+    def test_missing_strategy_blocks(self):
+        service = _make_service()
+        service.bootstrap.save_account(_sim_account(strategy=""))
+        error = _start_with(service)
+        self.assertIsNotNone(error)
+        self.assertTrue(any("未选择交易策略" in i for i in error.issues))
+        self.assertFalse(service._auto_trade)
+
+    def test_live_missing_strategy_blocks(self):
+        service = _make_service()
+        service.bootstrap.save_account(_live_account(strategy=""))
+        error = _start_with(service)
+        self.assertIsNotNone(error)
+        self.assertTrue(any("账户「实盘账户」未选择交易策略" in i for i in error.issues))
 
     def test_missing_token_blocks(self):
         service = _make_service()

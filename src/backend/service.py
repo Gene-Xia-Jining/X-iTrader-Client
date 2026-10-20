@@ -641,7 +641,7 @@ class BackendService:
 
         预检项：
         - 服务器连通（/api/health）；
-        - 已启用账户非空，且每个账户的品种、实盘资金账号等关键字段已填；
+        - 已启用账户非空，且每个账户的品种、策略、实盘资金账号等关键字段已填；
         - 本地 API token 已领取（否则 SSE 信号流会被服务器 401 拒绝）；
         - 每个启用账户的快期权限账户能完成 TqApi 握手（含账户权限校验）。
 
@@ -695,6 +695,9 @@ class BackendService:
                 issues.append(f"账户「{label}」未配置快期密码")
             if not acc.symbols:
                 issues.append(f"账户「{label}」未选择交易品种")
+            # 策略决定订阅哪一路信号，未选时服务器会按默认策略推送，与用户预期不一致
+            if not acc.strategy:
+                issues.append(f"账户「{label}」未选择交易策略")
             if acc.kind == "live":
                 if not acc.broker:
                     issues.append(f"实盘账户「{label}」未选择期货公司")

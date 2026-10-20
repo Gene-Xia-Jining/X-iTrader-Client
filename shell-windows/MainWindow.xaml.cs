@@ -253,12 +253,15 @@ public sealed partial class MainWindow : Window
             + "客户端从它获取交易品种与交易信号，并每 10 秒探测一次连通性。");
     }
 
-    /// <summary>自动交易开关旁的问号：说明开关控制什么、关闭是否平仓。</summary>
+    /// <summary>自动交易开关旁的问号：说明开关控制什么、启动检查项、关闭是否平仓。
+    /// 文案与后端 _preflight_start_checks 的实际检查项逐条对应，改预检时同步这里。</summary>
     private async void OnAutoTradeHelpClick(object sender, RoutedEventArgs e)
     {
         await ShowHelpAsync("自动交易",
-            "开启后客户端接收服务器推送的交易信号并自动下单，开启前会先校验服务器连通、账户配置、Token 和天勤握手。"
-            + "关闭只会停止接收信号与下单，已持有的仓位不会被自动平仓。");
+            "开启后客户端接收服务器推送的交易信号并自动下单。\n\n"
+            + "开启前会先做启动检查：服务器连通、每个启用账户的品种与策略已选、账户凭据齐全（实盘还需期货公司、资金账号与交易密码）、"
+            + "本地 Token 已领取、天勤账户握手通过。任一项不通过会列出全部问题并拒绝启动。\n\n"
+            + "关闭只停止接收信号与下单，已持有的仓位不会被自动平仓。运行中修改账户配置需先关闭再重新开启才生效。");
     }
 
     private async Task ShowHelpAsync(string title, string message)

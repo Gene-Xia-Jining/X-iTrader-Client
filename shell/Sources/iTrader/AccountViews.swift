@@ -84,6 +84,7 @@ private struct AccountCardForm: View {
     @State private var tqPassword = ""
     @State private var enabled = true
     @State private var selectedSymbol = ""
+    @State private var selectedStrategy = ""
     @State private var alert: ActiveAlert?
 
     var body: some View {
@@ -101,6 +102,8 @@ private struct AccountCardForm: View {
                 AppTextField(placeholder: "快期密码", secure: true, text: $tqPassword)
                 dimLabel("交易品种:")
                 symbolPicker
+                dimLabel("交易策略:")
+                strategyPicker
                 HStack {
                     Spacer()
                     AppButton("保存") { save() }
@@ -203,6 +206,47 @@ private struct AccountCardForm: View {
         return result
     }
 
+    // MARK: 策略单选（与模拟页共用服务器策略目录，单选后保存生效）
+
+    private var strategyPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 10)], alignment: .leading, spacing: 10) {
+                ForEach(strategyOptions) { strategy in
+                    RadioRow(
+                        symbol: strategy.name,
+                        isOn: Binding(
+                            get: { selectedStrategy == strategy.id },
+                            set: { if $0 { selectedStrategy = strategy.id } }
+                        )
+                    )
+                    .help(strategy.description)
+                }
+            }
+            Text(strategyHint)
+                .font(AppTheme.dimFont)
+                .foregroundColor(AppTheme.dim(scheme))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// 已选策略不在服务器目录里时保留显示，避免服务器临时不可用时选中态凭空消失
+    private var strategyOptions: [StrategyInfo] {
+        guard !selectedStrategy.isEmpty,
+              !appState.serverStrategies.contains(where: { $0.id == selectedStrategy }) else {
+            return appState.serverStrategies
+        }
+        return appState.serverStrategies + [StrategyInfo(id: selectedStrategy, name: selectedStrategy, description: "")]
+    }
+
+    private var strategyHint: String {
+        if appState.strategiesFetching { return "正在获取策略..." }
+        if appState.strategiesMessage.hasPrefix("获取失败") {
+            return "获取策略失败: \(appState.strategiesMessage)"
+        }
+        if strategyOptions.isEmpty { return "服务器暂无可选策略" }
+        return "共 \(strategyOptions.count) 个策略，选择一个订阅，保存后生效"
+    }
+
     /// 对应 Qt SymbolPicker 的 hint 文案规则
     private var pickerHint: String {
         if appState.symbolsFetching { return "正在获取品种..." }
@@ -236,6 +280,7 @@ private struct AccountCardForm: View {
             tqAccount = account.tqAccount
             enabled = account.enabled
             selectedSymbol = account.symbols.first ?? ""
+            selectedStrategy = account.strategy
         } else if broker.isEmpty {
             // 新卡片默认选中第一个期货公司（对应 Qt checked_name）
             broker = names.first ?? ""
@@ -265,6 +310,10 @@ private struct AccountCardForm: View {
             alert = .inputError("请选择一个交易品种")
             return
         }
+        if !strategyOptions.isEmpty && selectedStrategy.isEmpty {
+            alert = .inputError("请选择一个交易策略")
+            return
+        }
 
         var params: [String: Any] = [
             "account_id": accountID,
@@ -278,6 +327,8 @@ private struct AccountCardForm: View {
         if !tradePassword.isEmpty { params["trade_password"] = tradePassword }
         if !tqPassword.isEmpty { params["tq_password"] = tqPassword }
         if hasOptions && !selectedSymbol.isEmpty { params["symbols"] = [selectedSymbol] }
+        // 空串是后端的「清除选择」语义，只有确实有选中值时才提交
+        if !selectedStrategy.isEmpty { params["strategy"] = selectedStrategy }
 
         Task {
             await appState.runAction(method: "accounts.save", params: params)
