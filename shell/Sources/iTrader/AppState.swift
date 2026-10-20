@@ -217,6 +217,13 @@ final class AppState: ObservableObject {
     /// 本地缓存过明文、可切换回去的记录 id
     @Published var cachedTokenIds: Set<String> = []
     @Published var updatePhase = UpdatePhase.idle
+    /// 下载进度百分比；-1 表示总大小未知
+    @Published var updateProgress = -1
+    /// 已下载更新包的类型（"patch" 差量 / "full" 完整）；安装完成后据此决定重连还是退出
+    @Published private(set) var pendingUpdateMode = ""
+    /// 正在安装（update.apply 已发出，等后端替换文件并退出）：弹窗据此区分
+    /// 「已下载待安装」和「安装中」
+    @Published private(set) var updateInstalling = false
     @Published var lastActionError = ""
     /// 自动交易启动被预检拦截的问题列表；非空时顶栏弹出清单，用户确认后清空
     @Published var startBlockedIssues: [String] = []
@@ -230,6 +237,17 @@ final class AppState: ObservableObject {
     private var client: RpcClient?
     private var started = false
     private var signalSources: [DispatchSourceSignal] = []
+    /// 进行中的连接循环：断开事件由 RPC 断链与进程退出两处触发，去重避免并发多份循环
+    private var reconnectTask: Task<Void, Never>?
+    /// 本次启动是否已做过静默更新检查（顶栏角标只在启动时探一次）
+    private var didAutoCheckUpdate = false
+    /// 弹窗里已确认更新：下载完成后自动安装并重启
+    private var autoApplyUpdate = false
+    /// 差量更新后的重连等待窗口：期间忽略断链/进程退出触发的重连，
+    /// 否则壳会抢在 updater 拉起新后端前自己 spawn 一个，两个后端互相拒绝
+    private var waitingForUpdateBackend = false
+    /// 当前连着的后端进程 pid：差量更新后据此识别「新后端已接管」
+    private var connectedBackendPid: Int32?
 
     // -------- 启动 / 重连 --------
 
@@ -237,7 +255,16 @@ final class AppState: ObservableObject {
         guard !started else { return }
         started = true
         installExitHooks()
-        Task { await connectLoop() }
+        reconnect()
+    }
+
+    /// 触发一次重连（已有的连接循环未结束时不重复启动）
+    private func reconnect() {
+        guard reconnectTask == nil else { return }
+        reconnectTask = Task {
+            await connectLoop()
+            reconnectTask = nil
+        }
     }
 
     /// 壳退出时终止后端，避免孤儿后端常驻（后端收到 SIGINT 走优雅退出）。
@@ -289,9 +316,18 @@ final class AppState: ObservableObject {
                 try await rpc.connect()
                 client = rpc
                 connState = .connected
+                connectedBackendPid = Int32(info.pid)
                 appendLog(level: "SUCCESS", message: "已连接后端 v\(info.version) (pid \(info.pid))")
                 backendVersion = info.version
+                // 差量更新安装完成后的首次连接：暂存包已生效，状态回到 idle
+                if case .ready = updatePhase {
+                    updatePhase = .idle
+                    updateProgress = -1
+                    pendingUpdateMode = ""
+                    updateInstalling = false
+                }
                 try await refreshAll()
+                checkUpdateOnConnect()
                 return
             } catch {
                 connState = .disconnected
@@ -301,21 +337,46 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// 差量更新安装后：后端由 updater 重新拉起，等它写出新的 backend.json 再重连。
+    /// 不能按固定时长等，也不能立刻重连——旧后端退出时会删掉 backend.json，
+    /// 壳若抢先调 connectOrStart 会自己 spawn 一个后端，与 updater 拉起的那个互相拒绝。
+    private func reconnectAfterUpdate() {
+        waitingForUpdateBackend = true
+        let oldPid = connectedBackendPid
+        Task {
+            // 最多等 30 秒；超时仍重连，由 connectOrStart 兜底 spawn
+            for _ in 0..<150 {
+                if let url = backend?.infoURL,
+                   let info = BackendProcess.readInfo(from: url),
+                   let pid = Int32(exactly: info.pid),
+                   pid != oldPid,
+                   BackendProcess.isPidAlive(info.pid) {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+            waitingForUpdateBackend = false
+            reconnect()
+        }
+    }
+
     private func handleDisconnect() {
         // 后端退出（quit/update）或崩溃：区分展示，连接循环在 quit 场景外继续重连
         client = nil
         guard connState != .stopped else { return }
         connState = .disconnected
+        guard !waitingForUpdateBackend else { return }
         appendLog(level: "WARNING", message: "与后端断开，正在重连…")
-        Task { await connectLoop() }
+        reconnect()
     }
 
     private func handleBackendExit() {
         client = nil
         guard connState != .stopped else { return }
         connState = .disconnected
+        guard !waitingForUpdateBackend else { return }
         appendLog(level: "ERROR", message: "后端进程已退出，正在重启…")
-        Task { await connectLoop() }
+        reconnect()
     }
 
     // -------- RPC 封装 --------
@@ -371,23 +432,53 @@ final class AppState: ObservableObject {
             applyTokenStatus(data)
         case "signal_received":
             if let signal = data["signal"] as? [String: Any] {
-                appendLog(level: "INFO", message: "收到信号: \(signal["symbol"] ?? "?") 目标仓位 \(signal["position"] ?? "?")")
+                appendLog(level: "INFO", message: "收到信号: \(signal["symbol"] ?? "?") 目标仓位 \(signal["target_position"] ?? "?")")
             }
         case "trade_executed":
             appendLog(level: "SUCCESS", message: "交易已执行: \(data["symbol"] ?? "?") 仓位 \(data["target_position"] ?? "?")")
         case "trade_failed":
             appendLog(level: "ERROR", message: "交易失败: \(data["symbol"] ?? "?") \(data["error"] ?? "")")
         case "update_progress":
-            break  // 第一版不做进度条，完成/失败事件驱动状态
+            updateProgress = data["pct"] as? Int ?? -1
         case "update_ready":
-            updatePhase = .ready(kind: data["kind"] as? String ?? "")
+            // mode 是后加的字段：旧版后端只发中文 kind，按文案回退判断，
+            // 否则差量更新会被误当成完整更新而直接退出壳
+            let kind = data["kind"] as? String ?? ""
+            pendingUpdateMode = (data["mode"] as? String)
+                ?? (kind.contains("差量") ? "patch" : "full")
+            updatePhase = .ready(kind: kind)
+            updateProgress = -1
+            // 用户确认过「更新」：下载完直接装，不再要求点第二次
+            if autoApplyUpdate {
+                autoApplyUpdate = false
+                applyUpdate()
+            }
         case "update_failed":
+            autoApplyUpdate = false
+            pendingUpdateMode = ""
+            updateProgress = -1
             updatePhase = .failed(data["message"] as? String ?? "下载失败")
         case "update_cancelled":
+            autoApplyUpdate = false
+            pendingUpdateMode = ""
+            updateProgress = -1
             updatePhase = .idle
         case "backend_stopping":
-            connState = .stopped
             appendLog(level: "WARNING", message: "后端正在退出（\(data["reason"] ?? "")）")
+            if data["reason"] as? String == "update" && pendingUpdateMode == "patch" {
+                // 差量更新只替换 src，后端由 updater 重新拉起：壳留在前台等重连
+                client = nil
+                connState = .disconnected
+                appendLog(level: "INFO", message: "差量更新已安装，等待后端重启后重连")
+                reconnectAfterUpdate()
+            } else {
+                // 完整更新会启动新的壳进程，旧壳随后退出（避免两个壳争同一后端）
+                connState = .stopped
+                pendingUpdateMode = ""
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    NSApp.terminate(nil)
+                }
+            }
         default:
             break
         }
@@ -622,7 +713,35 @@ final class AppState: ObservableObject {
         }
     }
 
-    func checkUpdate() {
+    // -------- 自动更新 --------
+
+    /// 顶栏版本按钮是否有新版本角标（仅 available 态；下载/就绪阶段已在弹窗内）
+    var updateBadgeVisible: Bool {
+        if case .available = updatePhase { return true }
+        return false
+    }
+
+    /// 连接成功后的静默探活：每次启动只做一次，尊重「启动时自动检查更新」开关。
+    /// 失败不打扰用户——顶栏点开版本弹窗仍可手动检查。
+    private func checkUpdateOnConnect() {
+        guard !didAutoCheckUpdate else { return }
+        didAutoCheckUpdate = true
+        guard config.autoCheckUpdate else { return }
+        Task {
+            guard
+                let resp = try? await call(method: "update.check", params: ["silent": true]),
+                resp["status"] as? String == "available"
+            else { return }
+            updatePhase = .available(
+                version: resp["version"] as? String ?? "",
+                hasPatch: resp["has_patch"] as? Bool ?? false
+            )
+        }
+    }
+
+    /// 手动检查；`autoApply` 为 true 表示用户在版本弹窗里点了「确认更新」，
+    /// 检查到新版本后直接进入下载并在完成后安装重启。
+    func checkUpdate(autoApply: Bool = false) {
         Task {
             updatePhase = .checking
             do {
@@ -633,6 +752,7 @@ final class AppState: ObservableObject {
                         version: resp["version"] as? String ?? "",
                         hasPatch: resp["has_patch"] as? Bool ?? false
                     )
+                    if autoApply { startDownload(autoApply: true) }
                 case "latest":
                     updatePhase = .latest(resp["message"] as? String ?? "已是最新版本")
                 default:
@@ -644,23 +764,54 @@ final class AppState: ObservableObject {
         }
     }
 
-    func downloadUpdate() {
+    func downloadUpdate(autoApply: Bool = false) {
+        startDownload(autoApply: autoApply)
+    }
+
+    /// 版本弹窗里点了「确认更新」：有可用版本就直接下载（下载完自动安装），
+    /// 尚未检查过则先检查再走同一条路径。
+    func confirmUpdate() {
+        if case .available = updatePhase {
+            startDownload(autoApply: true)
+        } else {
+            checkUpdate(autoApply: true)
+        }
+    }
+
+    private func startDownload(autoApply: Bool) {
+        autoApplyUpdate = autoApply
         Task {
             do {
+                updateProgress = -1
                 _ = try await call(method: "update.download")
                 updatePhase = .downloading
             } catch {
+                autoApplyUpdate = false
                 updatePhase = .failed(error.localizedDescription)
             }
         }
     }
 
     func cancelUpdate() {
+        autoApplyUpdate = false
+        updateProgress = -1
         Task { await runAction(method: "update.cancel") }
+        updatePhase = .idle
     }
 
     func applyUpdate() {
-        Task { await runAction(method: "update.apply") }
+        updateInstalling = true
+        Task {
+            do {
+                _ = try await call(method: "update.apply")
+            } catch {
+                // 安装失败（如 Windows 目录被占用）要把原因回给弹窗，
+                // 否则用户只看到界面停在「正在安装」
+                autoApplyUpdate = false
+                updateInstalling = false
+                updatePhase = .failed("安装更新失败：\(error.localizedDescription)")
+            }
+        }
     }
 
     func quitBackend() {

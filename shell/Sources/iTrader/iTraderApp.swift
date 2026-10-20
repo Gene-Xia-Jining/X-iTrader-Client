@@ -120,18 +120,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-// MARK: - 路由（与 Qt 版侧边栏顺序一致）
+// MARK: - 路由（侧栏顺序以此声明顺序为准）
 
 enum AppRoute: String, CaseIterable, Identifiable {
-    case dashboard, token, log, sim, live, records, settings
+    // 声明顺序即侧栏顺序
+    case dashboard, token, sim, live, records, log, settings
 
     var id: String { rawValue }
+
+    /// 侧边栏实际展示的路由。Token 管理暂时隐藏（Token 已在模拟页就地申请、查看），
+    /// 页面与路由分发保留，后续需要时把 `.token` 加回即可。
+    static var visibleCases: [AppRoute] { allCases.filter { $0 != .token } }
 
     var title: String {
         switch self {
         case .dashboard: return "仪表盘"
         case .token: return "Token 管理"
-        case .log: return "交易日志"
+        case .log: return "系统日志"
         case .sim: return "模拟交易"
         case .live: return "实盘交易"
         case .records: return "交易记录"
@@ -151,6 +156,7 @@ struct RootView: View {
     @State private var showAutoTradeHelp = false
     @State private var autoTradeHelpHovering = false
     @State private var autoTradeHovering = false
+    @State private var showVersionSheet = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -166,6 +172,10 @@ struct RootView: View {
             StartBlockedSheet(issues: appState.startBlockedIssues) {
                 appState.startBlockedIssues = []
             }
+        }
+        .sheet(isPresented: $showVersionSheet) {
+            VersionSheet { showVersionSheet = false }
+                .environmentObject(appState)
         }
     }
 
@@ -191,6 +201,7 @@ struct RootView: View {
         HStack(spacing: 12) {
             serverStatusPill
             Spacer()
+            versionPill
             autoTradePill
             AppButton(dark ? "浅色" : "深色", variant: .secondary) { dark.toggle() }
             // 刷新服务器品种与策略（模拟/实盘页共用），获取中置灰防重复点击
@@ -225,11 +236,23 @@ struct RootView: View {
         NSApp.terminate(nil)
     }
 
-    // ---- 侧边栏：240 宽纯文字导航（QFrame#sidebar）----
+    // ---- 侧边栏：宽度按最长导航标题自适应（QFrame#sidebar）----
+
+    /// 侧栏宽度 = 最宽标题 + 胶囊左右内边距（24×2）+ 侧栏左右留白（14×2）。
+    /// 标题固定，用 NSFont 度量一次即可；不依赖 SwiftUI 的弹性分配
+    /// （否则 maxWidth: .infinity 的按钮会被 HStack 拉伸、挤占页面区）。
+    private static let sidebarWidth: CGFloat = {
+        let font = NSFont.systemFont(ofSize: 15)
+        let textWidth = AppRoute.visibleCases
+            .map { ($0.title as NSString).size(withAttributes: [.font: font]).width }
+            .max() ?? 0
+        // +2 吸收 SwiftUI 与 NSFont 之间的字距差异，避免最长标题被压到换行
+        return ceil(textWidth) + 2 + 48 + 28
+    }()
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(AppRoute.allCases) { route in
+            ForEach(AppRoute.visibleCases) { route in
                 SidebarNavButton(title: route.title, isSelected: selection == route) {
                     selection = route
                     // 切到模拟/实盘页时自动拉取品种（对应 Qt _switch_page 的 on_fetch_symbols）
@@ -243,7 +266,7 @@ struct RootView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 18)
-        .frame(width: 240, alignment: .topLeading)
+        .frame(width: Self.sidebarWidth, alignment: .topLeading)
         .background(AppTheme.canvas(scheme))
         .overlay(alignment: .trailing) {
             Rectangle().fill(AppTheme.hairline(scheme)).frame(width: 1)
@@ -290,6 +313,34 @@ struct RootView: View {
                 .stroke(AppTheme.hairline(scheme), lineWidth: 1)
         )
         .cornerRadius(18)
+    }
+
+    /// 版本胶囊：显示当前版本，有新版本时右上角红点角标。点击打开版本弹窗。
+    private var versionPill: some View {
+        Button { showVersionSheet = true } label: {
+            HStack(spacing: 6) {
+                Text("v\(appState.backendVersion.isEmpty ? "-" : appState.backendVersion)")
+                    .font(AppTheme.bodyFont.weight(.semibold))
+                    .foregroundColor(AppTheme.dim(scheme))
+                    .contentShape(Rectangle())
+                if appState.updateBadgeVisible {
+                    Circle()
+                        .fill(AppTheme.danger(scheme))
+                        .frame(width: 7, height: 7)
+                }
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 36)
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(AppTheme.hairline(scheme), lineWidth: 1)
+            )
+            .cornerRadius(18)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .help("点击查看版本与更新")
     }
 
     /// 自动交易胶囊：外观同 AppButton（开关语义色），问号放在胶囊内部右侧
@@ -381,7 +432,7 @@ private struct SidebarNavButton: View {
         Button(action: action) {
             Text(title)
                 .font(AppTheme.bodyFont)
-                .foregroundColor(isSelected ? AppTheme.ink(scheme) : AppTheme.dim(scheme))
+                .foregroundColor(isSelected ? .white : AppTheme.dim(scheme))
                 .padding(.leading, 24)
                 .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 .background(backgroundColor)
@@ -464,5 +515,115 @@ private struct StartBlockedSheet: View {
         }
         .frame(width: 520)
         .background(AppTheme.canvas(scheme))
+    }
+}
+
+// MARK: - 版本弹窗：当前版本 + 检查更新 + 确认更新
+
+/// 顶栏版本胶囊点开的弹窗。
+///
+/// 确认一次即可：点「确认更新」后自动下载并在完成后安装重启，不需要用户再去
+/// 设置页点第二次。设置页原有的检查更新入口保留，两处共用同一份 updatePhase。
+private struct VersionSheet: View {
+    let onClose: () -> Void
+
+    @EnvironmentObject var appState: AppState
+    @Environment(\.colorScheme) private var scheme
+
+    private var busy: Bool {
+        switch appState.updatePhase {
+        case .checking, .downloading, .ready: return true
+        default: return false
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .foregroundColor(AppTheme.primary(scheme))
+                Text("软件更新")
+                    .font(AppTheme.titleFont)
+                    .foregroundColor(AppTheme.ink(scheme))
+                Spacer()
+                Text("当前版本 v\(appState.backendVersion.isEmpty ? "-" : appState.backendVersion)")
+                    .font(AppTheme.bodyFont)
+                    .foregroundColor(AppTheme.dim(scheme))
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
+            .padding(.bottom, 14)
+
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
+
+            HStack(spacing: 8) {
+                AppButton("检查更新", variant: .secondary, disabled: busy) {
+                    appState.checkUpdate()
+                }
+                Spacer()
+                if case .available(let version, _) = appState.updatePhase {
+                    AppButton("确认更新 v\(version)") { appState.confirmUpdate() }
+                        .keyboardShortcut(.defaultAction)
+                } else if case .ready(let kind) = appState.updatePhase, !appState.updateInstalling {
+                    // 从设置页发起下载（没有勾选自动安装）时，这里补一个安装入口
+                    AppButton("安装并重启（\(kind)）") { appState.applyUpdate() }
+                        .keyboardShortcut(.defaultAction)
+                } else if case .downloading = appState.updatePhase {
+                    AppButton("取消", variant: .secondary) { appState.cancelUpdate() }
+                }
+                AppButton("关闭", variant: .secondary) { onClose() }
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(20)
+        }
+        .frame(width: 520)
+        .background(AppTheme.canvas(scheme))
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        let phase = appState.updatePhase
+        VStack(alignment: .leading, spacing: 10) {
+            switch phase {
+            case .idle:
+                message("点击「检查更新」查看是否有新版本。", color: AppTheme.dim(scheme))
+            case .checking:
+                message("正在检查更新…", color: AppTheme.warning(scheme))
+            case .available(let version, let hasPatch):
+                message(
+                    "发现新版本 v\(version)（\(hasPatch ? "差量更新包" : "完整更新包")）。"
+                    + "确认后自动下载并安装，完成后客户端会自动重启。",
+                    color: AppTheme.ink(scheme)
+                )
+            case .latest(let text):
+                message(text, color: AppTheme.success(scheme))
+            case .downloading:
+                message("正在下载更新…", color: AppTheme.warning(scheme))
+                if appState.updateProgress >= 0 {
+                    ProgressView(value: Double(appState.updateProgress), total: 100)
+                        .progressViewStyle(.linear)
+                    message("\(appState.updateProgress)%", color: AppTheme.dim(scheme))
+                }
+            case .ready:
+                message(
+                    appState.updateInstalling ? "正在安装并重启…" : "更新包已下载，可以安装。",
+                    color: AppTheme.warning(scheme)
+                )
+            case .failed(let text):
+                message(text, color: AppTheme.danger(scheme))
+            }
+        }
+    }
+
+    private func message(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(AppTheme.bodyFont)
+            .foregroundColor(color)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
     }
 }

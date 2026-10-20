@@ -19,7 +19,8 @@ enum AppTheme {
     static func successHover(_ s: ColorScheme) -> Color { s == .dark ? Color(hex: 0x46DD6A) : Color(hex: 0x30D158) }
     static func inputBg(_ s: ColorScheme) -> Color { s == .dark ? Color(hex: 0x2A2A2C) : Color(hex: 0xFFFFFF) }
     static func sidebarHover(_ s: ColorScheme) -> Color { s == .dark ? Color(hex: 0x303032) : Color(hex: 0xF0F0F0) }
-    static func sidebarSelected(_ s: ColorScheme) -> Color { s == .dark ? Color(hex: 0x48484A) : Color(hex: 0xE0E0E0) }
+    /// 侧栏选中态：主题蓝底 + 白字（与 Windows 壳的 Palette.SidebarSelected 对齐）
+    static func sidebarSelected(_ s: ColorScheme) -> Color { s == .dark ? Color(hex: 0x2997FF) : Color(hex: 0x0066CC) }
     static func logBg(_ s: ColorScheme) -> Color { s == .dark ? Color(hex: 0x252527) : Color(hex: 0xFAFAFC) }
     static func soft(_ s: ColorScheme) -> Color { s == .dark ? Color(hex: 0x2A2A2C) : Color(hex: 0xFAFAFC) }
     static func warning(_ s: ColorScheme) -> Color { s == .dark ? Color(hex: 0xFFD60A) : Color(hex: 0xB8780A) }

@@ -39,8 +39,12 @@ struct SimulationView: View {
     @State private var symbolHelpHover = false
     // 步骤 6 的品种选择弹窗
     @State private var showSymbolPicker = false
-    /// 品种胶囊列表换行后的实际高度：弹窗据此自适应高度
+    /// 弹窗的品类过滤器（全部品种 / 国内商品 / 股指 / 国债）：单选
+    @State private var symbolFilter: SymbolFilter = .all
+    /// 当前过滤器下的品种胶囊列表实际高度：弹窗据此自适应高度，避免底部留白
     @State private var symbolListHeight: CGFloat = 0
+    /// 「全部品种」那一档的列表高度：弹窗顶边以它为准，切换过滤器只收缩下边距
+    @State private var symbolMaxListHeight: CGFloat = 0
     // 步骤 5「申请 Token」的说明弹窗 + 申请中的回执
     @State private var showTokenHelp = false
     @State private var tokenHelpHover = false
@@ -375,7 +379,7 @@ struct SimulationView: View {
         return AppTheme.dim(scheme)
     }
 
-    /// 与「Token 管理」页同一个入口：说明留默认值，提交后由后端事件刷新状态
+    /// 走与后端 Token 申请相同的入口：说明留默认值，提交后由后端事件刷新状态
     private func applyToken() {
         guard !tokenRequesting else { return }
         tokenRequesting = true
@@ -394,13 +398,22 @@ struct SimulationView: View {
         return f
     }()
 
-    /// 申请记录弹窗：已申请过（待审核 / 已通过）时点胶囊打开，
-    /// 只读展示进度，申请与删除等操作仍在「Token 管理」页。
+    /// 申请记录弹窗：已申请过（待审核 / 已通过）时点胶囊打开，只读展示进度。
     private var tokenRecordsDialog: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Token 申请记录")
-                .font(AppTheme.bodyFont.weight(.semibold))
-                .foregroundColor(AppTheme.ink(scheme))
+            // 标题行右侧就放刷新与关闭：记录列表占满剩余高度，底部不再单独留一行按钮
+            HStack(spacing: 10) {
+                Text("Token 申请记录")
+                    .font(AppTheme.bodyFont.weight(.semibold))
+                    .foregroundColor(AppTheme.ink(scheme))
+                Spacer(minLength: 12)
+                AppButton("刷新状态", variant: .secondary, size: .inline) {
+                    appState.refreshTokenStatus()
+                }
+                AppButton("关闭", variant: .secondary, size: .inline) {
+                    showTokenRecords = false
+                }
+            }
 
             Text(appState.tokenStatus.isEmpty ? "未申请" : appState.tokenStatus)
                 .font(AppTheme.dimFont.weight(.semibold))
@@ -428,17 +441,6 @@ struct SimulationView: View {
                 // 记录多时弹窗内滚动，避免窗口被撑高
                 .frame(maxHeight: 320)
             }
-
-            HStack(spacing: 10) {
-                AppButton("刷新状态", variant: .secondary, size: .inline) {
-                    appState.refreshTokenStatus()
-                }
-                Spacer(minLength: 12)
-                AppButton("关闭", variant: .secondary, size: .inline) {
-                    showTokenRecords = false
-                }
-            }
-            .padding(.top, 4)
         }
         .padding(20)
         .frame(width: 520)
@@ -497,9 +499,18 @@ struct SimulationView: View {
 
     private var downloadLinks: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("下载快期客户端")
-                .font(AppTheme.bodyFont.weight(.semibold))
-                .foregroundColor(AppTheme.ink(scheme))
+            // 「关闭」放在标题行右侧，与 Token 申请记录弹窗一致，底部不再单独留按钮行
+            HStack(spacing: 10) {
+                Text("下载快期客户端")
+                    .font(AppTheme.bodyFont.weight(.semibold))
+                    .foregroundColor(AppTheme.ink(scheme))
+                Spacer(minLength: 12)
+                AppButton("关闭", variant: .secondary, size: .inline) {
+                    showDownloadLinks = false
+                }
+            }
+
+            HairlineDivider()
 
             VStack(alignment: .leading, spacing: 6) {
                 linkRow("手机端：", "https://www.shinnytech.com/products/app")
@@ -507,14 +518,6 @@ struct SimulationView: View {
                 linkRow("    App Store：", "https://itunes.apple.com/us/app/快期小q/id1187762307?l=zh&ls=1&mt=8")
                 linkRow("Windows：", "https://www.shinnytech.com/products/q73")
             }
-
-            HStack {
-                Spacer(minLength: 12)
-                AppButton("关闭", variant: .secondary, size: .inline) {
-                    showDownloadLinks = false
-                }
-            }
-            .padding(.top, 4)
         }
         .padding(20)
         // 比账号弹窗略宽：App Store 那行链接很长，480 宽会折行
@@ -528,6 +531,8 @@ struct SimulationView: View {
             Text("填入快期/天勤用户信息")
                 .font(AppTheme.bodyFont.weight(.semibold))
                 .foregroundColor(AppTheme.ink(scheme))
+
+            HairlineDivider()
 
             HStack(spacing: 8) {
                 fieldLabel("手机号：")
@@ -755,23 +760,53 @@ struct SimulationView: View {
         return "已选择交易品种：\(appState.displaySymbol(selectedSymbol))"
     }
 
-    /// 品种选择弹层：选中即生效并关闭；标题行右侧与遮罩空白处都可关闭。
-    /// 胶囊列表按内容自适应高度，品种过多、超过可用高度时才在内部滚动
+    /// 品种选择弹层：选中即生效并关闭；点遮罩空白处也能关闭。
+    /// 顶部一行左侧是品类过滤器（全部品种 / 国内商品 / 股指 / 国债，单选）、右侧是「关闭」。
+    /// 顶边按品种最多的「全部品种」那一档固定，切换过滤器只让卡片底边上移
     private func symbolPickerDialog(maxListHeight: CGFloat) -> some View {
+        let cardListHeight = min(max(symbolMaxListHeight, 31), maxListHeight)
+        return ZStack(alignment: .top) {
+            // 幽灵卡片：始终按全部品种排版，只用来量出最高一档的列表高度，不接收点击
+            symbolPickerCard(
+                symbols: simAllSymbols,
+                listHeight: cardListHeight,
+                onMeasure: { symbolMaxListHeight = $0 }
+            )
+            .opacity(0)
+            .allowsHitTesting(false)
+
+            // 真卡片按自己这一档的高度收，品种少的过滤器底边随之抬升，不留空行
+            symbolPickerCard(
+                symbols: filteredSymbols,
+                listHeight: min(max(symbolListHeight, 31), maxListHeight),
+                onMeasure: { symbolListHeight = $0 }
+            )
+        }
+        .frame(width: 640)
+    }
+
+    /// 一张品种选择卡片；listHeight 是列表区高度，onMeasure 回传列表内容的真实高度。
+    /// 卡片外观画在这里而不是外层容器上，否则会按幽灵卡片的高度铺满整块
+    private func symbolPickerCard(
+        symbols: [String],
+        listHeight: CGFloat,
+        onMeasure: @escaping (CGFloat) -> Void
+    ) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                Text("选择交易品种")
-                    .font(AppTheme.bodyFont.weight(.semibold))
-                    .foregroundColor(AppTheme.ink(scheme))
+            HStack(spacing: 10) {
+                symbolFilterCapsules
                 Spacer(minLength: 12)
                 AppButton("关闭", variant: .secondary, size: .inline) {
                     showSymbolPicker = false
                 }
             }
 
+            // 顶栏与品种列表之间的分隔线
+            HairlineDivider()
+
             ScrollView {
-                symbolPicker
-                    // 量的是换行后的真实内容高度，用它决定弹层高度
+                symbolPicker(symbols)
+                    // 量的是换行后的真实内容高度，用它决定列表区高度
                     .background(GeometryReader { proxy in
                         Color.clear.preference(
                             key: SymbolListHeightKey.self,
@@ -781,17 +816,56 @@ struct SimulationView: View {
             }
             // 弹层按内容的理想高度收缩，而 ScrollView 的理想高度极小，
             // 因此必须给出确定高度；上限由遮罩层按窗口可用高度算出来
-            .frame(height: min(max(symbolListHeight, 64), maxListHeight))
-            .onPreferenceChange(SymbolListHeightKey.self) { symbolListHeight = $0 }
+            .frame(height: listHeight)
+            .onPreferenceChange(SymbolListHeightKey.self) { onMeasure($0) }
         }
         .padding(20)
-        .frame(width: 640)
+        .background(AppTheme.card(scheme))
+        .cornerRadius(14)
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(AppTheme.hairline(scheme), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(scheme == .dark ? 0.5 : 0.18), radius: 24, y: 10)
+        // 卡片整块吃掉点击：否则点在标题、留白处会穿透到遮罩被当成「点空白」
+        .contentShape(RoundedRectangle(cornerRadius: 14))
+        .onTapGesture {}
+    }
+
+    /// 品类过滤器胶囊：单选，点哪颗就只看哪一类，「全部品种」是不过滤
+    private var symbolFilterCapsules: some View {
+        ForEach(SymbolFilter.allCases) { filter in
+            let isOn = symbolFilter == filter
+            Button {
+                symbolFilter = filter
+            } label: {
+                Text("\(filter.title) \(filter.count(in: simAllSymbols))")
+                    .font(AppTheme.dimFont.weight(isOn ? .semibold : .regular))
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 30)
+                    .foregroundColor(isOn ? .white : AppTheme.ink(scheme))
+                    .background(isOn ? AppTheme.primary(scheme) : Color.clear)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 15)
+                            .stroke(isOn ? AppTheme.primary(scheme) : AppTheme.hairline(scheme), lineWidth: 1)
+                    )
+                    .cornerRadius(15)
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+        }
     }
 
     /// 步骤 6 的弹层遮罩：点卡片外的空白处关闭（macOS 的 sheet 不具备这个行为）
     private var symbolPickerOverlay: some View {
         GeometryReader { proxy in
-            ZStack {
+            // 列表上限 = 窗口高度扣掉遮罩边距（48）与卡片固定部分（101）
+            let maxListHeight = max(proxy.size.height - 149, 120)
+            // 顶边按「全部品种」那张最高的卡片居中算，切换过滤器时卡片从同一条顶边往下收
+            let tallest = min(max(symbolMaxListHeight, 31), maxListHeight)
+            let topInset = max((proxy.size.height - (tallest + 101)) / 2, 24)
+
+            ZStack(alignment: .top) {
                 // 用 Button 而不是 onTapGesture：遮罩盖在 ScrollView 上，
                 // 手势会被滚动视图吞掉，Button 的命中区域才稳定
                 Button { showSymbolPicker = false } label: {
@@ -800,19 +874,8 @@ struct SimulationView: View {
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                // 卡片高度 = 40 padding + 36 标题行 + 12 间距 + 列表，再留 48 的遮罩边距
-                symbolPickerDialog(maxListHeight: max(proxy.size.height - 136, 120))
-                    // 卡片自带底色，整个矩形都是命中区域，点卡片留白不会穿透到遮罩
-                    .background(AppTheme.card(scheme))
-                    .cornerRadius(14)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(AppTheme.hairline(scheme), lineWidth: 1)
-                    )
-                    .shadow(color: .black.opacity(scheme == .dark ? 0.5 : 0.18), radius: 24, y: 10)
-                    // 卡片整块吃掉点击：否则点在标题、留白处会穿透到遮罩被当成「点空白」
-                    .contentShape(RoundedRectangle(cornerRadius: 14))
-                    .onTapGesture {}
+                symbolPickerDialog(maxListHeight: maxListHeight)
+                    .padding(.top, topInset)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -820,10 +883,12 @@ struct SimulationView: View {
 
     // MARK: - 品种区（单选胶囊，对应 Qt SymbolPicker；刷新入口在顶部栏）
 
-    private var symbolPicker: some View {
+    /// 品种区（单选胶囊）：symbols 由调用方给，弹窗里按过滤器传筛选后的列表，
+    /// 幽灵卡片传全部品种
+    private func symbolPicker(_ symbols: [String]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             FlowLayout(spacing: 10) {
-                ForEach(simAllSymbols, id: \.self) { symbol in
+                ForEach(symbols, id: \.self) { symbol in
                     SymbolCapsule(label: appState.displaySymbol(symbol), isOn: Binding(
                         get: { selectedSymbol == symbol },
                         set: { isOn in
@@ -842,8 +907,17 @@ struct SimulationView: View {
                     .font(AppTheme.dimFont)
                     .foregroundColor(AppTheme.dim(scheme))
                     .fixedSize(horizontal: false, vertical: true)
+            } else if symbols.isEmpty {
+                Text("该分类下暂无可选品种")
+                    .font(AppTheme.dimFont)
+                    .foregroundColor(AppTheme.dim(scheme))
             }
         }
+    }
+
+    /// 按品类过滤器筛出的品种（单选，默认「全部品种」不过滤）
+    private var filteredSymbols: [String] {
+        simAllSymbols.filter { symbolFilter.matches($0) }
     }
 
     /// 模拟页可选品种：服务器品种在前；已订阅但不在服务器列表的品种保留显示（merge 规则）
@@ -1063,6 +1137,66 @@ struct SimulationView: View {
     }
 }
 
+// MARK: - 品种分类与过滤器
+
+/// 品种分类：模拟账户只支持国内商品与中金所股指 / 国债。
+/// 服务器只给品种代码与中文名、没有分类字段，因此按代码判断——
+/// 中金所里 IF/IH/IC/IM 是股指，T/TF/TS/TL 是国债，其余都归国内商品。
+enum SymbolCategory {
+    case commodity
+    case index
+    case bond
+
+    private static let indexCodes: Set<String> = ["IF", "IH", "IC", "IM"]
+    private static let bondCodes: Set<String> = ["T", "TF", "TS", "TL"]
+
+    /// 完整合约（SHFE.au2510）取品种码；裸品种码（RB）直接查表。空串归国内商品
+    static func of(_ symbol: String) -> SymbolCategory {
+        let code = symbol.split(separator: ".").last.map(String.init) ?? symbol
+        let product = String(code.prefix { $0.isLetter }).uppercased()
+        if indexCodes.contains(product) { return .index }
+        if bondCodes.contains(product) { return .bond }
+        return .commodity
+    }
+}
+
+/// 弹窗顶部的过滤器：「全部品种」+ 三个品类，单选
+enum SymbolFilter: String, CaseIterable, Identifiable {
+    case all
+    case commodity
+    case index
+    case bond
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: return "全部品种"
+        case .commodity: return "国内商品"
+        case .index: return "股指"
+        case .bond: return "国债"
+        }
+    }
+
+    var category: SymbolCategory? {
+        switch self {
+        case .all: return nil
+        case .commodity: return .commodity
+        case .index: return .index
+        case .bond: return .bond
+        }
+    }
+
+    func matches(_ symbol: String) -> Bool {
+        guard let category else { return true }
+        return SymbolCategory.of(symbol) == category
+    }
+
+    func count(in symbols: [String]) -> Int {
+        symbols.filter { matches($0) }.count
+    }
+}
+
 // MARK: - 品种列表高度（弹窗自适应用）
 
 /// 收集换行后品种胶囊列表的真实高度
@@ -1078,14 +1212,12 @@ private struct SymbolListHeightKey: PreferenceKey {
 enum ActiveAlert: Identifiable {
     case inputError(String)
     case testResult(message: String)
-    case configSaved
     case accountSaved
 
     var id: String {
         switch self {
         case .inputError(let msg): return "error-\(msg)"
         case .testResult(let msg): return "test-\(msg)"
-        case .configSaved: return "config-saved"
         case .accountSaved: return "account-saved"
         }
     }
@@ -1094,7 +1226,7 @@ enum ActiveAlert: Identifiable {
         switch self {
         case .inputError: return "输入错误"
         case .testResult: return "测试连接"
-        case .configSaved, .accountSaved: return "保存成功"
+        case .accountSaved: return "保存成功"
         }
     }
 
@@ -1102,7 +1234,6 @@ enum ActiveAlert: Identifiable {
         switch self {
         case .inputError(let msg): return msg
         case .testResult(let msg): return msg
-        case .configSaved: return "配置已保存并生效"
         case .accountSaved: return "实盘账户已保存"
         }
     }

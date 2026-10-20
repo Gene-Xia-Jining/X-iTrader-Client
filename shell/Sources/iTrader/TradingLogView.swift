@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 交易日志页：内存会话日志（像素级对应 Qt LogPage 的 logView）。
+/// 系统日志页：内存会话日志（像素级对应 Qt LogPage 的 logView）。
 struct TradingLogView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var scheme
@@ -14,7 +14,7 @@ struct TradingLogView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            PageHeader(title: "交易日志", subtitle: "实时查看客户端连接、信号、下单和异常信息。")
+            PageHeader(title: "系统日志", subtitle: "实时查看客户端连接、信号、下单和异常信息。")
 
             HStack(spacing: 10) {
                 Text("本地会话日志，保存在内存中")
