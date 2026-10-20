@@ -72,8 +72,10 @@ class _OkConn:
 
 
 class CheckTradingGatewayTest(unittest.TestCase):
+    HEADERS = {"User-Agent": "tqsdk-python 0", "Authorization": "Bearer token"}
+
     def _connect_raising(self, exc):
-        def connect(url, open_timeout):
+        def connect(url, open_timeout, **kwargs):
             raise exc
 
         return patch("websockets.sync.client.connect", new=connect)
@@ -83,40 +85,54 @@ class CheckTradingGatewayTest(unittest.TestCase):
         with patch.object(ws_exceptions, "InvalidStatus", _FakeInvalidStatus), \
              self._connect_raising(exc):
             with self.assertRaises(TradingGatewayUnavailableError) as ctx:
-                _check_trading_gateway(GATEWAY)
+                _check_trading_gateway(GATEWAY, headers=self.HEADERS)
         message = str(ctx.exception)
         self.assertIn("HTTP 500", message)
         self.assertIn("bad handshake", message)
         self.assertIn("天勤服务端故障", message)
 
     def test_4xx_response_is_not_a_server_fault(self):
-        # 实盘网关对未认证的裸握手返回 401：网关活着、正常拒客，不能拦启动
+        # 实盘网关对无权限账户返回 401：网关活着、正常拒客，不能拦启动
         for status in (401, 403, 404):
             with self.subTest(status=status):
                 exc = _FakeInvalidStatus(status, b'{"error":"unauthorized"}')
                 with patch.object(ws_exceptions, "InvalidStatus", _FakeInvalidStatus), \
                      self._connect_raising(exc):
-                    _check_trading_gateway(GATEWAY)
+                    _check_trading_gateway(GATEWAY, headers=self.HEADERS)
 
     def test_other_5xx_codes_also_block(self):
         exc = _FakeInvalidStatus(503, b'{"error":"unavailable"}')
         with patch.object(ws_exceptions, "InvalidStatus", _FakeInvalidStatus), \
              self._connect_raising(exc):
             with self.assertRaises(TradingGatewayUnavailableError):
-                _check_trading_gateway(GATEWAY)
+                _check_trading_gateway(GATEWAY, headers=self.HEADERS)
 
     def test_timeout_is_not_reported_as_server_fault(self):
         # 超时可能是本地网络抖动，交给 tqsdk 自己重连，不擅自断言
         with self._connect_raising(TimeoutError("connect timed out")):
-            _check_trading_gateway(GATEWAY)
+            _check_trading_gateway(GATEWAY, headers=self.HEADERS)
 
     def test_dns_failure_is_not_reported_as_server_fault(self):
         with self._connect_raising(OSError("name resolution failed")):
-            _check_trading_gateway(GATEWAY)
+            _check_trading_gateway(GATEWAY, headers=self.HEADERS)
 
     def test_successful_handshake_passes(self):
-        with patch("websockets.sync.client.connect", new=lambda url, open_timeout: _OkConn()):
+        def connect(url, open_timeout, **kwargs):
+            assert kwargs.get("additional_headers") == self.HEADERS
+            return _OkConn()
+
+        with patch("websockets.sync.client.connect", new=connect):
+            _check_trading_gateway(GATEWAY, headers=self.HEADERS)
+
+    def test_missing_headers_skips_probe(self):
+        # 天勤网关对无 token 的握手一律回 500，裸握手无法区分故障与正常拒客，
+        # 没有认证头时不能下任何结论（否则会把可用网关判成服务端故障）
+        def connect(*args, **kwargs):
+            raise AssertionError("没有认证头时不应该发起探测")
+
+        with patch("websockets.sync.client.connect", new=connect):
             _check_trading_gateway(GATEWAY)
+            _check_trading_gateway(GATEWAY, headers={})
 
 
 class LookupTradingGatewayTest(unittest.TestCase):
@@ -179,21 +195,87 @@ class PreflightTradingGatewayTest(unittest.TestCase):
             new=lambda broker_id, timeout=5.0: None,
         ), patch(
             "src.infrastructure.trading.tqsdk_executor._check_trading_gateway",
-            new=lambda url, timeout=5.0: checked.append(url),
+            new=lambda url, headers=None, timeout=5.0: checked.append(url),
         ):
-            _preflight_trading_gateway(_sim_account())
+            _preflight_trading_gateway(_sim_account(), headers={"Authorization": "Bearer x"})
         self.assertEqual(checked, [])
 
+    def test_probe_uses_auth_headers(self):
+        # 网关只认带 token 的握手，探测必须把认证头透传下去
+        seen = []
+        headers = {"User-Agent": "tqsdk-python 0", "Authorization": "Bearer token"}
+        with patch(
+            "src.infrastructure.trading.tqsdk_executor._lookup_trading_gateway",
+            new=lambda broker_id, timeout=5.0: GATEWAY,
+        ), patch(
+            "src.infrastructure.trading.tqsdk_executor._check_trading_gateway",
+            new=lambda url, headers=None, timeout=5.0: seen.append(headers),
+        ):
+            _preflight_trading_gateway(_sim_account(), headers=headers)
+        self.assertEqual(seen, [headers])
+
     def test_gateway_failure_blocks_before_tqsdk_starts(self):
-        def boom(url, timeout=5.0):
+        def boom(url, headers=None, timeout=5.0):
             raise TradingGatewayUnavailableError("天勤交易柜台暂时不可用")
 
         with patch(
             "src.infrastructure.trading.tqsdk_executor._lookup_trading_gateway",
             new=lambda broker_id, timeout=5.0: GATEWAY,
-        ), patch("src.infrastructure.trading.tqsdk_executor._check_trading_gateway", new=boom):
+        ), patch(
+            "src.infrastructure.trading.tqsdk_executor._check_trading_gateway", new=boom
+        ), patch(
+            "src.infrastructure.trading.tqsdk_executor._login_auth",
+            new=lambda auth: type("A", (), {"_base_headers": {"Authorization": "Bearer x"}})(),
+        ):
             with self.assertRaises(TradingGatewayUnavailableError):
                 test_account_session(_sim_account(), ("13800000000", "secret"))
+
+
+class LoginAuthTest(unittest.TestCase):
+    """预检登录出的 TqAuth 会交给 TqApi 复用，login 必须幂等。
+
+    TqApi._setup_connection 无条件再调一次 init + login，若不跳过就会重复
+    取 token（实测约 1 秒）。
+    """
+
+    def _fake_tqauth(self, hits):
+        class _FakeTqAuth:
+            def __init__(self, user, password):
+                self._user_name = user
+                self._access_token = ""
+
+            def init(self, mode="real"):
+                pass
+
+            def login(self):
+                hits.append(1)
+                self._access_token = "token"
+
+            @property
+            def _base_headers(self):
+                return {"Authorization": f"Bearer {self._access_token}"}
+
+        return _FakeTqAuth
+
+    def test_login_runs_once_across_repeated_calls(self):
+        hits = []
+        with patch("tqsdk.TqAuth", self._fake_tqauth(hits)):
+            from src.infrastructure.trading.tqsdk_executor import _login_auth
+
+            auth = _login_auth(("13800000000", "secret"))
+            auth.login()  # 模拟 TqApi 内部的第二次登录
+            auth.login()
+        self.assertEqual(len(hits), 1, "登录过之后不应再发取 token 的请求")
+
+    def test_first_login_still_returns_token(self):
+        hits = []
+        with patch("tqsdk.TqAuth", self._fake_tqauth(hits)):
+            from src.infrastructure.trading.tqsdk_executor import _login_auth, _auth_headers
+
+            auth = _login_auth(("13800000000", "secret"))
+        # 探测用的认证头直接读 _base_headers，token 必须已经填好
+        self.assertEqual(auth._access_token, "token")
+        self.assertIn("Bearer token", _auth_headers(auth)["Authorization"])
 
 
 if __name__ == "__main__":

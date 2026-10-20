@@ -61,25 +61,74 @@ def _lookup_trading_gateway(broker_id: str, timeout: float = 3.0) -> Optional[st
     return gateway if isinstance(gateway, str) else None
 
 
-def _check_trading_gateway(td_url: str, timeout: float = 5.0) -> None:
-    """对交易网关做一次只握手、不登录的连通性探测。
+def _login_auth(auth: tuple[str, str]):
+    """登录快期权限账户，返回已完成 auth.login 的 TqAuth 实例。
+
+    探测交易网关必须带认证头：网关对不带 token 的握手一律回 HTTP 500
+    （body 为 {"error":"websocket: bad handshake"}），裸握手根本区分不出
+    「网关故障」和「正常拒客」，会把可用网关误判成服务端故障。
+
+    返回的实例还要交给后面的 TqApi 复用，所以这里让 login() 幂等：TqApi
+    构造时会无条件再调一次 init + login，跳过它能省掉一次约 1 秒的取 token。
+    """
+    from tqsdk import TqAuth
+
+    class _LoggedInAuth(TqAuth):
+        """登录过就不再重复取 token 的 TqAuth。
+
+        只跳过重复的 token 请求；init/login 的其余副作用都由第一次调用完成，
+        因此 TqApi 拿到的 _grants/_auth_id 与原生流程一致。
+        """
+
+        _already_logged_in = False
+
+        def login(self) -> None:
+            if self._already_logged_in:
+                return
+            super().login()
+            self._already_logged_in = True
+
+    auth_obj = _LoggedInAuth(auth[0], auth[1])
+    auth_obj.init(mode="real")
+    auth_obj.login()
+    return auth_obj
+
+
+def _auth_headers(auth_obj) -> dict:
+    """取 tqsdk 建连时携带的请求头（UA + Bearer token），供探测复用。
+
+    tqsdk 没有公开的 header 接口，但 TqConnect 建连时用的就是这份
+    _base_headers，探测照抄才能与服务端的判定口径一致。
+    """
+    return dict(auth_obj._base_headers)
+
+
+def _check_trading_gateway(
+    td_url: str, headers: Optional[dict] = None, timeout: float = 5.0
+) -> None:
+    """对交易网关做一次带认证头的握手探测（只握手，不发 req_login）。
 
     只有网关自身故障（HTTP 5xx）才抛 TradingGatewayUnavailableError。
     其余情况一律放行：
-    - 4xx（典型是实盘网关对未认证握手返回 401）说明网关本身活着并且在
-      正常拒客，这是预期行为，不能当成故障；
+    - 4xx（实盘网关对无权限账户返回 401 等）说明网关本身活着并且在正常
+      拒客，这是预期行为，不能当成故障；
     - 超时、DNS 失败等模糊情况可能是本地瞬时抖动，探测没有足够证据下结论。
+
+    headers 为空时不做探测：没登录就拿不到 token，裸握手必然被 500 拒掉。
     """
+    if not headers:
+        return
+
     from websockets.exceptions import InvalidStatus, WebSocketException
     from websockets.sync.client import connect
 
     try:
-        with connect(td_url, open_timeout=timeout):
+        with connect(td_url, open_timeout=timeout, additional_headers=headers):
             return
     except InvalidStatus as exc:
         status = exc.response.status_code
         if status < 500:
-            # 4xx = 网关在工作，只是拒绝了这次匿名握手
+            # 4xx = 网关在工作，只是拒绝了这次握手
             return
         body = bytes(exc.response.body or b"").decode("utf-8", "replace").strip()
         detail = f"：{body[:80]}" if body else ""
@@ -93,7 +142,7 @@ def _check_trading_gateway(td_url: str, timeout: float = 5.0) -> None:
         return
 
 
-def _preflight_trading_gateway(account: Account) -> None:
+def _preflight_trading_gateway(account: Account, headers: Optional[dict] = None) -> None:
     """启动前先确认交易网关可用，不可用则立刻失败而不是等 tqsdk 的 60 秒兜底。
 
     模拟账户的 broker id 固定；实盘用账户里保存的期货公司名（与传给 TqAccount
@@ -104,7 +153,7 @@ def _preflight_trading_gateway(account: Account) -> None:
         return
     td_url = _lookup_trading_gateway(broker_id)
     if td_url:
-        _check_trading_gateway(td_url)
+        _check_trading_gateway(td_url, headers=headers)
 
 
 def test_account_session(account: Account, auth: tuple[Optional[str], Optional[str]]) -> None:
@@ -117,13 +166,16 @@ def test_account_session(account: Account, auth: tuple[Optional[str], Optional[s
     实盘期货公司/资金账号配置错误（tqsdk 在构造时即校验账户授权）。
 
     另做一次交易网关预探测：tqsdk 在交易柜台连不上时会一直重试到 60 秒
-    超时，最后只报「请检查客户端及网络」，既慢又指向错误方向。
+    超时，最后只报「请检查客户端及网络」，既慢又指向错误方向。探测要带
+    认证头，所以先登录一次快期账户，登录结果直接交给后面的 TqApi 复用。
 
     阻塞调用，需在工作线程中执行（与 test_tq_auth_connection 一致）。
     """
-    from tqsdk import TqAccount, TqApi, TqAuth, TqKq, TqTimeoutError
+    from tqsdk import TqAccount, TqApi, TqKq, TqTimeoutError
 
-    _preflight_trading_gateway(account)
+    auth_obj = _login_auth(auth) if auth[0] and auth[1] else None
+    if auth_obj is not None:
+        _preflight_trading_gateway(account, headers=_auth_headers(auth_obj))
 
     if account.kind == "live":
         account_obj = TqAccount(account.broker, account.trade_account, account.trade_password)
@@ -132,16 +184,15 @@ def test_account_session(account: Account, auth: tuple[Optional[str], Optional[s
         account_obj = TqKq()
 
     try:
-        api = TqApi(
-            account_obj,
-            auth=TqAuth(auth[0], auth[1]) if auth[0] and auth[1] else None,
-        )
+        api = TqApi(account_obj, auth=auth_obj)
     except TqTimeoutError as exc:
         # tqsdk 走到这里时已解析出网关地址（auth 与名称服务都通过了），
         # 补一次探测把「网关挂了」与「确实只是数据慢」区分开
         td_url = getattr(account_obj, "_td_url", None)
         if td_url:
-            _check_trading_gateway(td_url)
+            _check_trading_gateway(
+                td_url, headers=_auth_headers(auth_obj) if auth_obj else None
+            )
             raise TqTimeoutError(
                 f"{exc}（交易网关 {td_url} 握手正常，可能是行情或账户数据延迟）"
             ) from exc
