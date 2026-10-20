@@ -62,7 +62,7 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 | method | params | result |
 |---|---|---|
 | `app.status` | - | `{version, pid, config, accounts, engines}` 全量初始状态 |
-| `config.save` | `{server_url?, proxy_url?, auto_check_update?, skipped_version?}` | `{}` 未提供的字段沿用 |
+| `config.save` | `{server_url?, proxy_url?, skipped_version?}` | `{}` 未提供的字段沿用 |
 | `accounts.list` | - | `{accounts: [...]}` **不含密码**；每项含 `has_tq_password` / `has_trade_password` 与 `tq_password_length` / `trade_password_length`（明文长度，供 UI 按真实长度绘制掩码圆点） |
 | `accounts.save` | `{kind: "sim"\|"live", account_id?, label?, tq_account?, tq_password?, broker?, trade_account?, trade_password?, symbols?, strategy?, enabled?}` | `{account_id}` 未提供的字段沿用已有账户；symbols 支持数组或逗号分隔字符串；strategy 为服务器策略 id（空字符串 = 清除选择）；无 account_id 时 sim→`legacy`、live→`legacy-live` |
 | `accounts.delete` | `{account_id}` | `{}` |

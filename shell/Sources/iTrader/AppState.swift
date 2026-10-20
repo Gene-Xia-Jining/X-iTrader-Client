@@ -189,13 +189,11 @@ struct EngineStatus {
 struct ConfigInfo: Equatable {
     var serverUrl = ""
     var proxyUrl = ""
-    var autoCheckUpdate = true
 
     static func from(_ dict: [String: Any]) -> ConfigInfo {
         var c = ConfigInfo()
         c.serverUrl = dict["server_url"] as? String ?? ""
         c.proxyUrl = dict["proxy_url"] as? String ?? ""
-        c.autoCheckUpdate = dict["auto_check_update"] as? Bool ?? true
         return c
     }
 }
@@ -559,11 +557,10 @@ final class AppState: ObservableObject {
         }
     }
 
-    func saveConfig(serverUrl: String?, proxyUrl: String?, autoCheckUpdate: Bool? = nil) {
+    func saveConfig(serverUrl: String?, proxyUrl: String?) {
         var params: [String: Any] = [:]
         if let serverUrl { params["server_url"] = serverUrl }
         if let proxyUrl { params["proxy_url"] = proxyUrl }
-        if let autoCheckUpdate { params["auto_check_update"] = autoCheckUpdate }
         Task { await runAction(method: "config.save", params: params) }
     }
 
@@ -762,12 +759,11 @@ final class AppState: ObservableObject {
         return false
     }
 
-    /// 连接成功后的静默探活：每次启动只做一次，尊重「启动时自动检查更新」开关。
-    /// 失败不打扰用户——顶栏点开版本弹窗仍可手动检查。
+    /// 连接成功后的静默探活：每次启动只做一次，总是执行（没有开关）。
+    /// 失败不打扰用户——顶栏点版本胶囊仍可手动检查。
     private func checkUpdateOnConnect() {
         guard !didAutoCheckUpdate else { return }
         didAutoCheckUpdate = true
-        guard config.autoCheckUpdate else { return }
         Task {
             guard
                 let resp = try? await call(method: "update.check", params: ["silent": true]),
@@ -780,9 +776,8 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 手动检查；`autoApply` 为 true 表示用户在版本弹窗里点了「确认更新」，
-    /// 检查到新版本后直接进入下载并在完成后安装重启。
-    func checkUpdate(autoApply: Bool = false) {
+    /// 手动检查。只查不下载：发现新版本由壳弹确认框，用户确认后才走 `confirmUpdate()`。
+    func checkUpdate() {
         Task {
             updatePhase = .checking
             do {
@@ -793,7 +788,6 @@ final class AppState: ObservableObject {
                         version: resp["version"] as? String ?? "",
                         hasPatch: resp["has_patch"] as? Bool ?? false
                     )
-                    if autoApply { startDownload(autoApply: true) }
                 case "latest":
                     updatePhase = .latest(resp["message"] as? String ?? "已是最新版本")
                 default:
@@ -805,27 +799,19 @@ final class AppState: ObservableObject {
         }
     }
 
-    func downloadUpdate(autoApply: Bool = false) {
-        startDownload(autoApply: autoApply)
-    }
-
-    /// 版本弹窗里点了「确认更新」：有可用版本就直接下载（下载完自动安装），
-    /// 尚未检查过则先检查再走同一条路径。
+    /// 用户在确认框里点了「更新」：下载并安装重启。
     func confirmUpdate() {
-        if case .available = updatePhase {
-            startDownload(autoApply: true)
-        } else {
-            checkUpdate(autoApply: true)
-        }
+        startDownload(autoApply: true)
     }
 
     private func startDownload(autoApply: Bool) {
         autoApplyUpdate = autoApply
+        // 立即进入下载态：顶栏胶囊据此马上给出反馈，不必等 RPC 返回
+        updateProgress = -1
+        updatePhase = .downloading
         Task {
             do {
-                updateProgress = -1
                 _ = try await call(method: "update.download")
-                updatePhase = .downloading
             } catch {
                 autoApplyUpdate = false
                 updatePhase = .failed(error.localizedDescription)
@@ -833,11 +819,13 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// 取消下载：立刻回到 idle（不必等后端的 update_cancelled 广播），
+    /// 再让后端取消下载任务并清掉暂存目录。
     func cancelUpdate() {
         autoApplyUpdate = false
         updateProgress = -1
-        Task { await runAction(method: "update.cancel") }
         updatePhase = .idle
+        Task { await runAction(method: "update.cancel") }
     }
 
     func applyUpdate() {

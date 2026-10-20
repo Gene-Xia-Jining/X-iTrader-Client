@@ -156,7 +156,15 @@ struct RootView: View {
     @State private var showAutoTradeHelp = false
     @State private var autoTradeHelpHovering = false
     @State private var autoTradeHovering = false
-    @State private var showVersionSheet = false
+    /// 「发现新版本」确认框；非空即弹出
+    @State private var updatePrompt: UpdatePrompt?
+    /// 本次点击触发的检查是否还在等结果：只有用户主动点出来的新版本才弹确认框，
+    /// 启动时的静默检查只亮红点
+    @State private var awaitingUpdatePrompt = false
+    /// 版本胶囊的瞬时提示（已是最新 / 更新失败），几秒后回到版本号
+    @State private var versionHint: String?
+    /// 瞬时提示的序号：定时清除时用它判定期间是否已有新提示
+    @State private var versionHintToken = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -173,9 +181,32 @@ struct RootView: View {
                 appState.startBlockedIssues = []
             }
         }
-        .sheet(isPresented: $showVersionSheet) {
-            VersionSheet { showVersionSheet = false }
-                .environmentObject(appState)
+        .alert(item: $updatePrompt) { prompt in
+            Alert(
+                title: Text("发现新版本 \(prompt.version)"),
+                message: Text(
+                    "\(prompt.hasPatch ? "差量更新包" : "完整更新包")。"
+                    + "确认后自动下载并安装，完成后客户端会自动重启。"
+                ),
+                primaryButton: .default(Text("更新")) { appState.confirmUpdate() },
+                secondaryButton: .cancel(Text("取消"))
+            )
+        }
+        .onChange(of: appState.updatePhase) { phase in
+            switch phase {
+            case .available(let version, let hasPatch):
+                guard awaitingUpdatePrompt else { break }
+                awaitingUpdatePrompt = false
+                updatePrompt = UpdatePrompt(version: version, hasPatch: hasPatch)
+            case .latest:
+                awaitingUpdatePrompt = false
+                showVersionHint("已是最新")
+            case .failed:
+                awaitingUpdatePrompt = false
+                showVersionHint("更新失败")
+            default:
+                break
+            }
         }
     }
 
@@ -315,13 +346,14 @@ struct RootView: View {
         .cornerRadius(18)
     }
 
-    /// 版本胶囊：显示当前版本，有新版本时右上角红点角标。点击打开版本弹窗。
+    /// 版本胶囊：平时显示当前版本；点击即检查更新，发现新版本弹确认框。
+    /// 下载中在胶囊底部显示进度条，此时点击即取消下载。
     private var versionPill: some View {
-        Button { showVersionSheet = true } label: {
+        Button { handleVersionPillClick() } label: {
             HStack(spacing: 6) {
-                Text(appState.backendVersion.isEmpty ? "-" : appState.backendVersion)
+                Text(versionPillText)
                     .font(AppTheme.bodyFont.weight(.semibold))
-                    .foregroundColor(AppTheme.dim(scheme))
+                    .foregroundColor(versionPillColor)
                     .contentShape(Rectangle())
                 if appState.updateBadgeVisible {
                     Circle()
@@ -335,12 +367,102 @@ struct RootView: View {
                 RoundedRectangle(cornerRadius: 18)
                     .stroke(AppTheme.hairline(scheme), lineWidth: 1)
             )
+            // 进度条叠在胶囊底部，随外层 cornerRadius 一起被裁成圆角
+            .overlay(alignment: .bottom) { downloadProgressBar }
             .cornerRadius(18)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .pointerCursor()
-        .help("点击查看版本与更新")
+        .help(versionPillTooltip)
+    }
+
+    /// 下载进度：胶囊底部一条按百分比延伸的细进度条；总量未知时不显示
+    @ViewBuilder
+    private var downloadProgressBar: some View {
+        if case .downloading = appState.updatePhase, appState.updateProgress >= 0 {
+            GeometryReader { geo in
+                Rectangle()
+                    .fill(AppTheme.primary(scheme))
+                    .frame(
+                        width: geo.size.width * CGFloat(appState.updateProgress) / 100,
+                        height: geo.size.height
+                    )
+            }
+            .frame(height: 3)
+            .allowsHitTesting(false)
+        }
+    }
+
+    /// 胶囊文案：更新流程各阶段优先，其次是几秒内的终态提示，最后是版本号
+    private var versionPillText: String {
+        switch appState.updatePhase {
+        case .checking: return "检查中…"
+        case .downloading:
+            return appState.updateProgress >= 0 ? "取消 \(appState.updateProgress)%" : "取消下载"
+        case .ready: return appState.updateInstalling ? "安装中…" : "待安装…"
+        case .available: break  // 只发现未更新：保留版本号，靠红点与 tooltip 提示
+        default: break
+        }
+        if let versionHint { return versionHint }
+        return appState.backendVersion.isEmpty ? "-" : appState.backendVersion
+    }
+
+    private var versionPillColor: Color {
+        switch appState.updatePhase {
+        case .downloading, .ready:
+            return AppTheme.warning(scheme)
+        case .failed:
+            return versionHint == nil ? AppTheme.dim(scheme) : AppTheme.danger(scheme)
+        case .latest:
+            return versionHint == nil ? AppTheme.dim(scheme) : AppTheme.success(scheme)
+        default:
+            return AppTheme.dim(scheme)
+        }
+    }
+
+    private var versionPillTooltip: String {
+        switch appState.updatePhase {
+        case .checking: return "正在检查更新…"
+        case .downloading: return "正在下载更新，点击取消"
+        case .ready: return "更新包已下载，安装后客户端会重启"
+        case .available(let version, _): return "发现新版本 \(version)，点击更新"
+        default: return "点击检查更新"
+        }
+    }
+
+    /// 点击版本胶囊：下载中表示取消，其余情况发起检查（已知有新版本则直接确认框）。
+    /// 检查结果由 onChange(updatePhase) 接手。
+    private func handleVersionPillClick() {
+        switch appState.updatePhase {
+        case .downloading:
+            appState.cancelUpdate()
+            versionHint = nil
+        case .ready:
+            // 下载完成即自动安装，此态通常一闪而过；若因取消竞争停在这里，
+            // 点击即补上安装，否则用户没有出口
+            if !appState.updateInstalling { appState.applyUpdate() }
+        case .checking:
+            return  // 检查进行中，忽略点击
+        case .available(let version, let hasPatch):
+            updatePrompt = UpdatePrompt(version: version, hasPatch: hasPatch)
+        default:
+            if appState.updateInstalling { return }
+            versionHint = nil
+            awaitingUpdatePrompt = true
+            appState.checkUpdate()
+        }
+    }
+
+    /// 终态提示（已是最新 / 更新失败）显示几秒后回到版本号
+    private func showVersionHint(_ text: String) {
+        versionHint = text
+        versionHintToken += 1
+        let token = versionHintToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            guard token == versionHintToken else { return }
+            versionHint = nil
+        }
     }
 
     /// 自动交易胶囊：外观同 AppButton（开关语义色），问号放在胶囊内部右侧
@@ -525,154 +647,11 @@ private struct StartBlockedSheet: View {
     }
 }
 
-// MARK: - 版本弹窗：当前版本 + 检查更新 + 确认更新 + 自动检查开关
+// MARK: - 更新确认框
 
-/// 顶栏版本胶囊点开的弹窗：当前版本 + 检查更新 + 确认更新 + 启动时自动检查开关。
-///
-/// 确认一次即可：点「确认更新」后自动下载并在完成后安装重启，不需要用户再去
-/// 别处点第二次。软件更新相关的入口全部集中在这里（设置页已不再提供）。
-/// 标题栏与「关闭」按钮的排布同模拟页各弹窗：标题靠左，关闭在右上角。
-private struct VersionSheet: View {
-    let onClose: () -> Void
-
-    @EnvironmentObject var appState: AppState
-    @Environment(\.colorScheme) private var scheme
-
-    /// 开关的本地镜像：配置要等后端 config_changed 回传，直接绑 config 会闪一下
-    @State private var autoCheckUpdate = true
-    @State private var savedAutoCheck = true
-
-    private var busy: Bool {
-        switch appState.updatePhase {
-        case .checking, .downloading, .ready: return true
-        default: return false
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // 标题行：标题靠左、「关闭」在右上角（与模拟页各弹窗一致）
-            HStack(spacing: 10) {
-                Text("软件更新")
-                    .font(AppTheme.bodyFont.weight(.semibold))
-                    .foregroundColor(AppTheme.ink(scheme))
-                Spacer(minLength: 12)
-                AppButton("关闭", variant: .secondary, size: .inline) { onClose() }
-                    .keyboardShortcut(.cancelAction)
-            }
-
-            HairlineDivider()
-
-            Text("当前版本 \(appState.backendVersion.isEmpty ? "-" : appState.backendVersion)")
-                .font(AppTheme.dimFont)
-                .foregroundColor(AppTheme.dim(scheme))
-
-            // 未检查过时不留提示语，也不占位
-            if appState.updatePhase != .idle {
-                content
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            autoCheckRow
-
-            HStack(spacing: 8) {
-                AppButton("检查更新", variant: .secondary, disabled: busy) {
-                    appState.checkUpdate()
-                }
-                Spacer()
-                if case .available(let version, _) = appState.updatePhase {
-                    AppButton("确认更新 \(version)") { appState.confirmUpdate() }
-                        .keyboardShortcut(.defaultAction)
-                } else if case .ready(let kind) = appState.updatePhase, !appState.updateInstalling {
-                    // 下载已完成但还没安装（例如启动静默探活发现新版本后手动下载）
-                    AppButton("安装并重启（\(kind)）") { appState.applyUpdate() }
-                        .keyboardShortcut(.defaultAction)
-                } else if case .downloading = appState.updatePhase {
-                    AppButton("取消", variant: .secondary) { appState.cancelUpdate() }
-                }
-            }
-        }
-        .padding(20)
-        .frame(width: 520)
-        .background(AppTheme.canvas(scheme))
-        .onAppear(perform: fillFromConfig)
-        .onChange(of: appState.config) { _ in fillFromConfig() }
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        let phase = appState.updatePhase
-        VStack(alignment: .leading, spacing: 10) {
-            switch phase {
-            case .idle:
-                // 未检查过时不显示提示语，直接留空
-                EmptyView()
-            case .checking:
-                message("正在检查更新…", color: AppTheme.warning(scheme))
-            case .available(let version, let hasPatch):
-                message(
-                    "发现新版本 \(version)（\(hasPatch ? "差量更新包" : "完整更新包")）。"
-                    + "确认后自动下载并安装，完成后客户端会自动重启。",
-                    color: AppTheme.ink(scheme)
-                )
-            case .latest(let text):
-                message(text, color: AppTheme.success(scheme))
-            case .downloading:
-                message("正在下载更新…", color: AppTheme.warning(scheme))
-                if appState.updateProgress >= 0 {
-                    ProgressView(value: Double(appState.updateProgress), total: 100)
-                        .progressViewStyle(.linear)
-                    message("\(appState.updateProgress)%", color: AppTheme.dim(scheme))
-                }
-            case .ready:
-                message(
-                    appState.updateInstalling ? "正在安装并重启…" : "更新包已下载，可以安装。",
-                    color: AppTheme.warning(scheme)
-                )
-            case .failed(let text):
-                message(text, color: AppTheme.danger(scheme))
-            }
-        }
-    }
-
-    /// 启动时自动检查更新：勾选即落库，下次启动生效。
-    private var autoCheckRow: some View {
-        Button {
-            autoCheckUpdate.toggle()
-            saveAutoCheckIfChanged()
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: autoCheckUpdate ? "checkmark.square.fill" : "square")
-                    .foregroundColor(autoCheckUpdate ? AppTheme.primary(scheme) : AppTheme.dim(scheme))
-                Text("启动时自动检查更新，发现新版本时提示")
-                    .font(AppTheme.bodyFont)
-                    .foregroundColor(AppTheme.ink(scheme))
-                Spacer(minLength: 0)
-            }
-            .frame(minHeight: 30)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .pointerCursor()
-    }
-
-    private func saveAutoCheckIfChanged() {
-        guard autoCheckUpdate != savedAutoCheck else { return }
-        savedAutoCheck = autoCheckUpdate
-        appState.saveConfig(serverUrl: nil, proxyUrl: nil, autoCheckUpdate: autoCheckUpdate)
-    }
-
-    private func fillFromConfig() {
-        autoCheckUpdate = appState.config.autoCheckUpdate
-        savedAutoCheck = appState.config.autoCheckUpdate
-    }
-
-    private func message(_ text: String, color: Color) -> some View {
-        Text(text)
-            .font(AppTheme.bodyFont)
-            .foregroundColor(color)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .textSelection(.enabled)
-    }
+/// 「发现新版本」确认框的数据。`id` 让 SwiftUI 在内容变化时重建弹窗。
+private struct UpdatePrompt: Identifiable {
+    let id = UUID()
+    let version: String
+    let hasPatch: Bool
 }

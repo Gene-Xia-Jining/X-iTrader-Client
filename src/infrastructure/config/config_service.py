@@ -72,10 +72,6 @@ class ConfigService:
             except sqlite3.OperationalError:
                 pass
             try:
-                db.execute("ALTER TABLE app_config ADD COLUMN auto_check_update INTEGER NOT NULL DEFAULT 1")
-            except sqlite3.OperationalError:
-                pass
-            try:
                 db.execute("ALTER TABLE app_config ADD COLUMN skipped_version TEXT NOT NULL DEFAULT ''")
             except sqlite3.OperationalError:
                 pass
@@ -186,7 +182,6 @@ class ConfigService:
                 server_url=row["server_url"],
                 auto_trade=bool(row["auto_trade"]),
                 proxy_url=row["proxy_url"] if "proxy_url" in row.keys() else "",
-                auto_check_update=bool(row["auto_check_update"]) if "auto_check_update" in row.keys() else True,
                 skipped_version=row["skipped_version"] if "skipped_version" in row.keys() else "",
                 database_path=row["database"],
             )
@@ -195,7 +190,6 @@ class ConfigService:
             server_url=DEFAULT_SERVER_URL,
             auto_trade=False,
             proxy_url="",
-            auto_check_update=True,
             skipped_version="",
             database_path=self.db_path,
         )
@@ -206,20 +200,18 @@ class ConfigService:
         with self._conn() as db:
             db.execute("""
                 INSERT INTO app_config
-                    (id, server_url, symbols, auto_trade, tq_account, tq_password, trade_account, trade_password, proxy_url, auto_check_update, skipped_version, initial_balance, database)
-                VALUES (1, ?, '[]', ?, '', '', '', '', ?, ?, ?, 10000000, ?)
+                    (id, server_url, symbols, auto_trade, tq_account, tq_password, trade_account, trade_password, proxy_url, skipped_version, initial_balance, database)
+                VALUES (1, ?, '[]', ?, '', '', '', '', ?, ?, 10000000, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     server_url = excluded.server_url,
                     auto_trade = excluded.auto_trade,
                     proxy_url = excluded.proxy_url,
-                    auto_check_update = excluded.auto_check_update,
                     skipped_version = excluded.skipped_version,
                     database = excluded.database
             """, (
                 config.server_url,
                 int(config.auto_trade),
                 config.proxy_url,
-                int(config.auto_check_update),
                 config.skipped_version,
                 config.database_path,
             ))

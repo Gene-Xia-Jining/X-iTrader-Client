@@ -9,7 +9,7 @@ namespace XTrader.Shell.Views;
 
 /// <summary>
 /// 设置页：服务器连接 + 代理（对应 mac 壳的 SettingsView / Qt SettingsPage）。
-/// 软件更新已合并到顶栏版本胶囊的弹窗。
+/// 软件更新已合并到顶栏版本胶囊（点击即检查更新）。
 /// </summary>
 public sealed partial class SettingsPage : Page
 {

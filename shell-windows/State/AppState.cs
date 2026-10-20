@@ -240,13 +240,11 @@ public sealed class ConfigInfo
 {
     public string ServerUrl { get; set; } = "";
     public string ProxyUrl { get; set; } = "";
-    public bool AutoCheckUpdate { get; set; } = true;
 
     public static ConfigInfo From(JsonObject dict) => new()
     {
         ServerUrl = dict["server_url"]?.GetValue<string>() ?? "",
         ProxyUrl = dict["proxy_url"]?.GetValue<string>() ?? "",
-        AutoCheckUpdate = dict["auto_check_update"]?.GetValue<bool>() ?? true,
     };
 }
 
@@ -491,7 +489,7 @@ public sealed class AppState : INotifyPropertyChanged
 
     /// <summary>
     /// 顶栏版本按钮是否显示新版本角标（仅「发现新版本」态；
-    /// 下载/就绪阶段已在弹窗内展示进度）
+    /// 下载/安装阶段胶囊直接显示进度文案）
     /// </summary>
     public bool UpdateBadgeVisible => _updatePhase is UpdatePhase.Available;
 
@@ -605,8 +603,8 @@ public sealed class AppState : INotifyPropertyChanged
                     }
                 });
                 await RefreshAllAsync(ct);
-                // 静默检查要读「启动时自动检查更新」开关，必须排在 RefreshAllAsync
-                // 回填 Config 之后（Post 按入队顺序执行）
+                // 连接成功即静默检查一次更新（失败不打扰）；排在状态回填之后，
+                // 保证版本号已就绪，胶囊有内容可显示
                 Post(CheckUpdateOnConnect);
                 return;
             }
@@ -949,12 +947,11 @@ public sealed class AppState : INotifyPropertyChanged
     internal void SetAutoTrade(bool value) => _ = Task.Run(() =>
         RunActionAsync("engine.set_auto_trade", new JsonObject { ["value"] = value }));
 
-    internal void SaveConfig(string? serverUrl, string? proxyUrl, bool? autoCheckUpdate = null)
+    internal void SaveConfig(string? serverUrl, string? proxyUrl)
     {
         var parameters = new JsonObject();
         if (serverUrl is not null) parameters["server_url"] = serverUrl;
         if (proxyUrl is not null) parameters["proxy_url"] = proxyUrl;
-        if (autoCheckUpdate is not null) parameters["auto_check_update"] = autoCheckUpdate;
         _ = Task.Run(() => RunActionAsync("config.save", parameters));
     }
 
@@ -1257,8 +1254,8 @@ public sealed class AppState : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// 连接成功后的静默探活：每次启动只做一次，尊重「启动时自动检查更新」开关。
-    /// 失败不打扰用户——顶栏点开版本弹窗仍可手动检查。
+    /// 连接成功后的静默探活：每次启动只做一次，总是执行（没有开关）。
+    /// 失败不打扰用户——顶栏点版本胶囊可手动重试。
     /// </summary>
     private void CheckUpdateOnConnect()
     {
@@ -1267,10 +1264,6 @@ public sealed class AppState : INotifyPropertyChanged
             return;
         }
         _didAutoCheckUpdate = true;
-        if (!Config.AutoCheckUpdate)
-        {
-            return;
-        }
         _ = Task.Run(async () =>
         {
             try
@@ -1286,16 +1279,16 @@ public sealed class AppState : INotifyPropertyChanged
             }
             catch
             {
-                // 静默检查失败保持 idle：用户点开版本弹窗可手动重试
+                // 静默检查失败保持 idle：用户点版本胶囊可手动重试
             }
         });
     }
 
     /// <summary>
-    /// 手动检查更新。<paramref name="autoApply"/> 为 true 表示用户在版本弹窗里
-    /// 点了「确认更新」：查到新版本后直接下载，下载完成再自动安装重启。
+    /// 手动检查更新。只查不下载：发现新版本由壳弹确认框，用户确认后才走
+    /// <see cref="ConfirmUpdate"/>。
     /// </summary>
-    internal void CheckUpdate(bool autoApply = false) => _ = Task.Run(async () =>
+    internal void CheckUpdate() => _ = Task.Run(async () =>
     {
         Post(() => UpdatePhase = new UpdatePhase.Checking());
         try
@@ -1310,10 +1303,6 @@ public sealed class AppState : INotifyPropertyChanged
                 "latest" => new UpdatePhase.Latest(resp["message"]?.GetValue<string>() ?? "已是最新版本"),
                 _ => new UpdatePhase.Failed(resp["message"]?.GetValue<string>() ?? "未找到可用更新"),
             });
-            if (autoApply && status == "available")
-            {
-                StartDownload(autoApply: true);
-            }
         }
         catch (Exception ex)
         {
@@ -1321,31 +1310,23 @@ public sealed class AppState : INotifyPropertyChanged
         }
     });
 
-    /// <summary>弹窗里点了「确认更新」：有可用版本直接下载，否则先检查。</summary>
-    internal void ConfirmUpdate()
-    {
-        if (UpdatePhase is UpdatePhase.Available)
-        {
-            StartDownload(autoApply: true);
-        }
-        else
-        {
-            CheckUpdate(autoApply: true);
-        }
-    }
-
-    internal void DownloadUpdate(bool autoApply = false) => StartDownload(autoApply);
+    /// <summary>用户在确认框里点了「更新」：下载并安装重启。</summary>
+    internal void ConfirmUpdate() => StartDownload(autoApply: true);
 
     private void StartDownload(bool autoApply)
     {
         _autoApplyUpdate = autoApply;
+        // 立即进入下载态：调用方（顶栏胶囊）据此马上给出反馈，不必等 RPC 返回
+        Post(() =>
+        {
+            UpdateProgress = -1;
+            UpdatePhase = new UpdatePhase.Downloading();
+        });
         _ = Task.Run(async () =>
         {
             try
             {
-                Post(() => UpdateProgress = -1);
                 _ = await CallAsync("update.download");
-                Post(() => UpdatePhase = new UpdatePhase.Downloading());
             }
             catch (Exception ex)
             {
@@ -1355,6 +1336,10 @@ public sealed class AppState : INotifyPropertyChanged
         });
     }
 
+    /// <summary>
+    /// 取消下载：立刻回到 idle（不必等后端的 update_cancelled 广播），
+    /// 再让后端取消下载任务并清掉暂存目录。
+    /// </summary>
     internal void CancelUpdate()
     {
         _autoApplyUpdate = false;

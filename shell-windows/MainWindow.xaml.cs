@@ -1,3 +1,4 @@
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -24,8 +25,19 @@ public sealed partial class MainWindow : Window
     private bool _syncingToggle;
     /// <summary>启动预检拦截弹窗是否已弹出（避免状态刷新重复打开）</summary>
     private bool _issuesDialogOpen;
-    /// <summary>版本/更新弹窗是否已打开（窗口刷新会重复触发，需防重入）</summary>
-    private bool _versionDialogOpen;
+    /// <summary>版本胶囊的瞬时提示（已是最新/更新失败）：非空时覆盖版本号</summary>
+    private string? _versionHint;
+    private string? _versionHintTooltip;
+    /// <summary>瞬时提示的序号：定时清除时用它判定期间是否已有新提示</summary>
+    private int _versionHintSerial;
+    /// <summary>瞬时提示的清除定时器（持引用，避免被 GC 回收后不再触发）</summary>
+    private DispatcherQueueTimer? _versionHintTimer;
+    /// <summary>「发现新版本」确认框是否已打开（防止重复弹出）</summary>
+    private bool _updatePromptOpen;
+    /// <summary>本次点击触发的检查是否还在等结果：只有用户主动点出来的新版本才弹确认框</summary>
+    private bool _awaitingUpdatePrompt;
+
+    private const string VersionTooltip = "点击检查并更新";
 
     /// <summary>导航项（与 <see cref="_navRoutes"/> 同序），索引即路由</summary>
     private readonly List<Button> _navItems = [];
@@ -72,7 +84,14 @@ public sealed partial class MainWindow : Window
         BuildNav();
         ApplyThemeToChrome();
 
-        _state.PropertyChanged += (_, _) => RefreshStatus();
+        _state.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(AppState.UpdatePhase))
+            {
+                NotifyUpdatePhase(_state.UpdatePhase);
+            }
+            RefreshStatus();
+        };
         RefreshStatus();
 
         // 完整更新装好后，updater 已拉起新壳：旧壳自行退出，不再向后端发 quit
@@ -282,212 +301,195 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 版本弹窗（对应 mac 壳的 VersionSheet）：当前版本 + 检查更新 + 确认更新 + 自动检查开关。
-    ///
-    /// 确认一次即可：点「确认更新」后自动下载并在完成后安装重启，不需要用户再去
-    /// 别处点第二次。软件更新相关的入口全部集中在这里（设置页已不再提供）。
+    /// 版本胶囊点击：平时检查更新（发现新版本先弹确认框询问，确认后才下载）；
+    /// 下载中表示取消。进度与结果都落在胶囊上。
     /// </summary>
-    private async void OnVersionClick(object sender, RoutedEventArgs e)
+    private void OnVersionClick(object sender, RoutedEventArgs e)
     {
-        if (_versionDialogOpen || RootGrid.XamlRoot is null)
+        // 确认框开着或正在安装，忽略点击
+        if (_updatePromptOpen || _state.UpdateInstalling)
         {
             return;
         }
-        _versionDialogOpen = true;
+        switch (_state.UpdatePhase)
+        {
+            // 下载中：点击即取消
+            case UpdatePhase.Downloading:
+                SetVersionHint(null, null);
+                _state.CancelUpdate();
+                return;
+            // 下载完成即自动安装，此态通常一闪而过；若因取消竞争停在这里，
+            // 点击即补上安装，否则用户没有出口
+            case UpdatePhase.Ready:
+                _state.ApplyUpdate();
+                return;
+            case UpdatePhase.Checking:
+                return;
+            // 已知道有新版本（启动静默检查发现的）：直接问，省掉一次网络往返
+            case UpdatePhase.Available available:
+                SetVersionHint(null, null);
+                ShowUpdatePrompt(available);
+                return;
+        }
+        // 清掉上一次的终态提示，进度文案由 RefreshVersionPill 按 phase 显示
+        SetVersionHint(null, null);
+        _awaitingUpdatePrompt = true;
+        _state.CheckUpdate();
+    }
+
+    /// <summary>
+    /// 「发现新版本」确认框。用户点「更新」才真正开始下载——没有确认就不下载。
+    /// </summary>
+    private async void ShowUpdatePrompt(UpdatePhase.Available available)
+    {
+        if (_updatePromptOpen || RootGrid.XamlRoot is null)
+        {
+            return;
+        }
+        _updatePromptOpen = true;
         try
         {
-            var palette = ThemeTokens.For(IsDark);
-
-            var current = new TextBlock
+            var dialog = new ContentDialog
             {
-                Text = VersionLine(),
-                Foreground = new SolidColorBrush(palette.Dim),
-                FontSize = 13,
+                XamlRoot = RootGrid.XamlRoot,
+                Title = $"发现新版本 {available.Version}",
+                Content = (available.HasPatch ? "差量更新包" : "完整更新包")
+                    + "。确认后自动下载并安装，完成后客户端会自动重启。",
+                PrimaryButtonText = "更新",
+                CloseButtonText = "取消",
+                DefaultButton = ContentDialogButton.Primary,
+                // 弹窗在独立的 popup 根下，不继承窗口根的主题
+                RequestedTheme = IsDark ? ElementTheme.Dark : ElementTheme.Light,
             };
-            var message = new TextBlock
+            if (await dialog.ShowAsync() == ContentDialogResult.Primary)
             {
-                TextWrapping = TextWrapping.Wrap,
-                IsTextSelectionEnabled = true,
-            };
-            var progress = new ProgressBar { Minimum = 0, Maximum = 100, Visibility = Visibility.Collapsed };
-            var progressText = new TextBlock
-            {
-                FontSize = 13,
-                Visibility = Visibility.Collapsed,
-                Foreground = new SolidColorBrush(palette.Dim),
-            };
-            var check = new Button { Content = "检查更新" };
-            var accent = PrimaryButtonStyle();
-            var confirm = new Button { Visibility = Visibility.Collapsed, Style = accent };
-            var install = new Button { Visibility = Visibility.Collapsed, Style = accent };
-            var cancel = new Button { Content = "取消下载", Visibility = Visibility.Collapsed };
-
-            // 标题行自己画在内容顶部：标题靠左、「关闭」在右上角（与模拟页各弹窗一致），
-            // 因此不再使用 ContentDialog 自带的 Title / CloseButtonText
-            ContentDialog? dialog = null;
-            var close = new Button
-            {
-                Content = "关闭",
-                FontSize = 13,
-                MinHeight = 32,
-                Padding = new Thickness(14, 0, 14, 0),
-                CornerRadius = new CornerRadius(8),
-                HorizontalAlignment = HorizontalAlignment.Right,
-            };
-            close.Click += (_, _) => dialog?.Hide();
-
-            var title = new TextBlock
-            {
-                Text = "软件更新",
-                FontSize = 20,
-                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            var titleRow = new Grid { ColumnSpacing = 12 };
-            titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            titleRow.Children.Add(title);
-            Grid.SetColumn(close, 1);
-            titleRow.Children.Add(close);
-            var divider = new Microsoft.UI.Xaml.Shapes.Rectangle
-            {
-                Height = 1,
-                Fill = new SolidColorBrush(palette.Divider),
-            };
-
-            // 启动时自动检查更新：勾选即落库，下次启动生效
-            var autoCheck = new CheckBox
-            {
-                Content = "启动时自动检查更新，发现新版本时提示",
-                IsChecked = _state.Config.AutoCheckUpdate,
-            };
-            var savedAutoCheck = _state.Config.AutoCheckUpdate;
-            void SaveAutoCheck()
-            {
-                var value = autoCheck.IsChecked == true;
-                if (value == savedAutoCheck)
-                {
-                    return;
-                }
-                savedAutoCheck = value;
-                _state.SaveConfig(null, null, value);
-            }
-            autoCheck.Checked += (_, _) => SaveAutoCheck();
-            autoCheck.Unchecked += (_, _) => SaveAutoCheck();
-
-            check.Click += (_, _) => _state.CheckUpdate();
-            confirm.Click += (_, _) => _state.ConfirmUpdate();
-            install.Click += (_, _) => _state.ApplyUpdate();
-            cancel.Click += (_, _) => _state.CancelUpdate();
-
-            var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-            buttons.Children.Add(check);
-            buttons.Children.Add(confirm);
-            buttons.Children.Add(install);
-            buttons.Children.Add(cancel);
-
-            var panel = new StackPanel { Spacing = 12, MinWidth = 420 };
-            panel.Children.Add(titleRow);
-            panel.Children.Add(divider);
-            panel.Children.Add(current);
-            panel.Children.Add(message);
-            panel.Children.Add(progress);
-            panel.Children.Add(progressText);
-            panel.Children.Add(autoCheck);
-            panel.Children.Add(buttons);
-
-            void Refresh()
-            {
-                var phase = _state.UpdatePhase;
-                current.Text = VersionLine();
-                check.IsEnabled = !phase.IsBusy;
-                confirm.Visibility = phase is UpdatePhase.Available ? Visibility.Visible : Visibility.Collapsed;
-                install.Visibility = phase is UpdatePhase.Ready && !_state.UpdateInstalling
-                    ? Visibility.Visible
-                    : Visibility.Collapsed;
-                cancel.Visibility = phase is UpdatePhase.Downloading ? Visibility.Visible : Visibility.Collapsed;
-                progress.Visibility = Visibility.Collapsed;
-                progressText.Visibility = Visibility.Collapsed;
-                // idle 时整行不留（无提示语），其余状态都要显示
-                message.Visibility = Visibility.Visible;
-                switch (phase)
-                {
-                    case UpdatePhase.Available available:
-                        confirm.Content = $"确认更新 {available.Version}";
-                        SetDialogMessage(message, palette.Ink,
-                            $"发现新版本 {available.Version}（{(available.HasPatch ? "差量更新包" : "完整更新包")}）。"
-                            + "确认后自动下载并安装，完成后客户端会自动重启。");
-                        break;
-                    case UpdatePhase.Checking:
-                        SetDialogMessage(message, palette.Warning, "正在检查更新…");
-                        break;
-                    case UpdatePhase.Downloading:
-                        SetDialogMessage(message, palette.Warning, "正在下载更新…");
-                        if (_state.UpdateProgress >= 0)
-                        {
-                            progress.Visibility = Visibility.Visible;
-                            progress.Value = _state.UpdateProgress;
-                            progressText.Visibility = Visibility.Visible;
-                            progressText.Text = $"{_state.UpdateProgress}%";
-                        }
-                        break;
-                    case UpdatePhase.Ready ready:
-                        install.Content = $"安装并重启（{ready.Kind}）";
-                        SetDialogMessage(message, palette.Warning,
-                            _state.UpdateInstalling ? "正在安装并重启…" : "更新包已下载，可以安装。");
-                        break;
-                    case UpdatePhase.Latest latest:
-                        SetDialogMessage(message, palette.Success, latest.Message);
-                        break;
-                    case UpdatePhase.Failed failed:
-                        SetDialogMessage(message, palette.Danger, failed.Message);
-                        break;
-                    default:
-                        // 未检查过时不显示提示语
-                        message.Visibility = Visibility.Collapsed;
-                        SetDialogMessage(message, palette.Dim, "");
-                        break;
-                }
-            }
-
-            Refresh();
-            void OnStateChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) => Refresh();
-            _state.PropertyChanged += OnStateChanged;
-            try
-            {
-                // 标题与「关闭」都自绘在内容里，不再用系统标题栏和底部按钮行
-                var versionDialog = new ContentDialog
-                {
-                    XamlRoot = RootGrid.XamlRoot,
-                    Content = panel,
-                    // 弹窗在独立的 popup 根下，不继承窗口根的主题
-                    RequestedTheme = IsDark ? ElementTheme.Dark : ElementTheme.Light,
-                };
-                dialog = versionDialog;
-                await versionDialog.ShowAsync();
-            }
-            finally
-            {
-                _state.PropertyChanged -= OnStateChanged;
+                _state.ConfirmUpdate();
             }
         }
         finally
         {
-            _versionDialogOpen = false;
+            _updatePromptOpen = false;
         }
     }
 
-    private static Style? PrimaryButtonStyle() =>
-        Application.Current.Resources.TryGetValue("AccentButtonStyle", out var style) ? (Style)style : null;
-
-    private string VersionLine() =>
-        _state.BackendVersion.Length > 0 ? $"当前版本 {_state.BackendVersion}" : "当前版本未知";
-
-    private static void SetDialogMessage(TextBlock block, Windows.UI.Color color, string text)
+    /// <summary>
+    /// 更新终态的瞬时提示：已是最新/失败时把胶囊文字换成结论并挂上完整原因，
+    /// 5 秒后自动回到版本号。检查、下载、安装阶段由胶囊自身的进度文案表达。
+    ///
+    /// 发现新版本只在「用户刚点了胶囊」时弹确认框；启动静默检查只亮红点。
+    /// </summary>
+    private void NotifyUpdatePhase(UpdatePhase phase)
     {
-        block.Text = text;
-        block.Foreground = new SolidColorBrush(color);
+        switch (phase)
+        {
+            case UpdatePhase.Available available:
+                if (_awaitingUpdatePrompt)
+                {
+                    _awaitingUpdatePrompt = false;
+                    ShowUpdatePrompt(available);
+                }
+                break;
+            case UpdatePhase.Latest latest:
+                _awaitingUpdatePrompt = false;
+                SetVersionHint("已是最新", latest.Message);
+                break;
+            case UpdatePhase.Failed failed:
+                _awaitingUpdatePrompt = false;
+                SetVersionHint("更新失败", failed.Message);
+                break;
+        }
     }
+
+    /// <summary>设置胶囊瞬时提示；<paramref name="hint"/> 为 null 表示恢复版本号。</summary>
+    private void SetVersionHint(string? hint, string? tooltip)
+    {
+        _versionHint = hint;
+        _versionHintTooltip = tooltip;
+        var serial = ++_versionHintSerial;
+        RefreshVersionPill();
+        if (hint is null)
+        {
+            return;
+        }
+        // 5 秒后自动恢复；期间若又出现新提示，serial 不匹配则放弃清除
+        _versionHintTimer?.Stop();
+        var timer = RootGrid.DispatcherQueue.CreateTimer();
+        timer.Interval = TimeSpan.FromSeconds(5);
+        timer.IsRepeating = false;
+        timer.Tick += (_, _) =>
+        {
+            if (serial != _versionHintSerial)
+            {
+                return;
+            }
+            _versionHint = null;
+            _versionHintTooltip = null;
+            RefreshVersionPill();
+        };
+        _versionHintTimer = timer;
+        timer.Start();
+    }
+
+    /// <summary>按当前更新状态刷新版本胶囊（版本号/进度/提示文案 + 红点）。</summary>
+    private void RefreshVersionPill()
+    {
+        var palette = ThemeTokens.For(IsDark);
+        var phase = _state.UpdatePhase;
+        string text;
+        var color = palette.Dim;
+        var tooltip = _versionHintTooltip ?? VersionTooltip;
+        switch (phase)
+        {
+            case UpdatePhase.Checking:
+                text = "检查中…";
+                break;
+            case UpdatePhase.Available available:
+                // 只发现未更新：保留版本号，靠红点与 tooltip 提示，不打断阅读
+                text = VersionTextOf();
+                tooltip = $"发现新版本 {available.Version}，点击更新";
+                break;
+            case UpdatePhase.Downloading:
+                text = _state.UpdateProgress >= 0 ? $"取消 {_state.UpdateProgress}%" : "取消下载";
+                color = palette.Warning;
+                tooltip = "正在下载更新，点击取消";
+                break;
+            case UpdatePhase.Ready:
+                text = "安装中…";
+                color = palette.Warning;
+                break;
+            case UpdatePhase.Latest:
+            case UpdatePhase.Failed:
+                // 终态由瞬时提示接管；提示已过期则回到版本号
+                text = _versionHint ?? VersionTextOf();
+                color = _versionHint is null
+                    ? palette.Dim
+                    : (phase is UpdatePhase.Failed ? palette.Danger : palette.Success);
+                break;
+            default:
+                text = _versionHint ?? VersionTextOf();
+                break;
+        }
+        VersionText.Text = text;
+        VersionText.Foreground = new SolidColorBrush(color);
+        VersionBadge.Visibility = _state.UpdateBadgeVisible ? Visibility.Visible : Visibility.Collapsed;
+        VersionBadge.Fill = new SolidColorBrush(palette.Danger);
+
+        // 下载中在胶囊底部显示进度条；总量未知（-1）时不显示
+        if (phase is UpdatePhase.Downloading && _state.UpdateProgress >= 0)
+        {
+            VersionProgress.Value = _state.UpdateProgress;
+            VersionProgress.Foreground = new SolidColorBrush(palette.Primary);
+            VersionProgress.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            VersionProgress.Visibility = Visibility.Collapsed;
+        }
+
+        ToolTipService.SetToolTip(VersionButton, tooltip);
+    }
+
+    private string VersionTextOf() => _state.BackendVersion.Length > 0 ? _state.BackendVersion : "-";
 
     private async void OnQuitClick(object sender, RoutedEventArgs e)
     {
@@ -553,11 +555,8 @@ public sealed partial class MainWindow : Window
         ServerStatusText.Foreground = new SolidColorBrush(
             online ? ThemeTokens.StatusGreen : ThemeTokens.StatusRed);
 
-        // 版本胶囊：文字取后端上报的版本，红点表示已发现新版本
-        VersionText.Text = _state.BackendVersion.Length > 0 ? _state.BackendVersion : "-";
-        VersionText.Foreground = new SolidColorBrush(ThemeTokens.For(IsDark).Dim);
-        VersionBadge.Visibility = _state.UpdateBadgeVisible ? Visibility.Visible : Visibility.Collapsed;
-        VersionBadge.Fill = new SolidColorBrush(ThemeTokens.For(IsDark).Danger);
+        // 版本胶囊：平时显示后端版本，检查/下载/安装中或刚出结果时显示状态文案
+        RefreshVersionPill();
 
         ShowStartBlockedIssuesIfNeeded();
     }
@@ -638,8 +637,7 @@ public sealed partial class MainWindow : Window
         ThemeButton.Content = IsDark ? "浅色" : "深色";
 
         // 版本胶囊与角标（文字/圆点配色随主题）
-        VersionText.Foreground = new SolidColorBrush(palette.Dim);
-        VersionBadge.Fill = new SolidColorBrush(palette.Danger);
+        RefreshVersionPill();
 
         // 侧栏底色与分割线，导航项配色随之重算（选中/未选中/悬停都依主题取色）
         Sidebar.Background = new SolidColorBrush(palette.Canvas);

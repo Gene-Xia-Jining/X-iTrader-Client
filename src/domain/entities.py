@@ -79,6 +79,5 @@ class TradingConfiguration:
     server_url: str
     auto_trade: bool
     proxy_url: str = ""
-    auto_check_update: bool = True
     skipped_version: str = ""
     database_path: str = "data/client.db"

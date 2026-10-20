@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 设置页：服务器连接 + 代理（像素级对应 Qt SettingsPage）。
-/// 软件更新已合并到顶栏版本胶囊的弹窗（VersionSheet）。
+/// 软件更新已合并到顶栏版本胶囊（点击即检查更新）。
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var scheme

@@ -380,7 +380,6 @@ class BackendService:
             server_url=params.get("server_url", current.server_url),
             auto_trade=current.auto_trade,
             proxy_url=params.get("proxy_url", current.proxy_url),
-            auto_check_update=params.get("auto_check_update", current.auto_check_update),
             skipped_version=params.get("skipped_version", current.skipped_version),
             database_path=current.database_path,
         )
