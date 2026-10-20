@@ -97,6 +97,29 @@ jobs:
 
       # ---------- macOS ----------
 
+      # SwiftPM 的增量编译依赖 .build 内的元数据与模块产物，冷启动全量约 30s。
+      # 该缓存只在 workspace 绝对路径不变时有效（SwiftPM 用绝对路径索引产物），
+      # GitHub Actions 的 workspace 固定为 /Users/runner/work/<repo>/<repo>，
+      # 因此可跨运行复用。
+      - name: Resolve Swift cache key (macOS)
+        if: runner.os == 'macOS'
+        id: swift-cache
+        run: |
+          # 工具链升级会改变目标文件，纳入 key 避免复用不兼容的旧产物
+          VER=$(swift --version 2>&1 | sed -n 's/.*Swift version \([0-9.]*\).*/\1/p' | head -1)
+          echo "key=swift-${VER:-unknown}-${{ hashFiles('shell/Package.swift', 'shell/Package.resolved') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Swift build cache (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: shell/.build
+          # 带 run_id：每次运行保存一份新缓存（源码变化后增量重建的产物得以留存）；
+          # restore-keys 前缀匹配，取同一工具链/依赖定义下最近的一份
+          key: ${{ steps.swift-cache.outputs.key }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ steps.swift-cache.outputs.key }}-
+
       - name: Build (macOS)
         if: runner.os == 'macOS'
         run: |
