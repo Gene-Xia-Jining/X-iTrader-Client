@@ -10,6 +10,14 @@ from ..security.crypto import PasswordCipher, load_or_create_key
 # 首次运行写入的服务器地址；设置页 / 模拟页都读写同一行配置
 DEFAULT_SERVER_URL = "https://itrader.redboil.us.ci"
 
+# 历史版本曾作为「首次运行默认值」写入库的地址。这些是内网/本机地址，
+# 只会来自程序自动写入，用户不会主动填回；升级时替换成当前默认值，
+# 否则老库里的这一行永远不会跟着代码更新。
+LEGACY_DEFAULT_SERVER_URLS = (
+    "http://localhost:8000",
+    "http://192.168.100.100:3080",
+)
+
 
 class ConfigService:
     """配置持久化到 SQLite（与交易记录共用 data/client.db）。
@@ -112,7 +120,21 @@ class ConfigService:
             except sqlite3.OperationalError:
                 pass  # 列不存在，或旧 SQLite 不支持 DROP COLUMN（残留无害）
             self._migrate_legacy_account(db)
+            self._migrate_legacy_default_server_url(db)
             db.commit()
+
+    def _migrate_legacy_default_server_url(self, db) -> None:
+        """把库里残留的历史默认服务器地址换成当前默认值。
+
+        旧版本的默认地址是内网/本机地址，用户升级后配置行原样保留，
+        模拟页第 4 步会一直显示早已失效的旧地址。只替换与历史默认值
+        完全相等的行，用户手工填过的地址不受影响。幂等。
+        """
+        placeholders = ",".join("?" * len(LEGACY_DEFAULT_SERVER_URLS))
+        db.execute(
+            f"UPDATE app_config SET server_url = ? WHERE id = 1 AND server_url IN ({placeholders})",
+            (DEFAULT_SERVER_URL, *LEGACY_DEFAULT_SERVER_URLS),
+        )
 
     def _migrate_legacy_account(self, db) -> None:
         """把旧版 app_config 里的单账户数据迁移为 accounts 表一条记录。

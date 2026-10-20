@@ -7,7 +7,11 @@ from cryptography.fernet import Fernet
 
 from src.domain.entities import Account, TradingConfiguration
 from src.infrastructure.security.crypto import PasswordCipher, load_or_create_key
-from src.infrastructure.config.config_service import ConfigService, DEFAULT_SERVER_URL
+from src.infrastructure.config.config_service import (
+    ConfigService,
+    DEFAULT_SERVER_URL,
+    LEGACY_DEFAULT_SERVER_URLS,
+)
 
 
 def _make_config(**overrides):
@@ -253,6 +257,25 @@ class ConfigServiceEncryptionTest(unittest.TestCase):
         self.assertEqual(config.server_url, DEFAULT_SERVER_URL)
         self.assertEqual(DEFAULT_SERVER_URL, "https://itrader.redboil.us.ci")
         self.assertEqual(self.service.load().server_url, config.server_url)
+
+    def test_legacy_default_server_url_replaced_on_upgrade(self):
+        # 旧库里的历史默认地址（内网/本机）升级后换成当前默认值，模拟页不再显示旧地址
+        for legacy in LEGACY_DEFAULT_SERVER_URLS:
+            with self.subTest(legacy=legacy):
+                db_path = Path(self._tmp.name) / f"legacy{len(legacy)}.db"
+                service = ConfigService(str(db_path))
+                service.save(_make_config(server_url=legacy))
+                self.assertEqual(service.load().server_url, legacy)
+
+                # 重新打开库触发迁移
+                reopened = ConfigService(str(db_path))
+                self.assertEqual(reopened.load().server_url, DEFAULT_SERVER_URL)
+
+    def test_custom_server_url_kept(self):
+        # 用户自己填的地址不是历史默认值，升级时必须保留
+        self.service.save(_make_config(server_url="https://example.com/api"))
+        reopened = ConfigService(str(self.db_path))
+        self.assertEqual(reopened.load().server_url, "https://example.com/api")
 
 
 if __name__ == "__main__":
