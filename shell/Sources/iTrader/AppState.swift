@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import iTraderCore
 import AppKit
 import SwiftUI
@@ -65,6 +66,29 @@ struct StrategyInfo: Identifiable, Equatable {
     let id: String
     let name: String
     let description: String
+}
+
+/// 「测试连接」验证通过的一组快期凭据：手机号 + 密码摘要。
+/// 密码只留摘要，避免为了一个 UI 状态在内存里多存一份明文。
+struct VerifiedTqCredentials: Equatable {
+    let account: String
+    let passwordDigest: String
+
+    static func digest(_ password: String) -> String {
+        // 凭据只在进程内比较，用 SHA256 足够，不涉及落盘或传输
+        SHA256.hash(data: Data(password.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// 密码为空表示这次验证沿用的是已存密码
+    init(account: String, password: String) {
+        self.account = account.trimmingCharacters(in: .whitespaces)
+        passwordDigest = Self.digest(password)
+    }
+
+    func matches(account: String, password: String) -> Bool {
+        self.account == account.trimmingCharacters(in: .whitespaces)
+            && passwordDigest == Self.digest(password)
+    }
 }
 
 /// token 申请记录（服务器 /api/tokens/requests 返回项）
@@ -198,6 +222,9 @@ final class AppState: ObservableObject {
     @Published var startBlockedIssues: [String] = []
     /// 启动检查进行中（顶栏按钮置灰防重复点击）
     @Published var startChecking = false
+    /// 「测试连接」验证通过的那组快期凭据（手机号 + 密码摘要），会话内跨页面保留。
+    /// 只存摘要不存明文：这里只用于让步骤 3 胶囊显示绿色，不参与任何登录
+    @Published private(set) var verifiedTqCredentials: VerifiedTqCredentials?
 
     private var backend: BackendProcess?
     private var client: RpcClient?
@@ -493,10 +520,24 @@ final class AppState: ObservableObject {
                 method: "accounts.test_tq_auth",
                 params: params
             )
+            // 验证通过即记下这组凭据：模拟页步骤 3 胶囊据此显示绿色，
+            // 切页面回来仍然有效；凭据被改动则自动失配
+            verifiedTqCredentials = VerifiedTqCredentials(account: account, password: password)
             return resp["message"] as? String ?? "连接成功"
         } catch {
+            verifiedTqCredentials = nil
             return "连接失败: \(error.localizedDescription)"
         }
+    }
+
+    /// 新密码落库、输入框随之清空后调用：落库的正是刚验证过的那份密码时，
+    /// 把验证记录改写成「沿用已存密码」的形态（摘要为空串），绿色继续有效；
+    /// 否则凭据已经变了，清掉验证记录
+    func settleVerifiedTqCredentials(afterSavingPassword password: String, for account: String) {
+        guard let verified = verifiedTqCredentials else { return }
+        verifiedTqCredentials = verified.matches(account: account, password: password)
+            ? VerifiedTqCredentials(account: account, password: "")
+            : nil
     }
 
     func getAccountPassword(accountId: String? = nil, kind: String? = nil, field: String = "tq_password") async -> String {

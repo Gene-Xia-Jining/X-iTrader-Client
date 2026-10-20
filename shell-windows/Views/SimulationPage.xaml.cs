@@ -51,12 +51,16 @@ public sealed partial class SimulationPage : Page
     private string _revealedPassword = "";
     /// <summary>上一次从账号回填的值：未被编辑时才跟随 accounts 刷新</summary>
     private string _lastAccountPhone = "";
+    /// <summary>第 3 步胶囊文字与颜色的签名：没变就不重建 Content，避免状态事件反复重绘按钮</summary>
+    private string _accountCapsuleKey = "";
     private bool _accountHintError;
     private bool _serverTesting;
     /// <summary>第 5 步 Token 申请进行中（按钮置灰防重复点击）</summary>
     private bool _tokenRequesting;
     /// <summary>本次申请的回执；为空时提示行改为跟随后端实时状态</summary>
     private string _tokenMessage = "";
+    /// <summary>胶囊文字与颜色的签名：没变就不重建 Content，避免状态事件反复重绘按钮</summary>
+    private string _tokenCapsuleKey = "";
     /// <summary>上一次从配置回填的服务器地址：输入框未被编辑时才跟随配置刷新</summary>
     private string _lastConfigServerUrl = "";
     private bool _filling;
@@ -88,13 +92,20 @@ public sealed partial class SimulationPage : Page
     /// <summary>弹窗内的「测试连接」结果：ContentDialog 打开时不能再叠一层对话框，只能就地显示</summary>
     private TextBlock TestHint = null!;
 
-    // -------- 第 6 步的品种选择弹窗（控件在代码里构建，对应 mac 壳的 symbolPicker）--------
+    // -------- 第 6 步的品种选择弹层（页面内遮罩层，对应 mac 壳的 symbolPicker）--------
 
-    private ContentDialog? _symbolDialog;
-    /// <summary>同一个 ContentDialog 不能并发 ShowAsync，重复点击直接忽略</summary>
-    private bool _symbolDialogOpen;
     private WrapPanel SymbolPanel = null!;
     private TextBlock SymbolHint = null!;
+
+    // -------- 第 5 步的 Token 申请记录弹窗（已申请过时点胶囊打开）--------
+
+    private ContentDialog? _tokenRecordsDialog;
+    /// <summary>同一个 ContentDialog 不能并发 ShowAsync，重复点击直接忽略</summary>
+    private bool _tokenRecordsDialogOpen;
+    private TextBlock TokenRecordsStatus = null!;
+    private TextBlock TokenRecordsEmptyHint = null!;
+    private Microsoft.UI.Xaml.Shapes.Rectangle TokenRecordsDivider = null!;
+    private StackPanel TokenRecordsPanel = null!;
 
     public SimulationPage()
     {
@@ -103,6 +114,7 @@ public sealed partial class SimulationPage : Page
         BuildDownloadDialog();
         BuildAccountEditor();
         BuildSymbolDialog();
+        BuildTokenRecordsDialog();
         ServerBox.LostFocus += (_, _) => SaveServerIfChanged();
         ServerBox.KeyDown += (_, e) =>
         {
@@ -246,14 +258,52 @@ public sealed partial class SimulationPage : Page
     /// <summary>
     /// 第 3 步胶囊文案：手机号与密码都填好后改为「当前用户：手机号」，
     /// 免得必须打开弹窗才知道当前登录的是谁。已存密码时输入框留空，按已设置计算。
+    /// 测试连接通过后文字转绿；手机号或密码被改动即回落主题色。
     /// </summary>
     private void UpdateAccountEntryLabel()
     {
         var account = PhoneBox.Text.Trim();
         var hasPassword = CurrentPassword.Length > 0 || _hasStoredPassword;
-        AccountEditorButton.Content = account.Length > 0 && hasPassword
+        var title = account.Length > 0 && hasPassword
             ? $"当前用户：{account}"
             : "填入快期/天勤用户信息";
+        // 文字颜色放在 TextBlock 上：Button 模板在悬停/按下时会覆盖 Foreground，
+        // 直接给 Button 上色会让绿色在鼠标移上去时消失（与第 5 步胶囊一致）
+        var color = AccountVerified ? Palette.Success : Palette.Primary;
+        var key = $"{title}|{color}";
+        if (key == _accountCapsuleKey)
+        {
+            return;
+        }
+        _accountCapsuleKey = key;
+        AccountEditorButton.Content = new TextBlock
+        {
+            Text = title,
+            FontSize = 13,
+            Foreground = Brush(color),
+        };
+    }
+
+    /// <summary>
+    /// 只有「测试连接」通过的那组手机号 / 密码还在时才算已验证：
+    /// 改了任一项胶囊立刻回到主题色，避免把旧验证结果当成本次凭据有效。
+    /// </summary>
+    private bool AccountVerified =>
+        PhoneBox.Text.Trim().Length > 0
+        && (CurrentPassword.Length > 0 || _hasStoredPassword)
+        && State.VerifiedTqCredentials?.Matches(PhoneBox.Text.Trim(), ComparablePassword) == true;
+
+    /// <summary>
+    /// 眼睛按钮取回的已存明文与输入框留空指的是同一份凭据，
+    /// 比较前统一成空串，免得只是点了一下眼睛就把绿色消掉。
+    /// </summary>
+    private string ComparablePassword
+    {
+        get
+        {
+            var password = CurrentPassword;
+            return password == _revealedPassword ? "" : password;
+        }
     }
 
     private async void OnAccountHelpClick(object sender, RoutedEventArgs e)
@@ -287,9 +337,9 @@ public sealed partial class SimulationPage : Page
     // -------- 第 6 步的品种入口弹窗（胶囊列表，品种多时弹窗内滚动）--------
 
     /// <summary>
-    /// 品种弹窗的控件只在构造时建一次：页面本身不再常驻品种列表，
-    /// 关闭弹窗只是隐藏，再次打开沿用同一批控件。
-    /// 选中即生效并自动关闭，因此不设按钮（Esc 仍可关闭）。
+    /// 品种弹层的控件只在构造时建一次：页面本身不再常驻品种列表，
+    /// 关闭弹层只是隐藏，再次打开沿用同一批控件。
+    /// 遮罩空白处、标题行「关闭」按钮、Esc 都能关闭；选中品种时自动关闭。
     /// </summary>
     private void BuildSymbolDialog()
     {
@@ -302,41 +352,46 @@ public sealed partial class SimulationPage : Page
             Visibility = Visibility.Collapsed,
         };
 
-        var panel = new StackPanel { Spacing = 6 };
-        panel.Children.Add(SymbolPanel);
-        panel.Children.Add(SymbolHint);
+        SymbolDialogBody.Children.Add(SymbolPanel);
+        SymbolDialogBody.Children.Add(SymbolHint);
 
-        var content = new StackPanel { Spacing = 12, Width = 580 };
-        // 尽量一屏放下全部品种：只有在窗口较矮时才滚动
-        content.Children.Add(new ScrollViewer { Content = panel, MaxHeight = 560 });
-
-        _symbolDialog = new ContentDialog
+        // 点卡片外的遮罩空白即关闭：只处理命中的是遮罩本身（点到卡片不算）
+        SymbolOverlay.Tapped += (_, args) =>
         {
-            Title = "选择交易品种",
-            Content = content,
+            if (ReferenceEquals(args.OriginalSource, SymbolOverlay))
+            {
+                HideSymbolDialog();
+            }
         };
+        // 窗口可以拖得比弹层小，卡片与列表都跟着可用空间收缩
+        SymbolOverlay.SizeChanged += (_, args) =>
+        {
+            SymbolDialogCard.MaxWidth = Math.Max(args.NewSize.Width - 48, 320);
+            // 140 = 上下遮罩边距 + 卡片内边距 + 标题行
+            SymbolScroll.MaxHeight = Math.Clamp(args.NewSize.Height - 140, 120, 460);
+        };
+        // 弹层没有独立窗口，Esc 由遮罩层接管（打开时焦点在「关闭」按钮上，事件冒泡到遮罩）
     }
 
-    private async void OnSymbolPickerClick(object sender, RoutedEventArgs e)
+    private void OnSymbolOverlayKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
     {
-        var dialog = _symbolDialog;
-        if (dialog is null || _symbolDialogOpen)
+        if (e.Key == Windows.System.VirtualKey.Escape)
         {
-            return;
-        }
-        RenderCapsules();
-        // XamlRoot 在构造时还拿不到（页面尚未挂到窗口），打开时再补
-        dialog.XamlRoot = Root.XamlRoot;
-        _symbolDialogOpen = true;
-        try
-        {
-            await dialog.ShowAsync();
-        }
-        finally
-        {
-            _symbolDialogOpen = false;
+            HideSymbolDialog();
+            e.Handled = true;
         }
     }
+
+    private void OnSymbolPickerClick(object sender, RoutedEventArgs e)
+    {
+        RenderCapsules();
+        SymbolOverlay.Visibility = Visibility.Visible;
+        SymbolDialogClose.Focus(FocusState.Programmatic);
+    }
+
+    private void OnSymbolDialogCloseClick(object sender, RoutedEventArgs e) => HideSymbolDialog();
+
+    private void HideSymbolDialog() => SymbolOverlay.Visibility = Visibility.Collapsed;
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
@@ -373,6 +428,7 @@ public sealed partial class SimulationPage : Page
         DownloadCapsule.BorderBrush = Brush(Palette.Hairline);
         DownloadButton.Foreground = Brush(Palette.Primary);
         AccountCapsule.BorderBrush = Brush(Palette.Hairline);
+        // 兜底给 Button 一个前景色；实际文字色由 UpdateAccountEntryLabel 重建的 TextBlock 决定
         AccountEditorButton.Foreground = Brush(Palette.Primary);
         AccountHelpButton.Foreground = Brush(Palette.Primary);
         AccountHelpButton.BorderBrush = Brush(Palette.Hairline);
@@ -381,6 +437,7 @@ public sealed partial class SimulationPage : Page
         SymbolHelpButton.Foreground = Brush(Palette.Primary);
         SymbolHelpButton.BorderBrush = Brush(Palette.Hairline);
         TokenCapsule.BorderBrush = Brush(Palette.Hairline);
+        // 兜底给 Button 一个前景色；实际文字色由 UpdateTokenHint 重建的 TextBlock 决定
         TokenRequestButton.Foreground = Brush(Palette.Primary);
         TokenHelpButton.Foreground = Brush(Palette.Primary);
         TokenHelpButton.BorderBrush = Brush(Palette.Hairline);
@@ -411,10 +468,18 @@ public sealed partial class SimulationPage : Page
         {
             _downloadDialog.RequestedTheme = Host.IsDark ? ElementTheme.Dark : ElementTheme.Light;
         }
-        if (_symbolDialog is not null)
+        if (_tokenRecordsDialog is not null)
         {
-            _symbolDialog.RequestedTheme = Host.IsDark ? ElementTheme.Dark : ElementTheme.Light;
+            _tokenRecordsDialog.RequestedTheme = Host.IsDark ? ElementTheme.Dark : ElementTheme.Light;
         }
+
+        // 品种弹层画在页面内（不是 ContentDialog），直接按 Palette 上色
+        SymbolDialogCard.Background = Brush(Palette.Card);
+        SymbolDialogCard.BorderBrush = Brush(Palette.Hairline);
+        SymbolDialogTitle.Foreground = Brush(Palette.Ink);
+        SymbolDialogClose.Foreground = Brush(Palette.Primary);
+        SymbolDialogClose.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        SymbolDialogClose.BorderBrush = Brush(Palette.Hairline);
 
         foreach (var help in new[] { SymbolHelpButton, ServerHelpButton, TokenHelpButton })
         {
@@ -427,7 +492,12 @@ public sealed partial class SimulationPage : Page
         BuildDownloadLinks();
         UpdateEyeButton();
         UpdatePasswordMask();
+        // 主题切换后语义色也跟着换：清掉签名强制重建胶囊文字
+        _tokenCapsuleKey = "";
         UpdateTokenHint();
+        // 第 3 步胶囊的绿/蓝同样随主题走，需要按新配色重建一次
+        _accountCapsuleKey = "";
+        UpdateAccountEntryLabel();
 
         // 配色变化后胶囊需要重绘
         _symbolKey = "";
@@ -454,6 +524,8 @@ public sealed partial class SimulationPage : Page
         StrategyHint.Text = StrategyHintText();
         StrategyHint.Visibility = StrategyHint.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         UpdateTokenHint();
+        // 验证结果存在 AppState 里，测试连接返回后要跟着刷一次胶囊颜色
+        UpdateAccountEntryLabel();
         if (_accountDialog is not null)
         {
             _accountDialog.SecondaryButtonText = _testing ? "测试中..." : "测试连接";
@@ -542,10 +614,10 @@ public sealed partial class SimulationPage : Page
             parameters["strategy"] = _selectedStrategy;
         }
 
-        _ = SaveAccountFieldsAsync(parameters, password.Length);
+        _ = SaveAccountFieldsAsync(parameters, password);
     }
 
-    private async Task SaveAccountFieldsAsync(JsonObject parameters, int newPasswordLength)
+    private async Task SaveAccountFieldsAsync(JsonObject parameters, string newPassword)
     {
         var error = await State.SaveAccountAsync(parameters);
         if (error is not null)
@@ -553,21 +625,24 @@ public sealed partial class SimulationPage : Page
             SetAccountHint(error, isError: true);
             return;
         }
-        if (newPasswordLength > 0)
+        if (newPassword.Length > 0)
         {
             // 保存成功后清空输入框、改为掩码显示，长度用刚提交的值
             PasswordHidden.Password = "";
             PasswordShown.Text = "";
             _revealedPassword = "";
             _hasStoredPassword = true;
-            _storedPasswordLength = newPasswordLength;
+            _storedPasswordLength = newPassword.Length;
             _passwordVisible = false;
             PasswordHidden.Visibility = Visibility.Visible;
             PasswordShown.Visibility = Visibility.Collapsed;
             UpdateEyeButton();
             UpdatePasswordMask();
+            // 输入框已清空、改为沿用已存密码：落库的是刚验证过的那份就继续保持绿色
+            State.SettleVerifiedTqCredentials(newPassword, PhoneBox.Text.Trim());
         }
         SetAccountHint("已保存", isError: false);
+        UpdateAccountEntryLabel();
     }
 
     // -------- 服务器地址（与设置页共用同一份配置）--------
@@ -634,20 +709,65 @@ public sealed partial class SimulationPage : Page
             "这是 iTrader 智能交易服务器的地址，与「设置」页是同一份配置，输入完成（回车或点到别处）即时保存生效。");
     }
 
-    // -------- Token（引导用户去 Token 管理页申请）--------
+    // -------- Token（未申请时直接提交；已申请过则查看申请记录）--------
+
+    /// <summary>第 5 步胶囊的三种状态：可直接申请 / 已提交待审核 / 已有生效 Token</summary>
+    private enum TokenCapsuleState
+    {
+        NotApplied,
+        Pending,
+        Active,
+    }
+
+    /// <summary>
+    /// 已提交未审核、或已有有效 Token 时，胶囊文字改为「Token 管理」并用语义色，
+    /// 点击改为弹出申请记录——此时再点「申请」只会重复提交同一用途的申请。
+    /// </summary>
+    private TokenCapsuleState CurrentTokenState()
+    {
+        var status = State.TokenStatus;
+        // 后端只在本地确实持有凭据时才报「已通过…已加密保存」；
+        // 「已通过，但服务器未返回 token」还没拿到，继续按可申请对待
+        if (status.Contains("已通过") && !status.Contains("未返回"))
+        {
+            return TokenCapsuleState.Active;
+        }
+        // 旧数据可能没有 token_id，凭据本身仍在，按有效处理
+        if (State.ActiveTokenId is not null)
+        {
+            return TokenCapsuleState.Active;
+        }
+        // 待审核的两种文案：「待审核」「已提交申请，等待服务器审核」
+        if (status.Contains("审核"))
+        {
+            return TokenCapsuleState.Pending;
+        }
+        // 刚申请完、后端还未推送记录时，靠记录列表兜底
+        if (State.TokenRecords.FirstOrDefault()?.Status == "pending")
+        {
+            return TokenCapsuleState.Pending;
+        }
+        return TokenCapsuleState.NotApplied;
+    }
 
     private async void OnTokenHelpClick(object sender, RoutedEventArgs e)
     {
         await ShowInfoAsync(
             "申请 Token",
             "客户端连接服务器需要有效的 Token。点「申请 Token」直接向服务器提交申请，"
-            + "等待审批通过后客户端会自动领取并保存；审批进度可在「Token 管理」页查看。");
+            + "等待审批通过后客户端会自动领取并保存；已提交或已通过后，点「Token 管理」查看申请记录。");
     }
 
     private async void OnTokenRequestClick(object sender, RoutedEventArgs e)
     {
         if (_tokenRequesting)
         {
+            return;
+        }
+        // 已申请过就不再重复提交，改为查看进度
+        if (CurrentTokenState() != TokenCapsuleState.NotApplied)
+        {
+            await ShowTokenRecordsAsync();
             return;
         }
         _tokenRequesting = true;
@@ -666,18 +786,21 @@ public sealed partial class SimulationPage : Page
     }
 
     /// <summary>
-    /// 胶囊后的提示：本次申请回执优先，其次跟随后端实时状态；
-    /// 「未申请 / 已通过」不显示，避免一行状态常驻。
+    /// 胶囊后的提示：只显示失败回执与「已拒绝」这类异常状态。
+    /// 待审核 / 已通过已由胶囊文字与颜色表达，不再占一行重复说明。
     /// </summary>
     private string TokenHintText()
     {
-        // 失败的申请后端不会更新状态，回执必须自己显示，不能被下面的过滤吞掉
         if (_tokenMessage.Contains("失败"))
         {
             return _tokenMessage;
         }
         var status = State.TokenStatus;
-        if (status.Length == 0 || status == "未申请" || status.Contains("已通过"))
+        if (status.Contains("审核") || status.Contains("已通过"))
+        {
+            return "";
+        }
+        if (status.Length == 0 || status == "未申请")
         {
             return "";
         }
@@ -693,8 +816,188 @@ public sealed partial class SimulationPage : Page
             text.Contains("失败") || text.Contains("拒绝") || text.Contains("错误")
                 ? Hex(0xE3342F)
                 : text.Contains("已通过") ? Hex(0x34C759) : Palette.Dim);
-        TokenRequestButton.Content = _tokenRequesting ? "申请中..." : "申请 Token";
+
+        var state = CurrentTokenState();
+        var title = _tokenRequesting
+            ? "申请中..."
+            : state == TokenCapsuleState.NotApplied ? "申请 Token" : "Token 管理";
+        // 文字颜色放在 TextBlock 上：Button 模板在悬停/按下时会把 Foreground 换成
+        // 默认资源色，直接给 Button 上色会让黄/绿在鼠标移上去时消失
+        var capsuleColor = _tokenRequesting
+            ? Palette.Primary
+            : state switch
+            {
+                TokenCapsuleState.Pending => Palette.Warning,
+                TokenCapsuleState.Active => Palette.Success,
+                _ => Palette.Primary,
+            };
+        // 状态事件很频繁，文案与颜色没变时不重建 Content，避免按钮反复重绘
+        var capsuleKey = $"{title}|{capsuleColor}";
+        if (capsuleKey != _tokenCapsuleKey)
+        {
+            _tokenCapsuleKey = capsuleKey;
+            TokenRequestButton.Content = new TextBlock
+            {
+                Text = title,
+                FontSize = 13,
+                Foreground = Brush(capsuleColor),
+            };
+        }
+        // 申请中虽不重复提交，但也没必要弹记录，直接置灰防误触
         TokenRequestButton.IsEnabled = !_tokenRequesting;
+        // 只有弹窗开着时才需要重建记录列表（审批状态变化时同步刷新）
+        if (_tokenRecordsDialogOpen)
+        {
+            RenderTokenRecords();
+        }
+    }
+
+    /// <summary>Token 申请记录弹窗：只读展示进度，申请与删除等操作仍在「Token 管理」页。</summary>
+    private void BuildTokenRecordsDialog()
+    {
+        TokenRecordsStatus = new TextBlock
+        {
+            FontSize = 13,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        TokenRecordsEmptyHint = new TextBlock
+        {
+            Text = "暂无申请记录",
+            FontSize = 13,
+            Visibility = Visibility.Collapsed,
+        };
+        TokenRecordsPanel = new StackPanel { Spacing = 0 };
+        TokenRecordsDivider = new Microsoft.UI.Xaml.Shapes.Rectangle { Height = 1 };
+
+        var content = new StackPanel { Spacing = 12, Width = 460 };
+        content.Children.Add(TokenRecordsStatus);
+        content.Children.Add(TokenRecordsDivider);
+        content.Children.Add(TokenRecordsEmptyHint);
+        // 记录多时弹窗内滚动，避免窗口被撑高
+        content.Children.Add(new ScrollViewer { Content = TokenRecordsPanel, MaxHeight = 320 });
+
+        _tokenRecordsDialog = new ContentDialog
+        {
+            Title = "Token 申请记录",
+            Content = content,
+            CloseButtonText = "关闭",
+            DefaultButton = ContentDialogButton.Close,
+        };
+    }
+
+    private async Task ShowTokenRecordsAsync()
+    {
+        var dialog = _tokenRecordsDialog;
+        if (dialog is null || _tokenRecordsDialogOpen)
+        {
+            return;
+        }
+        // 打开时拉一次最新审批状态，记录随状态事件刷新
+        State.RefreshTokenStatus();
+        RenderTokenRecords();
+        dialog.XamlRoot = Root.XamlRoot;
+        _tokenRecordsDialogOpen = true;
+        try
+        {
+            await dialog.ShowAsync();
+        }
+        finally
+        {
+            _tokenRecordsDialogOpen = false;
+        }
+    }
+
+    /// <summary>记录行：编号 + 说明/时间 + 状态（与 Token 管理页同口径，这里只读）</summary>
+    private void RenderTokenRecords()
+    {
+        if (_tokenRecordsDialog is null)
+        {
+            return;
+        }
+        TokenRecordsStatus.Text = State.TokenStatus.Length == 0 ? "未申请" : State.TokenStatus;
+        TokenRecordsStatus.Foreground = Brush(TokenStatusColor(State.TokenStatus));
+        TokenRecordsDivider.Fill = Brush(Palette.Divider);
+
+        var records = State.TokenRecords;
+        TokenRecordsEmptyHint.Foreground = Brush(Palette.Dim);
+        TokenRecordsEmptyHint.Visibility = records.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
+        TokenRecordsPanel.Children.Clear();
+        for (var i = 0; i < records.Count; i++)
+        {
+            if (i > 0)
+            {
+                TokenRecordsPanel.Children.Add(new Microsoft.UI.Xaml.Shapes.Rectangle
+                {
+                    Height = 1,
+                    Fill = Brush(Palette.Divider),
+                });
+            }
+            // 记录按申请时间倒序（最新在前），正序编号才是「历史第几笔」
+            TokenRecordsPanel.Children.Add(BuildTokenRecordRow(records.Count - i, records[i]));
+        }
+    }
+
+    private Grid BuildTokenRecordRow(int index, TokenRecord record)
+    {
+        var grid = new Grid { ColumnSpacing = 12, Padding = new Thickness(0, 10, 0, 10) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(24) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var number = new TextBlock
+        {
+            Text = index.ToString(),
+            FontSize = 13,
+            Foreground = Brush(Palette.Dim),
+            TextAlignment = TextAlignment.Right,
+        };
+        grid.Children.Add(number);
+
+        var detail = new StackPanel { Spacing = 4 };
+        detail.Children.Add(new TextBlock
+        {
+            Text = record.Description.Length == 0 ? "（无说明）" : record.Description,
+            FontSize = 13,
+            Foreground = Brush(Palette.Ink),
+            TextWrapping = TextWrapping.Wrap,
+            IsTextSelectionEnabled = true,
+        });
+        detail.Children.Add(new TextBlock
+        {
+            Text = "申请 " + (record.CreatedAt?.ToString("yyyy-MM-dd HH:mm") ?? "—")
+                + (record.ExpiresAt is { } expires ? "，过期 " + expires.ToString("yyyy-MM-dd HH:mm") : ""),
+            FontSize = 13,
+            Foreground = Brush(Palette.Dim),
+        });
+        Grid.SetColumn(detail, 1);
+        grid.Children.Add(detail);
+
+        var status = new TextBlock
+        {
+            Text = record.StatusText,
+            FontSize = 13,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = Brush(record.Status switch
+            {
+                "approved" => Palette.Success,
+                "rejected" => Palette.Danger,
+                _ => Palette.Warning,
+            }),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(status, 2);
+        grid.Children.Add(status);
+        return grid;
+    }
+
+    /// <summary>状态文案语义色（已通过绿 / 失败红 / 其余黄），与 Token 管理页一致</summary>
+    private Windows.UI.Color TokenStatusColor(string status)
+    {
+        if (status.Length == 0 || status == "未申请") return Palette.Warning;
+        if (status.Contains("已通过")) return Palette.Success;
+        if (status.Contains("失败") || status.Contains("错误")) return Palette.Danger;
+        return Palette.Warning;
     }
 
     // -------- 引导文案与外链 --------
@@ -984,10 +1287,10 @@ public sealed partial class SimulationPage : Page
     {
         _selectedSymbol = isOn ? symbol : "";
         RenderCapsules();
-        // 选中即生效：选完直接关掉弹窗（没有关闭按钮）
-        if (isOn && _symbolDialogOpen && _symbolDialog is not null)
+        // 选中即生效：选完直接关掉弹层（取消选中留给再次打开后取消）
+        if (isOn)
         {
-            _symbolDialog.Hide();
+            HideSymbolDialog();
         }
         var sim = State.Accounts.FirstOrDefault(a => a.Kind == "sim");
         if (sim is null)
@@ -1145,10 +1448,12 @@ public sealed partial class SimulationPage : Page
         try
         {
             var sim = State.Accounts.FirstOrDefault(a => a.Kind == "sim");
-            // 密码留空时由后端沿用已存密码
+            // 密码留空时由后端沿用已存密码；验证通过与否由 AppState 记下，
+            // 胶囊文字跟着转绿（失败则清掉验证态）
             var message = await State.TestTqAuthAsync(account, CurrentPassword, sim?.Id);
             // 账号弹窗开着时不能再叠一个 ContentDialog，结果直接显示在弹窗里
             SetTestHint(message, isError: message.StartsWith("连接失败"));
+            UpdateAccountEntryLabel();
         }
         finally
         {

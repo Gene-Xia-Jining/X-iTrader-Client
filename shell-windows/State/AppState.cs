@@ -28,6 +28,32 @@ public sealed class LogLine(DateTime time, string level, string message)
     };
 }
 
+/// <summary>
+/// 「测试连接」验证通过的一组快期凭据：手机号 + 密码摘要。
+/// 只留摘要，避免为了一个 UI 状态在内存里多存一份明文。
+/// </summary>
+public sealed class VerifiedTqCredentials
+{
+    public VerifiedTqCredentials(string account, string password)
+    {
+        Account = account.Trim();
+        PasswordDigest = Digest(password);
+    }
+
+    public string Account { get; }
+
+    /// <summary>空串表示这次验证沿用的是已存密码</summary>
+    public string PasswordDigest { get; }
+
+    public bool Matches(string account, string password) =>
+        Account == account.Trim() && PasswordDigest == Digest(password);
+
+    /// <summary>凭据只在进程内比较，不涉及落盘或传输</summary>
+    private static string Digest(string password) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(password)));
+}
+
 public sealed class AccountInfo
 {
     public string Id { get; init; } = "";
@@ -373,6 +399,17 @@ public sealed class AppState : INotifyPropertyChanged
     }
 
     internal void ClearStartBlockedIssues() => StartBlockedIssues = [];
+
+    private VerifiedTqCredentials? _verifiedTqCredentials;
+    /// <summary>
+    /// 「测试连接」验证通过的那组快期凭据，会话内跨页面保留：
+    /// 模拟页第 3 步胶囊据此显示绿色。只存摘要，不参与任何登录。
+    /// </summary>
+    public VerifiedTqCredentials? VerifiedTqCredentials
+    {
+        get => _verifiedTqCredentials;
+        private set => Set(ref _verifiedTqCredentials, value);
+    }
 
     private UpdatePhase _updatePhase = new UpdatePhase.Idle();
     public UpdatePhase UpdatePhase
@@ -855,12 +892,34 @@ public sealed class AppState : INotifyPropertyChanged
                 parameters["account_id"] = accountId;
             }
             var resp = await CallAsync("accounts.test_tq_auth", parameters);
+            // 验证通过即记下这组凭据：模拟页步骤 3 胶囊据此显示绿色，切页面回来仍有效
+            var verified = new VerifiedTqCredentials(account, password);
+            Post(() => VerifiedTqCredentials = verified);
             return resp["message"]?.GetValue<string>() ?? "连接成功";
         }
         catch (Exception ex)
         {
+            Post(() => VerifiedTqCredentials = null);
             return $"连接失败: {ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// 新密码落库、输入框随之清空后调用：落库的正是刚验证过的那份密码时，
+    /// 把验证记录改写成「沿用已存密码」的形态，绿色继续有效；
+    /// 否则凭据已经变了，清掉验证记录。
+    /// </summary>
+    internal void SettleVerifiedTqCredentials(string afterSavingPassword, string account)
+    {
+        var verified = VerifiedTqCredentials;
+        if (verified is null)
+        {
+            return;
+        }
+        var next = verified.Matches(account, afterSavingPassword)
+            ? new VerifiedTqCredentials(account, "")
+            : null;
+        Post(() => VerifiedTqCredentials = next);
     }
 
     /// <summary>读取已存密码明文（用户点击眼睛图标时受控调用）；失败返回空串</summary>

@@ -5,103 +5,136 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:views="using:XTrader.Shell.Views">
 
-    <ScrollViewer>
-        <StackPanel x:Name="Root" Padding="24" Spacing="16">
-            <Border x:Name="Card" BorderThickness="1" CornerRadius="18" Padding="20">
+    <Grid>
+        <ScrollViewer>
+            <StackPanel x:Name="Root" Padding="24" Spacing="16">
+                <Border x:Name="Card" BorderThickness="1" CornerRadius="18" Padding="20">
+                    <StackPanel Spacing="12">
+                        <TextBlock x:Name="Intro" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+
+                        <!-- 胶囊：点文字打开下载链接弹窗（样式同第 3 步） -->
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock x:Name="Step1" Text="1，" TextWrapping="Wrap" VerticalAlignment="Center" />
+                            <Border x:Name="DownloadCapsule" BorderThickness="1" CornerRadius="15"
+                                    Padding="12,0" MinHeight="30">
+                                <Button x:Name="DownloadButton" Content="下载快期客户端"
+                                        Click="OnDownloadClick" BorderThickness="0"
+                                        Background="Transparent" Padding="2,0" CornerRadius="0" FontSize="13" />
+                            </Border>
+                        </StackPanel>
+
+                        <!-- 正文与官网链接同行：链接在 BuildLinks 里追加，Text 仅作未初始化时的兜底 -->
+                        <TextBlock x:Name="Step2" Text="2，在快期客户端或天勤官网注册：" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+
+                        <!-- 胶囊：点文字打开账号弹窗，点右侧问号看说明 -->
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock x:Name="Step3" Text="3，" TextWrapping="Wrap" VerticalAlignment="Center" />
+                            <Border x:Name="AccountCapsule" BorderThickness="1" CornerRadius="15"
+                                    Padding="12,0,8,0" MinHeight="30">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <!-- 文字部分做成无边框按钮：整颗胶囊只有一个外描边 -->
+                                    <Button x:Name="AccountEditorButton" Content="填入快期/天勤用户信息"
+                                            Click="OnAccountEditorClick" BorderThickness="0"
+                                            Background="Transparent" Padding="2,0" CornerRadius="0" FontSize="13" />
+                                    <Button x:Name="AccountHelpButton" Content="?" Click="OnAccountHelpClick"
+                                            Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10"
+                                            FontSize="12" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
+                        <!-- 步骤 4：标题 + 输入框 + 测试连接 + 问号同一行 -->
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock x:Name="Step4" Text="4，服务器地址：" VerticalAlignment="Center" />
+                            <TextBox x:Name="ServerBox" Width="380" MinHeight="36"
+                                     PlaceholderText="https://itrader.redboil.us.ci" />
+                            <Button x:Name="ServerTestButton" Content="测试连接" Click="OnTestServerClick" />
+                            <Button x:Name="ServerHelpButton" Content="?" Click="OnServerHelpClick"
+                                    Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10" FontSize="12" />
+                        </StackPanel>
+
+                        <!-- 步骤 5：胶囊内直接向服务器申请 Token，结果紧随其后显示 -->
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock x:Name="Step5" Text="5，" VerticalAlignment="Center" TextWrapping="Wrap" />
+                            <Border x:Name="TokenCapsule" BorderThickness="1" CornerRadius="15"
+                                    Padding="12,0,8,0" MinHeight="30">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <Button x:Name="TokenRequestButton" Content="申请 Token"
+                                            Click="OnTokenRequestClick" BorderThickness="0"
+                                            Background="Transparent" Padding="2,0" CornerRadius="0" FontSize="13" />
+                                    <Button x:Name="TokenHelpButton" Content="?" Click="OnTokenHelpClick"
+                                            Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10"
+                                            FontSize="12" />
+                                </StackPanel>
+                            </Border>
+                            <!-- 限宽换行：长提示文案不至于把整行撑得过宽 -->
+                            <TextBlock x:Name="TokenHint" FontSize="13" TextWrapping="Wrap" MaxWidth="360"
+                                       VerticalAlignment="Center" Visibility="Collapsed" />
+                        </StackPanel>
+
+                        <!-- 胶囊：点文字打开品种选择弹窗，点右侧问号看说明 -->
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock x:Name="Step6" Text="6，" VerticalAlignment="Center" />
+                            <Border x:Name="SymbolCapsule" BorderThickness="1" CornerRadius="15"
+                                    Padding="12,0,8,0" MinHeight="30">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <Button x:Name="SymbolPickerButton" Content="选择交易品种"
+                                            Click="OnSymbolPickerClick" BorderThickness="0"
+                                            Background="Transparent" Padding="2,0" CornerRadius="0" FontSize="13" />
+                                    <Button x:Name="SymbolHelpButton" Content="?" Click="OnSymbolHelpClick"
+                                            Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10"
+                                            FontSize="12" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
+                        <!-- 步骤 7：标题与策略胶囊同一行；策略多时在标题右侧换行 -->
+                        <StackPanel Spacing="6">
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="Step7" Text="7，选择交易策略：" VerticalAlignment="Top"
+                                           Margin="0,5,0,0" />
+                                <views:WrapPanel x:Name="StrategyPanel" Grid.Column="1" Spacing="10" />
+                            </Grid>
+                            <TextBlock x:Name="StrategyHint" FontSize="13" TextWrapping="Wrap" Visibility="Collapsed" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!--
+          第 6 步品种选择的弹层：用页面内遮罩层而不是 ContentDialog。
+          ContentDialog 点空白处不关闭，这里点遮罩空白即关闭（同 mac 壳）。
+        -->
+        <Grid x:Name="SymbolOverlay" Visibility="Collapsed" Background="#33000000"
+              KeyDown="OnSymbolOverlayKeyDown">
+            <Border x:Name="SymbolDialogCard" BorderThickness="1" CornerRadius="14"
+                    Padding="20" HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Width="620">
                 <StackPanel Spacing="12">
-                    <TextBlock x:Name="Intro" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
-
-                    <!-- 胶囊：点文字打开下载链接弹窗（样式同第 3 步） -->
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock x:Name="Step1" Text="1，" TextWrapping="Wrap" VerticalAlignment="Center" />
-                        <Border x:Name="DownloadCapsule" BorderThickness="1" CornerRadius="15"
-                                Padding="12,0" MinHeight="30">
-                            <Button x:Name="DownloadButton" Content="下载快期客户端"
-                                    Click="OnDownloadClick" BorderThickness="0"
-                                    Background="Transparent" Padding="2,0" CornerRadius="0" FontSize="13" />
-                        </Border>
-                    </StackPanel>
-
-                    <!-- 正文与官网链接同行：链接在 BuildLinks 里追加，Text 仅作未初始化时的兜底 -->
-                    <TextBlock x:Name="Step2" Text="2，在快期客户端或天勤官网注册：" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
-
-                    <!-- 胶囊：点文字打开账号弹窗，点右侧问号看说明 -->
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock x:Name="Step3" Text="3，" TextWrapping="Wrap" VerticalAlignment="Center" />
-                        <Border x:Name="AccountCapsule" BorderThickness="1" CornerRadius="15"
-                                Padding="12,0,8,0" MinHeight="30">
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <!-- 文字部分做成无边框按钮：整颗胶囊只有一个外描边 -->
-                                <Button x:Name="AccountEditorButton" Content="填入快期/天勤用户信息"
-                                        Click="OnAccountEditorClick" BorderThickness="0"
-                                        Background="Transparent" Padding="2,0" CornerRadius="0" FontSize="13" />
-                                <Button x:Name="AccountHelpButton" Content="?" Click="OnAccountHelpClick"
-                                        Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10"
-                                        FontSize="12" />
-                            </StackPanel>
-                        </Border>
-                    </StackPanel>
-
-                    <!-- 步骤 4：标题 + 输入框 + 测试连接 + 问号同一行 -->
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock x:Name="Step4" Text="4，服务器地址：" VerticalAlignment="Center" />
-                        <TextBox x:Name="ServerBox" Width="380" MinHeight="36"
-                                 PlaceholderText="https://itrader.redboil.us.ci" />
-                        <Button x:Name="ServerTestButton" Content="测试连接" Click="OnTestServerClick" />
-                        <Button x:Name="ServerHelpButton" Content="?" Click="OnServerHelpClick"
-                                Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10" FontSize="12" />
-                    </StackPanel>
-
-                    <!-- 步骤 5：胶囊内直接向服务器申请 Token，结果紧随其后显示 -->
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock x:Name="Step5" Text="5，" VerticalAlignment="Center" TextWrapping="Wrap" />
-                        <Border x:Name="TokenCapsule" BorderThickness="1" CornerRadius="15"
-                                Padding="12,0,8,0" MinHeight="30">
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <Button x:Name="TokenRequestButton" Content="申请 Token"
-                                        Click="OnTokenRequestClick" BorderThickness="0"
-                                        Background="Transparent" Padding="2,0" CornerRadius="0" FontSize="13" />
-                                <Button x:Name="TokenHelpButton" Content="?" Click="OnTokenHelpClick"
-                                        Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10"
-                                        FontSize="12" />
-                            </StackPanel>
-                        </Border>
-                        <!-- 限宽换行：长提示文案不至于把整行撑得过宽 -->
-                        <TextBlock x:Name="TokenHint" FontSize="13" TextWrapping="Wrap" MaxWidth="360"
-                                   VerticalAlignment="Center" Visibility="Collapsed" />
-                    </StackPanel>
-
-                    <!-- 胶囊：点文字打开品种选择弹窗，点右侧问号看说明 -->
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock x:Name="Step6" Text="6，" VerticalAlignment="Center" />
-                        <Border x:Name="SymbolCapsule" BorderThickness="1" CornerRadius="15"
-                                Padding="12,0,8,0" MinHeight="30">
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <Button x:Name="SymbolPickerButton" Content="选择交易品种"
-                                        Click="OnSymbolPickerClick" BorderThickness="0"
-                                        Background="Transparent" Padding="2,0" CornerRadius="0" FontSize="13" />
-                                <Button x:Name="SymbolHelpButton" Content="?" Click="OnSymbolHelpClick"
-                                        Width="20" Height="20" MinWidth="20" Padding="0" CornerRadius="10"
-                                        FontSize="12" />
-                            </StackPanel>
-                        </Border>
-                    </StackPanel>
-
-                    <!-- 步骤 7：标题与策略胶囊同一行；策略多时在标题右侧换行 -->
-                    <StackPanel Spacing="6">
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock x:Name="Step7" Text="7，选择交易策略：" VerticalAlignment="Top"
-                                       Margin="0,5,0,0" />
-                            <views:WrapPanel x:Name="StrategyPanel" Grid.Column="1" Spacing="10" />
-                        </Grid>
-                        <TextBlock x:Name="StrategyHint" FontSize="13" TextWrapping="Wrap" Visibility="Collapsed" />
-                    </StackPanel>
+                    <!-- 标题行右侧与遮罩空白处都能关闭 -->
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="SymbolDialogTitle" Text="选择交易品种" FontSize="15"
+                                   FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Button x:Name="SymbolDialogClose" Grid.Column="1" Content="关闭"
+                                Click="OnSymbolDialogCloseClick" FontSize="13" MinHeight="32"
+                                Padding="14,0" CornerRadius="8" />
+                    </Grid>
+                    <!-- 尽量一屏放下全部品种：只有在窗口较矮时才滚动 -->
+                    <ScrollViewer x:Name="SymbolScroll" MaxHeight="460"
+                                  HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel x:Name="SymbolDialogBody" Spacing="6" />
+                    </ScrollViewer>
                 </StackPanel>
             </Border>
-        </StackPanel>
-    </ScrollViewer>
+        </Grid>
+    </Grid>
 </Page>

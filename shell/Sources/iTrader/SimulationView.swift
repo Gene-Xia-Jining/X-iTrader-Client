@@ -47,6 +47,8 @@ struct SimulationView: View {
     @State private var tokenRequesting = false
     /// 本次申请的返回值；空串时提示行改为跟随后端实时状态
     @State private var tokenMessage = ""
+    /// 已申请过（待审核 / 有有效 token）时点击胶囊改为弹出申请记录
+    @State private var showTokenRecords = false
     // 步骤 1 的下载入口弹窗（手机端 / App Store / Windows 三个链接）
     @State private var showDownloadLinks = false
     // 步骤 3 的账号信息弹窗（手机号 / 密码 / 测试连接）
@@ -134,8 +136,14 @@ struct SimulationView: View {
         .sheet(isPresented: $showDownloadLinks) {
             downloadLinks
         }
-        .sheet(isPresented: $showSymbolPicker) {
-            symbolPickerDialog
+        .sheet(isPresented: $showTokenRecords) {
+            tokenRecordsDialog
+        }
+        // 步骤 6 用自绘弹层而非 sheet：macOS 的 sheet 点空白处不会关闭
+        .overlay {
+            if showSymbolPicker {
+                symbolPickerOverlay
+            }
         }
     }
 
@@ -215,6 +223,7 @@ struct SimulationView: View {
     /// 胶囊整体是描边圆角按钮：点文字区域执行 action，点右侧问号弹出说明。
     private func entryCapsule(
         _ title: String,
+        titleColor: Color? = nil,
         helpText: String? = nil,
         isHelpPresented: Binding<Bool>? = nil,
         isHelpHovering: Binding<Bool>? = nil,
@@ -224,7 +233,7 @@ struct SimulationView: View {
             Button(action: action) {
                 Text(title)
                     .font(AppTheme.dimFont.weight(.semibold))
-                    .foregroundColor(AppTheme.primary(scheme))
+                    .foregroundColor(titleColor ?? AppTheme.primary(scheme))
             }
             .buttonStyle(.plain)
             .pointerCursor()
@@ -246,6 +255,7 @@ struct SimulationView: View {
     private var accountEntryCapsule: some View {
         entryCapsule(
             accountEntryLabel,
+            titleColor: accountEntryColor,
             helpText: accountHelpText,
             isHelpPresented: $showAccountHelp,
             isHelpHovering: $accountHelpHover
@@ -255,13 +265,33 @@ struct SimulationView: View {
     }
 
     /// 手机号与密码都不为空即视为已填好（已存密码时输入框留空，按已设置计算）
-    private var accountEntryLabel: String {
+    private var hasAccountInfo: Bool {
         let account = phone.trimmingCharacters(in: .whitespaces)
         let hasPassword = !password.isEmpty || hasStoredPassword
-        guard !account.isEmpty, hasPassword else {
-            return "填入快期/天勤用户信息"
-        }
-        return "当前用户：\(account)"
+        return !account.isEmpty && hasPassword
+    }
+
+    private var accountEntryLabel: String {
+        guard hasAccountInfo else { return "填入快期/天勤用户信息" }
+        return "当前用户：\(phone.trimmingCharacters(in: .whitespaces))"
+    }
+
+    /// 只有「测试连接」通过的那组手机号 / 密码还在时才算已验证：
+    /// 改了任一项胶囊立刻回到主题色，避免把旧验证结果当成本次凭据有效
+    private var accountVerified: Bool {
+        guard hasAccountInfo,
+              let verified = appState.verifiedTqCredentials else { return false }
+        return verified.matches(account: phone, password: comparablePassword)
+    }
+
+    /// 眼睛按钮取回的已存明文与输入框留空指的是同一份凭据，
+    /// 比较前统一成空串，免得只是点了一下眼睛就把绿色消掉
+    private var comparablePassword: String {
+        password == revealedPassword ? "" : password
+    }
+
+    private var accountEntryColor: Color {
+        accountVerified ? AppTheme.success(scheme) : AppTheme.primary(scheme)
     }
 
     /// 步骤 3 问号弹窗文案：说明这两个字段从哪来、什么时候保存
@@ -271,25 +301,68 @@ struct SimulationView: View {
 
     // MARK: - 步骤 5 Token 申请胶囊
 
+    /// 第 5 步胶囊的三种状态：可直接申请 / 已提交待审核 / 已有生效 Token
+    private enum TokenCapsuleState {
+        case notApplied
+        case pending
+        case active
+    }
+
+    /// 已提交未审核、或已有有效 Token 时，胶囊文字改为「Token 管理」并用语义色，
+    /// 点击改为弹出申请记录——此时再点「申请」只会重复提交同一用途的申请。
+    private var tokenCapsuleState: TokenCapsuleState {
+        let status = appState.tokenStatus
+        // 后端只在本地确实持有凭据时才报「已通过…已加密保存」；
+        // 「已通过，但服务器未返回 token」还没拿到，继续按可申请对待
+        if status.contains("已通过") && !status.contains("未返回") { return .active }
+        // 旧数据可能没有 token_id，凭据本身仍在，按有效处理
+        if appState.activeTokenId != nil { return .active }
+        // 待审核的两种文案：「待审核」「已提交申请，等待服务器审核」
+        if status.contains("审核") { return .pending }
+        // 刚申请完、后端还未推送记录时，状态文案之外的兜底
+        if appState.tokenRecords.first?.status == "pending" { return .pending }
+        return .notApplied
+    }
+
     /// 步骤 5 入口胶囊：点文字直接向服务器提交申请，点右侧问号看说明。
     private var tokenEntryCapsule: some View {
         entryCapsule(
-            tokenRequesting ? "申请中..." : "申请 Token",
+            tokenCapsuleTitle,
+            titleColor: tokenCapsuleColor,
             helpText: tokenHelpText,
             isHelpPresented: $showTokenHelp,
             isHelpHovering: $tokenHelpHover
         ) {
-            applyToken()
+            if tokenRequesting { return }
+            if tokenCapsuleState == .notApplied {
+                applyToken()
+            } else {
+                showTokenRecords = true
+            }
         }
     }
 
-    /// 胶囊后的结果提示：本次申请的回执优先，其次跟随后端实时状态；
-    /// 「未申请 / 已通过」不显示，避免一行状态常驻。
+    private var tokenCapsuleTitle: String {
+        if tokenRequesting { return "申请中..." }
+        return tokenCapsuleState == .notApplied ? "申请 Token" : "Token 管理"
+    }
+
+    private var tokenCapsuleColor: Color {
+        guard !tokenRequesting else { return AppTheme.primary(scheme) }
+        switch tokenCapsuleState {
+        case .notApplied: return AppTheme.primary(scheme)
+        case .pending: return AppTheme.warning(scheme)
+        case .active: return AppTheme.success(scheme)
+        }
+    }
+
+    /// 胶囊后的结果提示：只显示失败回执与「已拒绝」这类异常状态。
+    /// 待审核 / 已通过已由胶囊文字与颜色表达，不再占一行重复说明。
     private var tokenHint: String {
-        // 失败的申请后端不会更新状态，回执必须自己显示，不能被下面的过滤吞掉
         if tokenMessage.contains("失败") { return tokenMessage }
         let status = appState.tokenStatus
-        if status.contains("已通过") || status.isEmpty || status == "未申请" { return "" }
+        if status.contains("审核") || status.contains("已通过") { return "" }
+        if status.isEmpty || status == "未申请" { return "" }
         return tokenMessage.isEmpty ? status : tokenMessage
     }
 
@@ -311,6 +384,113 @@ struct SimulationView: View {
             tokenMessage = await appState.requestTokenResult(description: "iTrader 智能交易系统")
             tokenRequesting = false
         }
+    }
+
+    // MARK: - 步骤 5 Token 申请记录弹窗
+
+    private static let tokenTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        return f
+    }()
+
+    /// 申请记录弹窗：已申请过（待审核 / 已通过）时点胶囊打开，
+    /// 只读展示进度，申请与删除等操作仍在「Token 管理」页。
+    private var tokenRecordsDialog: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Token 申请记录")
+                .font(AppTheme.bodyFont.weight(.semibold))
+                .foregroundColor(AppTheme.ink(scheme))
+
+            Text(appState.tokenStatus.isEmpty ? "未申请" : appState.tokenStatus)
+                .font(AppTheme.dimFont.weight(.semibold))
+                .foregroundColor(tokenStatusColor)
+
+            HairlineDivider()
+
+            if appState.tokenRecords.isEmpty {
+                Text("暂无申请记录")
+                    .font(AppTheme.dimFont)
+                    .foregroundColor(AppTheme.dim(scheme))
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(appState.tokenRecords.enumerated()), id: \.element.id) { index, record in
+                            if index > 0 { HairlineDivider() }
+                            // 记录按申请时间倒序（最新在前），正序编号才是「历史第几笔」
+                            tokenRecordRow(
+                                index: appState.tokenRecords.count - index,
+                                record: record
+                            )
+                        }
+                    }
+                }
+                // 记录多时弹窗内滚动，避免窗口被撑高
+                .frame(maxHeight: 320)
+            }
+
+            HStack(spacing: 10) {
+                AppButton("刷新状态", variant: .secondary, size: .inline) {
+                    appState.refreshTokenStatus()
+                }
+                Spacer(minLength: 12)
+                AppButton("关闭", variant: .secondary, size: .inline) {
+                    showTokenRecords = false
+                }
+            }
+            .padding(.top, 4)
+        }
+        .padding(20)
+        .frame(width: 520)
+        .onAppear { appState.refreshTokenStatus() }
+    }
+
+    private func tokenRecordRow(index: Int, record: TokenRecord) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text("\(index)")
+                .font(AppTheme.dimFont)
+                .foregroundColor(AppTheme.dim(scheme))
+                // 编号是两位以上时不再固定宽度，避免被截断
+                .frame(minWidth: 24, alignment: .trailing)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(record.description.isEmpty ? "（无说明）" : record.description)
+                    .font(AppTheme.dimFont)
+                    .foregroundColor(AppTheme.ink(scheme))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(tokenRecordTimeLine(record))
+                    .font(AppTheme.dimFont)
+                    .foregroundColor(AppTheme.dim(scheme))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Text(record.statusText)
+                .font(AppTheme.dimFont.weight(.semibold))
+                .foregroundColor(tokenRecordColor(record.status))
+        }
+        .padding(.vertical, 10)
+    }
+
+    /// 记录行的时间行：缺字段时用占位符，避免出现 1970 年这种假时间
+    private func tokenRecordTimeLine(_ record: TokenRecord) -> String {
+        let created = record.createdAt.map { Self.tokenTimeFormatter.string(from: $0) } ?? "—"
+        guard let expiresAt = record.expiresAt else { return "申请 \(created)" }
+        return "申请 \(created)，过期 \(Self.tokenTimeFormatter.string(from: expiresAt))"
+    }
+
+    private func tokenRecordColor(_ status: String) -> Color {
+        switch status {
+        case "approved": return AppTheme.success(scheme)
+        case "rejected": return AppTheme.danger(scheme)
+        default: return AppTheme.warning(scheme)
+        }
+    }
+
+    /// 状态语义色与「Token 管理」页 statusColor 一致
+    private var tokenStatusColor: Color {
+        let text = appState.tokenStatus
+        if text.isEmpty || text == "未申请" { return AppTheme.warning(scheme) }
+        if text.contains("已通过") { return AppTheme.success(scheme) }
+        if text.contains("失败") || text.contains("错误") { return AppTheme.danger(scheme) }
+        return AppTheme.warning(scheme)
     }
 
     // MARK: - 步骤 1 下载入口弹窗（手机端 / App Store / Windows）
@@ -551,7 +731,7 @@ struct SimulationView: View {
     /// 步骤 5 问号弹窗文案：说明 Token 与服务器鉴权的关系
     private var tokenHelpText: String {
         "客户端连接服务器需要有效的 Token。点「申请 Token」直接向服务器提交申请，"
-        + "等待审批通过后客户端会自动领取并保存；审批进度可在「Token 管理」页查看。"
+        + "等待审批通过后客户端会自动领取并保存；已提交或已通过后，点「Token 管理」查看申请记录。"
     }
 
     // MARK: - 步骤 6 品种入口胶囊与选择弹窗
@@ -575,17 +755,23 @@ struct SimulationView: View {
         return "已选择交易品种：\(appState.displaySymbol(selectedSymbol))"
     }
 
-    /// 品种选择弹窗：选中即生效并关闭（无关闭按钮）；胶囊列表按内容自适应高度，
-    /// 品种过多、超过窗口高度时才在弹窗内滚动
-    private var symbolPickerDialog: some View {
+    /// 品种选择弹层：选中即生效并关闭；标题行右侧与遮罩空白处都可关闭。
+    /// 胶囊列表按内容自适应高度，品种过多、超过可用高度时才在内部滚动
+    private func symbolPickerDialog(maxListHeight: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("选择交易品种")
-                .font(AppTheme.bodyFont.weight(.semibold))
-                .foregroundColor(AppTheme.ink(scheme))
+            HStack(spacing: 12) {
+                Text("选择交易品种")
+                    .font(AppTheme.bodyFont.weight(.semibold))
+                    .foregroundColor(AppTheme.ink(scheme))
+                Spacer(minLength: 12)
+                AppButton("关闭", variant: .secondary, size: .inline) {
+                    showSymbolPicker = false
+                }
+            }
 
             ScrollView {
                 symbolPicker
-                    // 量的是换行后的真实内容高度，用它决定弹窗高度
+                    // 量的是换行后的真实内容高度，用它决定弹层高度
                     .background(GeometryReader { proxy in
                         Color.clear.preference(
                             key: SymbolListHeightKey.self,
@@ -593,13 +779,43 @@ struct SimulationView: View {
                         )
                     })
             }
-            // sheet 会按内容的理想高度收缩，ScrollView 的理想高度极小，
-            // 因此必须给出确定高度；上限避免品种过多时弹窗超出屏幕
-            .frame(height: min(max(symbolListHeight, 64), 720))
+            // 弹层按内容的理想高度收缩，而 ScrollView 的理想高度极小，
+            // 因此必须给出确定高度；上限由遮罩层按窗口可用高度算出来
+            .frame(height: min(max(symbolListHeight, 64), maxListHeight))
             .onPreferenceChange(SymbolListHeightKey.self) { symbolListHeight = $0 }
         }
         .padding(20)
         .frame(width: 640)
+    }
+
+    /// 步骤 6 的弹层遮罩：点卡片外的空白处关闭（macOS 的 sheet 不具备这个行为）
+    private var symbolPickerOverlay: some View {
+        GeometryReader { proxy in
+            ZStack {
+                // 用 Button 而不是 onTapGesture：遮罩盖在 ScrollView 上，
+                // 手势会被滚动视图吞掉，Button 的命中区域才稳定
+                Button { showSymbolPicker = false } label: {
+                    Color.black.opacity(scheme == .dark ? 0.45 : 0.2)
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                // 卡片高度 = 40 padding + 36 标题行 + 12 间距 + 列表，再留 48 的遮罩边距
+                symbolPickerDialog(maxListHeight: max(proxy.size.height - 136, 120))
+                    // 卡片自带底色，整个矩形都是命中区域，点卡片留白不会穿透到遮罩
+                    .background(AppTheme.card(scheme))
+                    .cornerRadius(14)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(AppTheme.hairline(scheme), lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(scheme == .dark ? 0.5 : 0.18), radius: 24, y: 10)
+                    // 卡片整块吃掉点击：否则点在标题、留白处会穿透到遮罩被当成「点空白」
+                    .contentShape(RoundedRectangle(cornerRadius: 14))
+                    .onTapGesture {}
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 
     // MARK: - 品种区（单选胶囊，对应 Qt SymbolPicker；刷新入口在顶部栏）
@@ -809,6 +1025,8 @@ struct SimulationView: View {
                     revealedPassword = ""
                     hasStoredPassword = true
                     storedPasswordLength = newPasswordLength
+                    // 输入框已清空、改为沿用已存密码：落库的是刚验证过的那份就继续保持绿色
+                    appState.settleVerifiedTqCredentials(afterSavingPassword: newPassword, for: account)
                 }
             } else {
                 accountHint = appState.lastActionError
@@ -833,7 +1051,8 @@ struct SimulationView: View {
         Task {
             let message = await appState.testTqAuth(account: account, password: password, accountId: simId)
             testing = false
-            // 弹层开着时不再叠 alert，结果就地显示在弹窗里
+            // 弹层开着时不再叠 alert，结果就地显示在弹窗里；
+            // 验证通过的凭据由 AppState 记下，胶囊文字据此变绿
             setTestHint(message, isError: message.hasPrefix("连接失败"))
         }
     }
