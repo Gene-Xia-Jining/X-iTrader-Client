@@ -114,7 +114,7 @@ class TradingEngine:
     async def _handle_signal(self, signal: StrategySignal) -> None:
         self.event_bus.publish(SignalReceivedEvent(signal=signal))
         self._log(
-            f"收到策略结果: {signal.symbol} 价位 {signal.price} 仓位 {signal.position}",
+            f"收到策略结果: {signal.symbol} 价位 {signal.price} 仓位 {signal.target_position}",
             LogLevel.INFO,
         )
 
@@ -128,7 +128,7 @@ class TradingEngine:
             symbol=signal.symbol,
             side=signal.side,
             price=signal.price,
-            target_position=signal.position,
+            target_position=signal.target_position,
             received_at=signal.updated_at,
             status=TradeCommandStatus.PENDING,
         )
@@ -143,18 +143,18 @@ class TradingEngine:
                 self.account_id, signal.id, TradeCommandStatus.EXECUTING
             )
             await self.trading_executor.set_target_position(
-                signal.symbol, signal.position, self.account_id
+                signal.symbol, signal.target_position, self.account_id
             )
             await self.trade_repo.set_status(
                 self.account_id, signal.id, TradeCommandStatus.EXECUTED
             )
             self.event_bus.publish(
                 TradeExecutedEvent(
-                    symbol=signal.symbol, target_position=signal.position
+                    symbol=signal.symbol, target_position=signal.target_position
                 )
             )
             self._log(
-                f"交易执行成功: {signal.symbol} 仓位 {signal.position}",
+                f"交易执行成功: {signal.symbol} 仓位 {signal.target_position}",
                 LogLevel.SUCCESS,
             )
         except Exception as e:

@@ -42,12 +42,19 @@ class Account:
 
 @dataclass
 class StrategySignal:
+    """服务器 /api/stream 推送的交易信号。
+
+    字段名必须与服务器 payload 一致（target_position，不是 position）：
+    服务器是最初的定义方，客户端跟着它走，避免两边各自命名后反复错位。
+    """
+
     id: str
     symbol: str
     side: Optional[str]
     price: float
-    position: int
+    target_position: int
     updated_at: int
+    strategy_id: str = ""
 
 
 @dataclass

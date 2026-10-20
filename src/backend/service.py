@@ -852,7 +852,11 @@ class BackendService:
             return
         self._broadcast(
             "update_ready",
-            {"kind": "差量更新包" if self._update_kind == "patch" else "完整更新包"},
+            {
+                "kind": "差量更新包" if self._update_kind == "patch" else "完整更新包",
+                # 机器可读的包类型：壳据此决定安装后是重连（patch）还是退出（full）
+                "mode": self._update_kind,
+            },
         )
 
     def update_cancel(self, params: dict) -> dict:

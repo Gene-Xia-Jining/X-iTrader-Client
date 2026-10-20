@@ -59,8 +59,10 @@ async def run() -> int:
 
     # 父进程（UI 壳）死亡监控：壳由 shell/ 壳进程 spawn 时 PPID != 1。
     # watcher 运行在非 loop 线程，必须 call_soon_threadsafe 唤醒主循环。
+    # 差量更新例外：新后端由旧后端拉起（updater 的 patch 分支），父进程马上就会
+    # 退出；此时监控会把刚接管的进程当成孤儿杀掉，故跳过。
     parent_pid = os.getppid()
-    if parent_pid != 1:
+    if parent_pid != 1 and os.environ.get("ITRADER_RESTART_FROM_UPDATE") != "1":
         threading.Thread(
             target=_watch_parent,
             args=(parent_pid, lambda: loop.call_soon_threadsafe(_request_stop)),

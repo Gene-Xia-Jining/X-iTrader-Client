@@ -1,4 +1,6 @@
 import json
+import logging
+from dataclasses import fields
 from typing import Optional, Union
 
 import httpx
@@ -6,6 +8,22 @@ import httpx
 from ...domain.entities import StrategySignal
 from ...domain.repositories import StrategyStreamClient
 from ...domain.repositories import TokenStore
+
+logger = logging.getLogger(__name__)
+
+
+def parse_signal(payload: dict) -> StrategySignal:
+    """按 StrategySignal 已声明的字段过滤后构造。
+
+    服务器是 payload 的定义方，可能先于客户端新增字段（如 strategy_id）。
+    不过滤会因多余关键字直接抛 TypeError，整条信号流断掉；这里只取认识的
+    字段，新增字段对旧客户端降级为「忽略」而不是「报错」。
+    """
+    known = {f.name for f in fields(StrategySignal)}
+    unknown = set(payload) - known
+    if unknown:
+        logger.debug("signal_ignored_fields fields=%s", sorted(unknown))
+    return StrategySignal(**{k: v for k, v in payload.items() if k in known})
 
 async def check_server_health(server_url: str, timeout: float = 5.0) -> dict:
     """探测服务器连通性（/api/health 无需认证），失败时抛出异常。"""
@@ -234,6 +252,6 @@ class ServerStreamClient(StrategyStreamClient):
                         data = line[5:].strip()
                     elif not line:
                         if event == "trading_result" and data:
-                            yield StrategySignal(**json.loads(data))
+                            yield parse_signal(json.loads(data))
                         event = None
                         data = None

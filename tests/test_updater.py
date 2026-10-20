@@ -370,7 +370,15 @@ class ApplyUpdateTest(unittest.TestCase):
         backups = list(meipass.glob("src.old-*"))
         self.assertEqual(len(backups), 1)
         self.assertEqual((backups[0] / "__init__.py").read_text(), "old")
-        popen.assert_called_once_with([str(exe)], cwd=str(exe.parent), close_fds=True)
+        popen.assert_called_once_with(
+            [str(exe)],
+            cwd=str(exe.parent),
+            close_fds=True,
+            # 差量更新由旧后端直接拉起新后端：新进程要跳过父进程监控并等待接管
+            env=mock.ANY,
+        )
+        args, kwargs = popen.call_args
+        self.assertEqual(kwargs["env"][updater.RESTART_ENV], "1")
 
     def test_swap_failure_rolls_back(self):
         app = self.dir / "X-iTrader-Client.app"

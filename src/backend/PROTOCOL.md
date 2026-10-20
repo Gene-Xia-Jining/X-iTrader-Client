@@ -53,7 +53,7 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 | `config_changed` | `{}` | 配置/账户已保存（引擎运行中则下次启动生效） |
 | `token_status` | `{status, records: [...]}` | token 审批状态变化；后台轮询领取成功后广播，壳据此刷新 Token 页 |
 | `update_progress` | `{pct, received, total}` | pct=-1 表示总大小未知 |
-| `update_ready` | `{kind}` | "差量更新包"/"完整更新包" |
+| `update_ready` | `{kind, mode}` | kind 是给人看的中文包名（"差量更新包"/"完整更新包"）；mode 为 `"patch"`/`"full"`，壳据此决定装完是重连还是退出 |
 | `update_failed` / `update_cancelled` | `{message}` / `{}` | |
 | `backend_stopping` | `{reason: "quit"\|"update"}` | 后端即将退出，壳应断开并等待 |
 

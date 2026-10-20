@@ -43,6 +43,12 @@ _PATCH_ASSET_KEYWORD = "src"
 # 后端进程是 X-iTrader-Backend.exe，与壳同级；全量更新后重启的对象是壳。
 _WIN_SHELL_EXE = "X-iTrader.exe"
 
+# 差量更新由旧后端进程直接拉起新后端（壳不参与），新进程需要知道两件事：
+# 1) 它不是壳的子进程，不能启用父进程监控——旧后端退出后它会判成孤儿而自杀；
+# 2) 旧后端可能还没退干净，启动时要等它释放 backend.json 再接管。
+# 只在 patch 分支设置：全量更新拉起的是壳，壳再 spawn 的后端是正常子进程。
+RESTART_ENV = "ITRADER_RESTART_FROM_UPDATE"
+
 
 @dataclass
 class ReleaseInfo:
@@ -332,14 +338,19 @@ def apply_update_and_restart(stage_item: Path, kind: str) -> Path:
             raise RuntimeError("当前安装不支持差量更新，请下载完整包安装")
         _swap_directory(stage_item, target)
         binary = Path(sys.executable)
-    else:
-        target = app_install_root()
-        if target is None:
-            raise RuntimeError("无法定位当前安装位置")
-        # swap 前先验证新包完整性（可执行文件存在），避免换上残缺包且无法回滚
-        _launch_binary_of(stage_item)
-        _swap_directory(stage_item, target)
-        binary = _launch_binary_of(target)
+        # 后端进程直接拉起的是「另一个后端」，不是 shell：标记 env 让新进程
+        # 跳过父进程监控（旧后端马上会退出），并等待 backend.json 释放后再接管
+        env = {**os.environ, RESTART_ENV: "1"}
+        subprocess.Popen([str(binary)], cwd=str(binary.parent), close_fds=True, env=env)
+        return binary
+
+    target = app_install_root()
+    if target is None:
+        raise RuntimeError("无法定位当前安装位置")
+    # swap 前先验证新包完整性（可执行文件存在），避免换上残缺包且无法回滚
+    _launch_binary_of(stage_item)
+    _swap_directory(stage_item, target)
+    binary = _launch_binary_of(target)
 
     subprocess.Popen([str(binary)], cwd=str(binary.parent), close_fds=True)
     return binary

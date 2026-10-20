@@ -15,6 +15,7 @@ import json
 import os
 import secrets
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -23,6 +24,10 @@ from .. import __version__
 
 HANDSHAKE_TIMEOUT = 3.0
 _MAX_LINE_BYTES = 1024 * 1024  # 单行上限 1MB，防止异常客户端撑爆内存
+
+# 差量更新后等待旧后端退出的上限（秒）。旧后端在 apply_update_and_restart
+# 返回后立即退出，实际只需数百毫秒；留足余量避免把慢退出误判成冲突。
+_RESTART_WAIT_SECONDS = 10.0
 
 
 @dataclass(eq=False)  # eq=True 会置 __hash__=None，无法作为 set 元素
@@ -78,22 +83,42 @@ class RpcServer:
             self._info_path.unlink()
 
     def _reject_stale_backend(self) -> None:
-        """已有后端在运行则拒绝启动，避免两个后端同时操作 SQLite 与 TqApi 会话。"""
+        """已有后端在运行则拒绝启动，避免两个后端同时操作 SQLite 与 TqApi 会话。
+
+        差量更新例外：新后端由旧后端自己拉起（见 updater.apply_update_and_restart
+        的 patch 分支），此刻旧后端往往还没退完。这里改为等它删掉 backend.json
+        （stop() 里的退出清理）再接管；超时仍按原逻辑拒绝，不掩盖真冲突。
+        """
         if not self._info_path.exists():
             return
-        try:
-            info = json.loads(self._info_path.read_text(encoding="utf-8"))
-            pid = int(info.get("pid", 0))
-            if pid > 0:
-                os.kill(pid, 0)  # 不发信号，仅探测进程存活
+        restarted = os.environ.get("ITRADER_RESTART_FROM_UPDATE") == "1"
+        deadline = time.monotonic() + (_RESTART_WAIT_SECONDS if restarted else 0)
+        stale_port = None
+        while self._info_path.exists():
+            try:
+                info = json.loads(self._info_path.read_text(encoding="utf-8"))
+                pid = int(info.get("pid", 0) or 0)
+            except (OSError, ValueError):
+                # 半写入/损坏或刚被删掉：当作残留，直接覆盖
+                break
+            stale_port = info.get("port", stale_port)
+            # Windows 上 os.kill(pid, 0) 不是存活探测（会走 GenerateConsoleCtrlEvent），
+            # 因此这里只认「文件是否被旧后端删掉」，不依赖 pid 探测。
+            if pid > 0 and sys.platform != "win32":
+                try:
+                    os.kill(pid, 0)
+                except OSError:
+                    break  # 进程已死：残留文件，可覆盖
+            if time.monotonic() >= deadline:
                 raise RuntimeError(
-                    f"后端已在运行 (pid={pid}, port={info.get('port')})，请先停止或删除 {self._info_path}"
+                    f"后端已在运行 (pid={pid}, port={stale_port})，"
+                    f"请先停止或删除 {self._info_path}"
                 )
-        except RuntimeError:
-            raise
-        except (ValueError, OSError, json.JSONDecodeError):
-            pass  # 信息文件损坏或进程已死：当作残留文件覆盖
-        self._info_path.unlink()
+            time.sleep(0.2)
+        try:
+            self._info_path.unlink()
+        except FileNotFoundError:
+            pass  # 旧后端刚好删掉了它，正是我们要的结果
 
     def _write_info_file(self) -> None:
         self._info_path.parent.mkdir(parents=True, exist_ok=True)
