@@ -657,7 +657,6 @@ private struct ServerInfoSheet: View {
 
     /// 「编辑服务器信息」二级弹窗
     @State private var showEditor = false
-    @State private var closeHovering = false
 
     private var connected: Bool { appState.engineStatus.serverOnline }
     private var serverUrl: String { appState.config.serverUrl }
@@ -681,28 +680,14 @@ private struct ServerInfoSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 9, height: 9)
                 Text("服务器信息")
-                    .font(AppTheme.titleFont)
+                    .font(.system(size: 16))
                     .foregroundColor(AppTheme.ink(scheme))
-                Spacer(minLength: 0)
-                // 右上角关闭：弹窗不再有底部按钮行
-                Button { onClose() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(AppTheme.dim(scheme))
-                        .frame(width: 28, height: 28)
-                        .background(closeHovering ? AppTheme.sidebarHover(scheme) : .clear)
-                        .cornerRadius(14)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .onHover { closeHovering = $0 }
-                .pointerCursor()
-                .keyboardShortcut(.cancelAction)
-                .help("关闭")
+                Spacer(minLength: 12)
+                // 关闭按钮放标题行右侧，与 Token 申请记录等弹窗一致，底部不留按钮行
+                AppButton("关闭", variant: .secondary, size: .inline) { onClose() }
+                    .keyboardShortcut(.cancelAction)
+                    .help("关闭")
             }
             .padding(.horizontal, 20)
             .padding(.top, 16)
@@ -759,14 +744,18 @@ private struct ServerInfoSheet: View {
         }
     }
 
-    /// 地址行尾部的文字按钮（样式同 Token 列表里的「切换」）
+    /// 地址行尾部的「编辑」入口：描边胶囊，与模拟页各步骤的入口胶囊同一形态
     private var editButton: some View {
         Button { showEditor = true } label: {
             Text("编辑")
                 .font(AppTheme.dimFont.weight(.semibold))
                 .foregroundColor(AppTheme.primary(scheme))
-                .frame(height: 22)
-                .contentShape(Rectangle())
+                .padding(.horizontal, 14)
+                .frame(minHeight: 30)
+                .overlay(
+                    Capsule().stroke(AppTheme.hairline(scheme), lineWidth: 1)
+                )
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .pointerCursor()

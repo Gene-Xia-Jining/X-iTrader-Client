@@ -378,8 +378,9 @@ public sealed partial class MainWindow : Window
             rows.Children.Add(row);
         }
 
-        // 地址行尾部的「编辑」：二级对话框不能在 ContentDialog 打开期间叠加，
-        // 所以先收起本弹窗，等 ShowAsync 返回后再打开编辑器
+        // 地址行尾部的「编辑」：描边胶囊，与模拟页各步骤的入口胶囊同一形态。
+        // 二级对话框不能在 ContentDialog 打开期间叠加，所以先收起本弹窗，
+        // 等 ShowAsync 返回后再打开编辑器
         var editButton = new Button
         {
             Content = "编辑",
@@ -387,11 +388,13 @@ public sealed partial class MainWindow : Window
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
             Foreground = new SolidColorBrush(palette.Primary),
             Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
-            BorderThickness = new Thickness(0),
-            Padding = new Thickness(0),
+            BorderBrush = new SolidColorBrush(palette.Hairline),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(14, 0, 14, 0),
             MinWidth = 0,
             MinHeight = 0,
-            Height = 22,
+            Height = 30,
+            CornerRadius = new CornerRadius(15),
             VerticalAlignment = VerticalAlignment.Top,
         };
         ToolTipService.SetToolTip(editButton, "修改服务器地址");
@@ -418,48 +421,28 @@ public sealed partial class MainWindow : Window
 
         var content = new StackPanel { Spacing = 0 };
 
-        // 标题行：状态圆点 + 标题，右上角关闭（不再用打勾行，也不再显示右侧状态文字）
+        // 标题行：只有标题文字，右侧是关闭按钮（状态已在「连接状态」行体现）
+        var headerText = new TextBlock
+        {
+            Text = "服务器信息",
+            FontSize = 16,
+            FontWeight = Microsoft.UI.Text.FontWeights.Normal,
+            Foreground = new SolidColorBrush(palette.Ink),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        // 与 Token 申请记录等弹窗一致：标题行右侧用文字「关闭」，底部不留按钮行
         var closeButton = new Button
         {
-            Content = new FontIcon
-            {
-                Glyph = "\uE711",  // Segoe MDL2：Cancel
-                FontSize = 12,
-                Foreground = new SolidColorBrush(palette.Dim),
-            },
-            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
-            BorderThickness = new Thickness(0),
-            Width = 32,
-            Height = 32,
-            Padding = new Thickness(0),
-            CornerRadius = new CornerRadius(16),
-            HorizontalAlignment = HorizontalAlignment.Right,
+            Content = "关闭",
+            FontSize = 13,
+            MinHeight = 32,
+            Padding = new Thickness(14, 0, 14, 0),
+            CornerRadius = new CornerRadius(8),
             VerticalAlignment = VerticalAlignment.Center,
         };
         ToolTipService.SetToolTip(closeButton, "关闭");
         closeButton.Click += (_, _) => dialog?.Hide();
-
-        var headerText = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 10,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        headerText.Children.Add(new Ellipse
-        {
-            Width = 9,
-            Height = 9,
-            Fill = new SolidColorBrush(statusColor),
-            VerticalAlignment = VerticalAlignment.Center,
-        });
-        headerText.Children.Add(new TextBlock
-        {
-            Text = "服务器信息",
-            FontSize = 20,
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Foreground = new SolidColorBrush(palette.Ink),
-            VerticalAlignment = VerticalAlignment.Center,
-        });
 
         var header = new Grid { Margin = new Thickness(0, 0, 0, 14) };
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
