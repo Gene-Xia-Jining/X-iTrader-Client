@@ -483,13 +483,16 @@ struct RootView: View {
         let active = appState.engineStatus.tradingActive
         let checking = appState.startChecking
         let disabled = appState.connState != .connected || checking
-        // 启停进行中文字用主色而不是禁用灰：进度填充本身也是主色系，
-        // 灰字压在半透明填充上对比度太低（浅色主题几乎看不清）
-        let fg: Color = checking
-            ? AppTheme.primary(scheme)
-            : (disabled
-                ? (scheme == .dark ? Color(hex: 0x86868B) : Color(hex: 0xCCCCCC))
-                : (active ? .white : AppTheme.primary(scheme)))
+        // 进度填充是绿色，走完即自动交易开启态的同一个绿：文字在填充上要能读，
+        // 所以进行中用 ink（浅色深字/深色白字），填满后与开启态一致转白字
+        let progressDone = checking && appState.startProgressPct >= 100
+        let fg: Color = progressDone
+            ? .white
+            : (checking
+                ? AppTheme.ink(scheme)
+                : (disabled
+                    ? (scheme == .dark ? Color(hex: 0x86868B) : Color(hex: 0xCCCCCC))
+                    : (active ? .white : AppTheme.primary(scheme))))
         let bg: Color = disabled
             ? (active ? AppTheme.hairline(scheme) : .clear)
             : (active ? (autoTradeHovering ? AppTheme.successHover(scheme) : AppTheme.success(scheme))
@@ -509,9 +512,7 @@ struct RootView: View {
                 Text(startButtonTitle)
                     .font(AppTheme.bodyFont.weight(.semibold))
                     .foregroundColor(fg)
-                    // 固定文字槽位：各阶段文案长短不一，不占位会让胶囊宽度随
-                    // 阶段跳变，进度填充的比例也跟着抖。宽度按最长的阶段文案留足
-                    .frame(minWidth: 158, alignment: .leading)
+                    // 宽度随文案自适应（留出最长的阶段文案即可，不额外占位）
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
                     .contentShape(Rectangle())
@@ -539,15 +540,18 @@ struct RootView: View {
         .clipShape(RoundedRectangle(cornerRadius: 18))
     }
 
-    /// 启动进度：整颗胶囊从左向右被主色填满，宽度即完成百分比。
-    /// 用半透明填充而不是实色，避免盖住上面的阶段文字。
+    /// 启动进度：整颗胶囊从左向右被绿色填满，宽度即完成百分比。
+    /// 走满后与「自动交易：开」的实色绿完全一致，视觉上直接过渡到开启态。
     /// pct=-1（如停止操作）不填充，只显示文字。
     @ViewBuilder
     private var startProgressFill: some View {
         if appState.startChecking, appState.startProgressPct >= 0 {
+            let done = appState.startProgressPct >= 100
             GeometryReader { geo in
                 Rectangle()
-                    .fill(AppTheme.primary(scheme).opacity(0.22))
+                    // 未走满时压低不透明度，让覆盖其上的文字保持可读；
+                    // 走满后转实色，与开启态无缝衔接
+                    .fill(AppTheme.success(scheme).opacity(done ? 1 : 0.55))
                     .frame(width: geo.size.width * CGFloat(appState.startProgressPct) / 100)
             }
             .allowsHitTesting(false)

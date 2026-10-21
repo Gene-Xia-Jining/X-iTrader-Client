@@ -1447,14 +1447,16 @@ public sealed class AppState : INotifyPropertyChanged
     /// 属性赋值 + 变更通知。约定：所有调用点都必须在 UI 线程——要么本就在 UI
     /// 线程（事件处理、Post 回调内），要么经 <see cref="Post"/> 切回后再赋值。
     /// </summary>
-    private void Set<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
+    /// <returns>值确有变化并已发出通知时返回 true；调用方可据此连带刷新派生属性。</returns>
+    private bool Set<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
     {
         if (EqualityComparer<T>.Default.Equals(field, value))
         {
-            return;
+            return false;
         }
         field = value;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        return true;
     }
 }
 

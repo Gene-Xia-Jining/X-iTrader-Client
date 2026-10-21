@@ -1410,7 +1410,7 @@ public sealed partial class SimulationPage : Page
         // 入口胶囊：默认「选择交易品种」，选中后优先显示中文品种名（无映射时回退代码）
         SymbolPickerButton.Content = SymbolEntryLabel();
         UpdateSymbolFilterStyles();
-        var visible = symbols.Where(_symbolFilter.Matches).ToList();
+        var visible = symbols.Where(s => _symbolFilter.Matches(s)).ToList();
         var symbolKey = string.Join(",", visible) + $";{_selectedSymbol};{Host.IsDark}";
         if (symbolKey != _symbolKey)
         {
@@ -1755,6 +1755,8 @@ public static class SymbolFilters
         _ => true,
     };
 
+    // 扩展方法定义在 enum（值类型）上，C# 不允许把它当方法组传给 Where/Count（CS1113），
+    // 必须包一层 lambda
     public static int Count(SymbolFilter filter, IEnumerable<string> symbols) =>
-        symbols.Count(filter.Matches);
+        symbols.Count(s => filter.Matches(s));
 }

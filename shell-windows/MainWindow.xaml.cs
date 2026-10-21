@@ -889,12 +889,26 @@ public sealed partial class MainWindow : Window
         AutoTradeToggle.OnContent = toggleContent;
         AutoTradeToggle.OffContent = toggleContent;
 
+        // 进度填充是绿色：进行中文字用 ink 保证在填充上可读，走满转白字与「开」态一致
+        if (_state.StartChecking)
+        {
+            var palette = ThemeTokens.For(IsDark);
+            AutoTradeToggle.Foreground = new SolidColorBrush(
+                _state.StartProgressPct >= 100 ? Microsoft.UI.Colors.White : palette.Ink);
+        }
+        else
+        {
+            AutoTradeToggle.ClearValue(Control.ForegroundProperty);
+        }
+
         // 后端已按各阶段权重折算成整次启动的百分比，从 0 起连续推进。
         // 进度直接填在胶囊里（整颗从左向右），宽度按胶囊实际宽度换算；
         // pct<0（如停止操作）不填充，只显示文案
         if (_state.StartChecking && _state.StartProgressPct >= 0 && AutoTradePill.ActualWidth > 0)
         {
             AutoTradeProgress.Width = AutoTradePill.ActualWidth * _state.StartProgressPct / 100;
+            // 未走满时压低不透明度保证文字可读，走满转实色与「开」态衔接
+            AutoTradeProgress.Opacity = _state.StartProgressPct >= 100 ? 1.0 : 0.55;
             AutoTradeProgress.Visibility = Visibility.Visible;
         }
         else
@@ -986,7 +1000,7 @@ public sealed partial class MainWindow : Window
         AutoTradeHelpButton.BorderBrush = new SolidColorBrush(palette.Hairline);
         AutoTradeHelpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
         AutoTradePill.BorderBrush = new SolidColorBrush(palette.Hairline);
-        AutoTradeProgress.Fill = new SolidColorBrush(palette.Primary) { Opacity = 0.22 };
+        AutoTradeProgress.Fill = new SolidColorBrush(palette.Success);
         QuitButton.Foreground = new SolidColorBrush(palette.Danger);
         ThemeButton.Content = IsDark ? "浅色" : "深色";
 
