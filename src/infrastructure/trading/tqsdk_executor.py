@@ -232,11 +232,14 @@ class TqSdkTradingExecutor(TradingExecutor):
         auths: dict[str, tuple[str, str]],
         close_timeout: float = 10.0,
         fill_timeout: float = 60.0,
+        trading_time_wait: float = 5.0,
     ):
         self._close_timeout = close_timeout
         # 调仓等成交的上限：TargetPosTask 是追价下单，活跃时段通常几秒内成交；
         # 超时即判失败而不是静默成功（非交易时段、行情断开都会落在这里）
         self._fill_timeout = fill_timeout
+        # 查交易时段表时最多等多久让 quote 落地（门控用，见 trading_time）
+        self._trading_time_wait = trading_time_wait
         # 先建会话，避免调用方在会话未就绪时投递到已关闭的 loop
         self._sessions: dict[str, _AccountSession] = {
             account.id: self._start_session(account, auths.get(account.id, (None, None)))
@@ -439,6 +442,42 @@ class TqSdkTradingExecutor(TradingExecutor):
                 f"{order.last_msg or '未返回原因'}"
             )
         return ""
+
+    def trading_time(self, symbol: str, account_id: str = "") -> Optional[dict]:
+        """取该合约的交易时段表，供上层做非交易时段门控。
+
+        复用该账户已建立的 TqApi 会话。执行器的会话平时只在调仓时推进，行情
+        可能尚未推送到位，所以这里主动等一小会儿让 quote 落地——信号处理是
+        串行的（TradingEngine 里 async for 逐个 await），不会与调仓任务争抢
+        同一次 wait_update。
+
+        超时仍拿不到就返回 None：门控只是兜底，不能因为查不到时段表就挡住
+        调仓，剩下的交给执行器自身的成交确认与超时。
+        """
+        session = self._sessions.get(account_id)
+        if session is None:
+            return None
+
+        def _read():
+            api = session.api
+            quote = api.get_quote(symbol)
+            deadline = time.time() + self._trading_time_wait
+            while time.time() < deadline:
+                trading_time = getattr(quote, "trading_time", None)
+                if trading_time:
+                    # TradingTime 是 MutableMapping，转成普通 dict 便于跨线程传递
+                    return {
+                        key: [list(period) for period in periods]
+                        for key, periods in trading_time.items()
+                    }
+                api.wait_update(deadline=min(deadline, time.time() + 0.5))
+            return None
+
+        try:
+            return self._submit(account_id, _read, timeout=self._trading_time_wait + 5)
+        except Exception:
+            # 拿不到时段表不是错误：门控只是兜底，不能因为查不到就挡住调仓
+            return None
 
     def close(self) -> None:
         """关闭全部账户的 TqApi 会话。幂等；单个账户失败不影响其余账户。

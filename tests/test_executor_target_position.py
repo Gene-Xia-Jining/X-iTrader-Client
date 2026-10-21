@@ -25,22 +25,27 @@ class _FakeOrder:
 
 
 class _FakeQuote:
-    def __init__(self, underlying_symbol):
+    def __init__(self, underlying_symbol, trading_time=None):
         self.underlying_symbol = underlying_symbol
+        self.trading_time = trading_time or {}
 
 
 class _FakeApi:
     """按「每推进一次就走一步」的脚本模拟 tqsdk：steps 里每项是本次 wait_update 后的持仓。"""
 
-    def __init__(self, underlying_symbol="SHFE.rb2701", steps=(), error_after=None):
+    def __init__(self, underlying_symbol="SHFE.rb2701", steps=(), error_after=None,
+                 trading_time=None):
         self.underlying_symbol = underlying_symbol
         self.steps = list(steps)
         self.error_after = error_after
+        self.trading_time = trading_time or {}
         self.updates = 0
         self.closed = False
 
     def get_quote(self, symbol):
-        return _FakeQuote(self.underlying_symbol if symbol.startswith("KQ.") else "")
+        # 主连带标的合约，实盘合约不带
+        underlying = self.underlying_symbol if symbol.startswith("KQ.") else ""
+        return _FakeQuote(underlying, self.trading_time)
 
     def get_position(self, symbol):
         done = min(self.updates, len(self.steps))
@@ -198,6 +203,53 @@ class TargetPositionTest(unittest.TestCase):
         asyncio.run(executor.set_target_position("KQ.m@SHFE.rb", 1, "acc"))
         self.assertTrue(old.cancelled)
         self.assertEqual(session._tasks["KQ.m@SHFE.rb"][1], "SHFE.rb2701")
+
+
+class TradingTimeQueryTest(unittest.TestCase):
+    """executor.trading_time：供上层做非交易时段门控的时段表来源。
+
+    拿不到时段表一律返回 None（调用方放行），不能因为查询失败挡住调仓。
+    """
+
+    def _executor(self, api, sessions=None):
+        executor = TqSdkTradingExecutor(accounts=[], auths={}, trading_time_wait=0.05)
+        executor._sessions = sessions if sessions is not None else {"acc": _FakeSession(api)}
+        executor._submit = lambda account_id, fn, timeout=None: fn()
+        return executor
+
+    def test_returns_normalized_dict(self):
+        """tqsdk 的 TradingTime 是 MutableMapping，要转成普通 dict 跨线程使用。"""
+        api = _FakeApi(trading_time={
+            "day": [["09:00:00", "10:15:00"]],
+            "night": [["21:00:00", "23:00:00"]],
+        })
+        result = self._executor(api).trading_time("KQ.m@SHFE.rb", "acc")
+        self.assertEqual(result, {
+            "day": [["09:00:00", "10:15:00"]],
+            "night": [["21:00:00", "23:00:00"]],
+        })
+        self.assertIsInstance(result["day"][0], list)
+
+    def test_unknown_account_returns_none(self):
+        """会话不存在时不抛错，返回 None 让调用方放行。"""
+        executor = self._executor(_FakeApi())
+        self.assertIsNone(executor.trading_time("KQ.m@SHFE.rb", "missing"))
+
+    def test_empty_trading_time_returns_none(self):
+        """行情未就绪（时段表为空）时返回 None，而不是空 dict。"""
+        executor = self._executor(_FakeApi(trading_time={}))
+        self.assertIsNone(executor.trading_time("KQ.m@SHFE.rb", "acc"))
+
+    def test_submit_failure_returns_none(self):
+        """投递失败（会话已关闭等）同样降级为 None，不阻断调仓。"""
+        executor = TqSdkTradingExecutor(accounts=[], auths={})
+        executor._sessions = {"acc": _FakeSession(_FakeApi())}
+
+        def boom(account_id, fn, timeout=None):
+            raise RuntimeError("执行器已关闭")
+
+        executor._submit = boom
+        self.assertIsNone(executor.trading_time("KQ.m@SHFE.rb", "acc"))
 
 
 def executor_symbol(api, symbol):

@@ -1,5 +1,7 @@
 import asyncio
+import datetime
 from dataclasses import dataclass
+from typing import Callable, Optional
 
 from ..domain.entities import (
     StrategySignal,
@@ -23,6 +25,7 @@ from ..domain.repositories import (
     TradeCommandRepository,
 )
 from ..domain.services import TradingExecutor
+from ..domain.trading_hours import in_trading_period
 
 
 @dataclass
@@ -34,6 +37,8 @@ class TradingEngineDeps:
     trading_executor: TradingExecutor
     event_bus: EventBus
     auto_trade: bool = False
+    # 交易时段门控的时钟；None 时用 in_trading_period 内部的北京时间当前时刻
+    clock: Optional[Callable[[], datetime.datetime]] = None
 
 
 class TradingEngine:
@@ -47,6 +52,8 @@ class TradingEngine:
         self.auto_trade = deps.auto_trade
         self._running = False
         self._server_connected = False
+        # 交易时段判断用的时钟，测试可替换（生产用北京时间当前时刻）
+        self._clock = deps.clock
 
     @property
     def is_running(self) -> bool:
@@ -111,6 +118,21 @@ class TradingEngine:
                     self._log(f"连接错误: {e}", LogLevel.ERROR)
                     await asyncio.sleep(5)
 
+    async def _in_trading_period(self, symbol: str) -> bool:
+        """该品种当前是否可交易；拿不到时段表时放行（返回 True）。
+
+        执行器查询是阻塞调用（要进 TqApi 的守护线程），放线程池避免卡住事件循环。
+        时钟通过 in_trading_period 的 now 参数注入，便于测试覆盖各时段。
+        """
+        try:
+            trading_time = await asyncio.to_thread(
+                self.trading_executor.trading_time, symbol, self.account_id
+            )
+        except Exception as e:
+            self._log(f"交易时段查询失败，按可交易处理: {e}", LogLevel.WARNING)
+            return True
+        return in_trading_period(trading_time, now=self._clock())
+
     async def _handle_signal(self, signal: StrategySignal) -> None:
         self.event_bus.publish(SignalReceivedEvent(signal=signal))
         self._log(
@@ -145,6 +167,17 @@ class TradingEngine:
 
         if not self.auto_trade:
             self._log("自动交易关闭", LogLevel.INFO)
+            return
+
+        # 非交易时段不下单：服务器已做了时段门控，这里是第二道防线。快期模拟
+        # 柜台在非交易时段也会照常撮合，漏下来就是账户里一笔莫名其妙的持仓。
+        # 信号停在 pending（不记失败），等服务器下一笔交易时段的信号再执行；
+        # 同一信号重投时上面的分支会把它重新置为 pending 并走正常流程。
+        if not await self._in_trading_period(signal.symbol):
+            self._log(
+                f"非交易时段，暂不执行: {signal.symbol} 仓位 {signal.target_position}",
+                LogLevel.WARNING,
+            )
             return
 
         try:
