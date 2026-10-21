@@ -133,6 +133,8 @@ struct AppButton: View {
     var variant: Variant = .primary
     var size: Size = .regular
     var disabled = false
+    /// 放在顶栏（chrome 白底）上：悬停底色提一档，否则与底色几乎无差别
+    var onChrome = false
     let action: () -> Void
 
     init(
@@ -140,12 +142,14 @@ struct AppButton: View {
         variant: Variant = .primary,
         size: Size = .regular,
         disabled: Bool = false,
+        onChrome: Bool = false,
         action: @escaping () -> Void
     ) {
         self.title = title
         self.variant = variant
         self.size = size
         self.disabled = disabled
+        self.onChrome = onChrome
         self.action = action
     }
 
@@ -199,7 +203,9 @@ struct AppButton: View {
         case .success:
             return hovering ? AppTheme.successHover(scheme) : AppTheme.success(scheme)
         case .secondary:
-            return hovering ? AppTheme.canvas(scheme) : .clear
+            // 顶栏是 chrome 底色，canvas 与它几乎同色（#F5F5F7 vs #FFFFFF），
+            // 悬停等于没反应；顶栏的按钮改走侧栏那档更明显的 hover 底色
+            return hovering ? (onChrome ? AppTheme.sidebarHover(scheme) : AppTheme.canvas(scheme)) : .clear
         case .flat:
             return hovering ? AppTheme.sidebarHover(scheme) : .clear
         }

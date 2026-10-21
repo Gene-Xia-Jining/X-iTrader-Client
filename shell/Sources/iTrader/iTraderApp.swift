@@ -151,7 +151,13 @@ enum AppRoute: String, CaseIterable, Identifiable {
 struct RootView: View {
     @EnvironmentObject var appState: AppState
     @State private var selection: AppRoute = .dashboard
-    @State private var dark = false
+    private static let themePrefKey = "theme_is_dark"
+
+    private static var systemIsDark: Bool {
+        NSApp?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    }
+
+    @AppStorage(Self.themePrefKey) private var dark: Bool = RootView.systemIsDark
     /// 服务器信息弹窗（点击顶栏服务器状态胶囊）
     @State private var showServerInfo = false
     @State private var showAutoTradeHelp = false
@@ -248,12 +254,13 @@ struct RootView: View {
             serverStatusPill
             Spacer()
             autoTradePill
-            AppButton(dark ? "浅色" : "深色", variant: .secondary) { dark.toggle() }
+            AppButton(dark ? "浅色" : "深色", variant: .secondary, onChrome: true) { dark.toggle() }
             // 刷新服务器品种与策略（模拟/实盘页共用），获取中置灰防重复点击
             AppButton(
                 "刷新",
                 variant: .secondary,
-                disabled: appState.symbolsFetching || appState.strategiesFetching
+                disabled: appState.symbolsFetching || appState.strategiesFetching,
+                onChrome: true
             ) {
                 appState.fetchSymbols()
                 appState.fetchStrategies()
@@ -355,7 +362,7 @@ struct RootView: View {
                 .foregroundColor(color)
                 .padding(.horizontal, 22)
                 .frame(minHeight: 36)
-                .background(serverPillHovering ? AppTheme.canvas(scheme) : .clear)
+                .background(serverPillHovering ? AppTheme.sidebarHover(scheme) : .clear)
                 .overlay(
                     RoundedRectangle(cornerRadius: 18)
                         .stroke(serverPillHovering ? AppTheme.dim(scheme) : AppTheme.hairline(scheme), lineWidth: 1)
@@ -386,7 +393,7 @@ struct RootView: View {
             }
             .padding(.horizontal, 14)
             .frame(minHeight: 36)
-            .background(versionPillHovering ? AppTheme.canvas(scheme) : .clear)
+            .background(versionPillHovering ? AppTheme.sidebarHover(scheme) : .clear)
             .overlay(
                 RoundedRectangle(cornerRadius: 18)
                     .stroke(versionPillHovering ? AppTheme.dim(scheme) : AppTheme.hairline(scheme), lineWidth: 1)
@@ -508,7 +515,7 @@ struct RootView: View {
         let bg: Color = disabled
             ? (active ? AppTheme.hairline(scheme) : .clear)
             : (active ? (autoTradeHovering ? AppTheme.successHover(scheme) : AppTheme.success(scheme))
-                      : (autoTradeHovering ? AppTheme.canvas(scheme) : .clear))
+                      : (autoTradeHovering ? AppTheme.sidebarHover(scheme) : .clear))
         let border: Color = disabled
             ? (active ? .clear : AppTheme.divider(scheme))
             : (active ? .clear : (autoTradeHovering ? AppTheme.dim(scheme) : AppTheme.hairline(scheme)))

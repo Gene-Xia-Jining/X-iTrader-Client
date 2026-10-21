@@ -29,6 +29,9 @@ public sealed partial class TradingLogPage : Page
     private MainWindow Host => _theme.Host;
     private Palette Palette => _theme.Palette;
 
+    /// <summary>显示顺序：默认最新在前，切换后最新在后</summary>
+    private bool _newestFirst = true;
+
     private SolidColorBrush Brush(Windows.UI.Color color) => _theme.Brush(color);
 
     private static Windows.UI.Color Hex(uint value) => ThemedPage.Hex(value);
@@ -43,9 +46,6 @@ public sealed partial class TradingLogPage : Page
 
     private void ApplyPalette()
     {
-        PageTitle.Foreground = Brush(Palette.Ink);
-        Subtitle.Foreground = Brush(Palette.Dim);
-        Hint.Foreground = Brush(Palette.Dim);
         LogScroll.Background = Brush(Palette.LogBg);
         LogScroll.BorderBrush = Brush(Palette.Hairline);
         RebuildLogs();
@@ -76,14 +76,21 @@ public sealed partial class TradingLogPage : Page
             case NotifyCollectionChangedAction.Add when e.NewItems is not null:
                 foreach (var item in e.NewItems.OfType<LogLine>())
                 {
-                    LogText.Blocks.Add(BuildLine(item));
+                    // 块顺序需与显示顺序一致：最新在前时新日志插到顶部
+                    if (_newestFirst)
+                    {
+                        LogText.Blocks.Insert(0, BuildLine(item));
+                    }
+                    else
+                    {
+                        LogText.Blocks.Add(BuildLine(item));
+                    }
                 }
-                // 超过上限时 AppState 会移除最旧的若干条，Blocks 比 Logs 多出的就是需要裁掉的量
-                while (LogText.Blocks.Count > State.Logs.Count)
-                {
-                    LogText.Blocks.RemoveAt(0);
-                }
-                LogScroll.ChangeView(null, LogScroll.ScrollableHeight, null);
+                TrimBlocks();
+                ScrollToNewest();
+                break;
+            case NotifyCollectionChangedAction.Remove:
+                TrimBlocks();
                 break;
             case NotifyCollectionChangedAction.Reset:
                 RebuildLogs();
@@ -94,12 +101,30 @@ public sealed partial class TradingLogPage : Page
     private void RebuildLogs()
     {
         LogText.Blocks.Clear();
-        foreach (var line in State.Logs)
+        foreach (var line in OrderedLogs())
         {
             LogText.Blocks.Add(BuildLine(line));
         }
-        LogScroll.ChangeView(null, LogScroll.ScrollableHeight, null);
+        ScrollToNewest();
     }
+
+    private IEnumerable<LogLine> OrderedLogs() =>
+        _newestFirst ? State.Logs.Reverse() : State.Logs;
+
+    /// <summary>
+    /// 超过上限时 AppState 会移除最旧的若干条：被移除的一端随显示顺序变化
+    /// （最新在前时最旧的在末尾），Blocks 比 Logs 多出的就是需要裁掉的量。
+    /// </summary>
+    private void TrimBlocks()
+    {
+        while (LogText.Blocks.Count > State.Logs.Count)
+        {
+            LogText.Blocks.RemoveAt(_newestFirst ? LogText.Blocks.Count - 1 : 0);
+        }
+    }
+
+    private void ScrollToNewest() =>
+        LogScroll.ChangeView(null, _newestFirst ? 0 : LogScroll.ScrollableHeight, null);
 
     /// <summary>一行日志 = 一个 Paragraph，段后留 2px（原来每行 TextBlock 的垂直 padding）</summary>
     private Paragraph BuildLine(LogLine line) => new()
@@ -114,6 +139,13 @@ public sealed partial class TradingLogPage : Page
             },
         },
     };
+
+    private void OnToggleOrderClick(object sender, RoutedEventArgs e)
+    {
+        _newestFirst = !_newestFirst;
+        OrderButton.Content = _newestFirst ? "最新在前" : "最新在后";
+        RebuildLogs();
+    }
 
     private void OnClearClick(object sender, RoutedEventArgs e) => State.Logs.Clear();
 }

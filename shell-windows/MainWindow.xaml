@@ -104,9 +104,18 @@
                             </StackPanel>
                         </Grid>
                     </Border>
-                    <Button x:Name="ThemeButton" Click="OnThemeToggleClick" Content="深色" />
-                    <Button x:Name="RefreshButton" Click="OnRefreshClick" Content="刷新" />
-                    <Button x:Name="QuitButton" Click="OnQuitClick" Content="退出" />
+                    <Button x:Name="ThemeButton" Click="OnThemeToggleClick" Content="深色"
+                            Style="{StaticResource TopBarButtonStyle}"
+                            PointerEntered="OnTopBarButtonPointerEntered"
+                            PointerExited="OnTopBarButtonPointerExited" />
+                    <Button x:Name="RefreshButton" Click="OnRefreshClick" Content="刷新"
+                            Style="{StaticResource TopBarButtonStyle}"
+                            PointerEntered="OnTopBarButtonPointerEntered"
+                            PointerExited="OnTopBarButtonPointerExited" />
+                    <Button x:Name="QuitButton" Click="OnQuitClick" Content="退出"
+                            Style="{StaticResource TopBarButtonStyle}"
+                            PointerEntered="OnTopBarButtonPointerEntered"
+                            PointerExited="OnTopBarButtonPointerExited" />
                 </StackPanel>
             </Grid>
         </Border>

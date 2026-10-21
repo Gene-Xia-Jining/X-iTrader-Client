@@ -39,6 +39,54 @@
             </Style>
 
             <!--
+              顶栏普通按钮（深浅色 / 刷新 / 退出）：尺寸沿用默认 Button，
+              但模板退化成纯 Border + ContentPresenter —— 默认模板的 PointerOver
+              会叠加主题灰底，盖掉代码按 Palette 设的悬停色（与侧栏同一个坑）。
+              悬停配色在 MainWindow 里按 Palette.SidebarHover/Dim 设置。
+            -->
+            <Style x:Key="TopBarButtonStyle" TargetType="Button">
+                <Setter Property="MinHeight" Value="32" />
+                <Setter Property="Padding" Value="11,5" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="4" />
+                <Setter Property="FontSize" Value="14" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="{TemplateBinding CornerRadius}"
+                                    Padding="{TemplateBinding Padding}">
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal" />
+                                        <!-- 悬停/按下的颜色由代码设，这里只留状态占位 -->
+                                        <VisualState x:Name="PointerOver" />
+                                        <VisualState x:Name="Pressed" />
+                                        <VisualState x:Name="Disabled">
+                                            <Storyboard>
+                                                <DoubleAnimation Storyboard.TargetName="ContentPresenter"
+                                                                 Storyboard.TargetProperty="Opacity"
+                                                                 To="0.4" Duration="0" />
+                                            </Storyboard>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                                <ContentPresenter x:Name="ContentPresenter"
+                                                  Content="{TemplateBinding Content}"
+                                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                  Foreground="{TemplateBinding Foreground}"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center" />
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!--
               侧栏导航项：Button 退化成纯 Border + 文字，选中/悬停底色与描边由代码
               按 Palette 设置（外观对齐交易记录页的「模拟/实盘」分段胶囊）。
               保留 Button 是为了键盘焦点与 Space/Enter 激活，原生按钮模板会叠

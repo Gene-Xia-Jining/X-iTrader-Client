@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
+using XTrader.Shell.Core;
 using XTrader.Shell.State;
 using XTrader.Shell.Theme;
 using XTrader.Shell.Tray;
@@ -47,6 +48,8 @@ public sealed partial class MainWindow : Window
     private string _currentTag = "";
     /// <summary>鼠标悬停中的导航项标签：主题切换后重刷配色时仍要保留悬停态</summary>
     private readonly HashSet<string> _hoveredTags = [];
+    /// <summary>鼠标悬停中的顶栏按钮：主题切换后重刷配色时仍要保留悬停态</summary>
+    private readonly HashSet<Button> _hoveredTopBarButtons = [];
 
     /// <summary>路由标签与标题（顺序与 mac 壳的 AppRoute 一致）</summary>
     private static readonly (string Tag, string Title)[] _routes =
@@ -67,6 +70,9 @@ public sealed partial class MainWindow : Window
     private static readonly (string Tag, string Title)[] _navRoutes =
         _routes.Where(r => r.Tag != "token").ToArray();
 
+    /// <summary>主题偏好存储键：持久化到 ShellPrefs，重启后保持</summary>
+    private const string ThemePrefKey = "theme_is_dark";
+
     /// <summary>当前是否深色（页面据此取色）</summary>
     public bool IsDark { get; private set; }
 
@@ -81,7 +87,10 @@ public sealed partial class MainWindow : Window
         Title = "iTrader 智能交易系统";
         SetInitialSize(1020, 760);
 
-        IsDark = Application.Current.RequestedTheme == ApplicationTheme.Dark;
+        var savedTheme = ShellPrefs.Get(ThemePrefKey);
+        IsDark = savedTheme is not null
+            ? savedTheme is "1" or "true"
+            : Application.Current.RequestedTheme == ApplicationTheme.Dark;
         BuildNav();
         ApplyThemeToChrome();
 
@@ -279,6 +288,7 @@ public sealed partial class MainWindow : Window
     private void OnThemeToggleClick(object sender, RoutedEventArgs e)
     {
         IsDark = !IsDark;
+        ShellPrefs.Set(ThemePrefKey, IsDark ? "1" : "0");
         ApplyThemeToChrome();
         ThemeChanged?.Invoke();
     }
@@ -295,7 +305,7 @@ public sealed partial class MainWindow : Window
     {
         var palette = ThemeTokens.For(IsDark);
         ServerPill.BorderBrush = new SolidColorBrush(palette.Dim);
-        ServerPill.Background = new SolidColorBrush(palette.Canvas);
+        ServerPill.Background = new SolidColorBrush(palette.SidebarHover);
     }
 
     private void OnServerPillPointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
@@ -310,7 +320,7 @@ public sealed partial class MainWindow : Window
     {
         var palette = ThemeTokens.For(IsDark);
         VersionButton.BorderBrush = new SolidColorBrush(palette.Dim);
-        VersionButton.Background = new SolidColorBrush(palette.Canvas);
+        VersionButton.Background = new SolidColorBrush(palette.SidebarHover);
     }
 
     private void OnVersionPillPointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
@@ -318,6 +328,38 @@ public sealed partial class MainWindow : Window
         var palette = ThemeTokens.For(IsDark);
         VersionButton.BorderBrush = new SolidColorBrush(palette.Hairline);
         VersionButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+    }
+
+    /// <summary>
+    /// 顶栏普通按钮（深浅色 / 刷新 / 退出）悬停：与侧栏导航项同一套反馈
+    /// （SidebarHover 底色 + 描边提亮）。顶栏是 Chrome 底色，Canvas 与它几乎同色，
+    /// 拿 Canvas 做悬停底等于没有反馈。
+    /// </summary>
+    private void OnTopBarButtonPointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (sender is Button button)
+        {
+            _hoveredTopBarButtons.Add(button);
+            ApplyTopBarButtonState(button);
+        }
+    }
+
+    private void OnTopBarButtonPointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (sender is Button button)
+        {
+            _hoveredTopBarButtons.Remove(button);
+            ApplyTopBarButtonState(button);
+        }
+    }
+
+    private void ApplyTopBarButtonState(Button button)
+    {
+        var palette = ThemeTokens.For(IsDark);
+        var hovering = _hoveredTopBarButtons.Contains(button);
+        button.Background = new SolidColorBrush(
+            hovering ? palette.SidebarHover : Microsoft.UI.Colors.Transparent);
+        button.BorderBrush = new SolidColorBrush(hovering ? palette.Dim : palette.Hairline);
     }
 
     /// <summary>
@@ -1002,6 +1044,11 @@ public sealed partial class MainWindow : Window
         AutoTradeHelpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
         AutoTradePill.BorderBrush = new SolidColorBrush(palette.Hairline);
         AutoTradeProgress.Fill = new SolidColorBrush(palette.Success);
+        // 顶栏普通按钮：默认态透明底 + 发丝描边，悬停中的保持悬停配色（换主题不丢态）
+        foreach (var button in new[] { ThemeButton, RefreshButton, QuitButton })
+        {
+            ApplyTopBarButtonState(button);
+        }
         QuitButton.Foreground = new SolidColorBrush(palette.Danger);
         ThemeButton.Content = IsDark ? "浅色" : "深色";
 

@@ -7,24 +7,18 @@
     <Grid Padding="24" RowSpacing="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0" Spacing="4">
-            <TextBlock x:Name="PageTitle" Text="系统日志" FontSize="22" FontWeight="SemiBold" />
-            <TextBlock x:Name="Subtitle" Text="实时查看客户端连接、信号、下单和异常信息。" />
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8"
+                    HorizontalAlignment="Right">
+            <Button x:Name="OrderButton" Content="最新在前" Click="OnToggleOrderClick" />
+            <Button Content="清空日志" Click="OnClearClick" />
         </StackPanel>
-
-        <Grid Grid.Row="1">
-            <TextBlock x:Name="Hint" Text="本地会话日志，保存在内存中" HorizontalAlignment="Left"
-                       VerticalAlignment="Center" />
-            <Button Content="清空日志" Click="OnClearClick" HorizontalAlignment="Right" />
-        </Grid>
 
         <!-- 必须是单个 RichTextBlock：每行一个 TextBlock 时选中范围无法跨行。
              选中文本后由 WinUI 自带的选择浮动菜单 / Ctrl+C 复制 -->
-        <ScrollViewer x:Name="LogScroll" Grid.Row="2" BorderThickness="1"
+        <ScrollViewer x:Name="LogScroll" Grid.Row="1" BorderThickness="1"
                       CornerRadius="11" Padding="12"
                       VerticalScrollBarVisibility="Auto">
             <RichTextBlock x:Name="LogText" FontFamily="Consolas" FontSize="12"

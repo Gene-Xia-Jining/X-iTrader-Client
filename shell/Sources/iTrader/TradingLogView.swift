@@ -5,22 +5,27 @@ import SwiftUI
 struct TradingLogView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var scheme
+    /// 日志显示顺序：默认最新在前，按钮切到最新在后
+    @State private var newestFirst = true
+
+    private var orderedLogs: [LogLine] {
+        newestFirst ? Array(appState.logs.reversed()) : appState.logs
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            PageHeader(title: "系统日志", subtitle: "实时查看客户端连接、信号、下单和异常信息。")
-
             HStack(spacing: 10) {
-                Text("本地会话日志，保存在内存中")
-                    .font(AppTheme.dimFont)
-                    .foregroundColor(AppTheme.dim(scheme))
                 Spacer()
+                AppButton(newestFirst ? "最新在前" : "最新在后", variant: .secondary) {
+                    newestFirst.toggle()
+                }
                 AppButton("清空日志", variant: .secondary) { appState.logs.removeAll() }
             }
 
             LogTextView(
-                lines: appState.logs,
-                dark: scheme == .dark
+                lines: orderedLogs,
+                dark: scheme == .dark,
+                newestFirst: newestFirst
             )
             // NSScrollView 没有固有尺寸，不显式撑满就会塌成内容高度
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -43,6 +48,8 @@ struct TradingLogView: View {
 private struct LogTextView: NSViewRepresentable {
     let lines: [LogLine]
     let dark: Bool
+    /// 最新在前时新日志出现在顶部，滚动方向随之相反
+    let newestFirst: Bool
 
     /// Qt QTextEdit 追加式时间戳 [HH:mm:ss]
     private static let timeFormatter: DateFormatter = {
@@ -80,8 +87,12 @@ private struct LogTextView: NSViewRepresentable {
         // 文本未变就不重设，避免每次状态刷新都清掉用户的选区
         if textView.textStorage?.string != attributed.string {
             textView.textStorage?.setAttributedString(attributed)
-            // 追加式日志：内容变化后滚到底部，与 Qt logView 行为一致
-            textView.scrollToEndOfDocument(nil)
+            // 追加式日志：内容变化后滚到最新一端（顺序切换后即为顶部）
+            if newestFirst {
+                textView.scrollToBeginningOfDocument(nil)
+            } else {
+                textView.scrollToEndOfDocument(nil)
+            }
         }
     }
 
