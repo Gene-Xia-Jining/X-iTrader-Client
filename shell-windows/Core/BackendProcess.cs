@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -46,6 +47,23 @@ internal sealed class BackendProcess : IDisposable
     internal string WorkDir { get; }
 
     internal string InfoFile => Path.Combine(WorkDir, "data", "backend.json");
+
+    /// <summary>后端最近若干行输出（stdout+stderr），启动失败时用于展示真正原因。</summary>
+    internal string OutputTail
+    {
+        get
+        {
+            lock (_outputLock)
+            {
+                return string.Join(Environment.NewLine, _output);
+            }
+        }
+    }
+
+    private readonly object _outputLock = new();
+    private readonly Queue<string> _output = new();
+    /// <summary>只保留末尾若干行：排障够用，避免长期运行堆积无限增长</summary>
+    private const int OutputTailLines = 20;
 
     internal BackendInfo? Info { get; private set; }
 
@@ -128,9 +146,11 @@ internal sealed class BackendProcess : IDisposable
 
         if (!verbose)
         {
-            // 重定向后必须消费，否则管道写满会阻塞后端
-            proc.OutputDataReceived += static (_, _) => { };
-            proc.ErrorDataReceived += static (_, _) => { };
+            // 重定向后必须消费，否则管道写满会阻塞后端。输出不能直接丢弃：
+            // 后端若在写出 backend.json 前就退出（缺依赖、路径不可写等），
+            // 唯一线索就是 stderr，丢了就只能看到「后端进程已退出」在循环里刷屏。
+            proc.OutputDataReceived += (_, e) => CaptureOutput(e.Data);
+            proc.ErrorDataReceived += (_, e) => CaptureOutput(e.Data);
         }
 
         proc.Start();
@@ -143,7 +163,13 @@ internal sealed class BackendProcess : IDisposable
 
         if (await WaitForInfoAsync(TimeSpan.FromSeconds(15), ct) is not { } found)
         {
-            throw new BackendException($"等待 {InfoFile} 超时，后端可能启动失败");
+            // 把后端自己的输出带出去：崩溃、缺依赖、data 目录不可写都会在这里
+            // 留下痕迹，没有它只能在界面上看到一句「等待超时」
+            var tail = OutputTail;
+            throw new BackendException(
+                tail.Length > 0
+                    ? $"等待 {InfoFile} 超时，后端启动失败：{Environment.NewLine}{tail}"
+                    : $"等待 {InfoFile} 超时，后端可能启动失败（后端无输出）");
         }
         Info = found;
         return found;
@@ -204,6 +230,23 @@ internal sealed class BackendProcess : IDisposable
     }
 
     private BackendInfo? ReadInfo() => ReadInfoFrom(InfoFile);
+
+    /// <summary>收后端输出末尾若干行。在后台读取线程上调用。</summary>
+    private void CaptureOutput(string? line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return;
+        }
+        lock (_outputLock)
+        {
+            _output.Enqueue(line);
+            while (_output.Count > OutputTailLines)
+            {
+                _output.Dequeue();
+            }
+        }
+    }
 
     private async Task<BackendInfo?> WaitForInfoAsync(TimeSpan timeout, CancellationToken ct)
     {

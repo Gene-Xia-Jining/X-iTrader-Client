@@ -36,6 +36,64 @@ class _Connection:
     authed: bool = False
 
 
+def _pid_alive(pid: int) -> bool:
+    """判断 pid 是否仍存活。跨平台，无法判定时返回 True（宁可保守拒绝启动）。
+
+    Windows 上不能用 os.kill(pid, 0) 探测：它走 GenerateConsoleCtrlEvent，
+    对不存在的 pid 也可能不抛错，会把上次崩溃遗留的 backend.json 误判成
+    「后端仍在运行」，导致新后端每次启动都直接退出——界面表现为
+    「后端进程已退出，正在重启」无限循环。
+    """
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            # SYNCHRONIZE 足以 WaitForSingleObject；进程不存在时 OpenProcess 直接失败
+            SYNCHRONIZE = 0x00100000
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            ERROR_INVALID_PARAMETER = 87
+            WAIT_TIMEOUT = 258
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+            kernel32.WaitForSingleObject.restype = wintypes.DWORD
+            kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+            kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        except (ImportError, AttributeError, OSError):
+            return True  # 拿不到 Win32 接口：判定不出就按存活处理，不误清活后端的文件
+        handle = None
+        try:
+            handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+            if not handle:
+                # 权限受限时 SYNCHRONIZE 可能被拒，退一步用查询权限再试
+                handle = kernel32.OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+                )
+            if not handle:
+                # 只有「pid 不存在」才判死；权限不足说明进程还在，按存活处理，
+                # 否则会误清后端仍在使用的 backend.json，放任两个后端同时写库
+                return ctypes.get_last_error() != ERROR_INVALID_PARAMETER
+            # 0 = WAIT_OBJECT_0（已退出），WAIT_TIMEOUT = 仍在运行
+            return kernel32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
+        except OSError:
+            return True  # 判定失败：保守当作存活，不掩盖真冲突
+        finally:
+            if handle:
+                kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # 进程存在但属于其它用户
+    except OSError:
+        return True
+
+
 class RpcServer:
     def __init__(self, service, routes: dict, workdir: Path, host: str = "127.0.0.1"):
         self._service = service
@@ -102,13 +160,12 @@ class RpcServer:
                 # 半写入/损坏或刚被删掉：当作残留，直接覆盖
                 break
             stale_port = info.get("port", stale_port)
-            # Windows 上 os.kill(pid, 0) 不是存活探测（会走 GenerateConsoleCtrlEvent），
-            # 因此这里只认「文件是否被旧后端删掉」，不依赖 pid 探测。
-            if pid > 0 and sys.platform != "win32":
-                try:
-                    os.kill(pid, 0)
-                except OSError:
-                    break  # 进程已死：残留文件，可覆盖
+            # Windows 上 os.kill(pid, 0) 不是存活探测（会走 GenerateConsoleCtrlEvent，
+            # 对已退出的 pid 也会「成功」），改用 OpenProcess + WaitForSingleObject
+            # 这类真实存活判定。判定不出结果时按「仍存活」处理：宁可拒绝启动，
+            # 也不要让两个后端同时操作 SQLite 与 TqApi。
+            if pid > 0 and not _pid_alive(pid):
+                break  # 进程已死：残留文件，可覆盖
             if time.monotonic() >= deadline:
                 raise RuntimeError(
                     f"后端已在运行 (pid={pid}, port={stale_port})，"

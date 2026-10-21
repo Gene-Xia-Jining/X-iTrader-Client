@@ -700,6 +700,13 @@ public sealed class AppState : INotifyPropertyChanged
             return;
         }
         AppendLog("ERROR", "后端进程已退出，正在重启…");
+        // 后端在写出 backend.json 前就崩溃时，它的 stderr 是唯一线索；
+        // 没有这行，界面上只会无限重复「后端进程已退出」，无从定位
+        var tail = _backend?.OutputTail;
+        if (!string.IsNullOrWhiteSpace(tail))
+        {
+            AppendLog("ERROR", $"后端输出：{tail}");
+        }
         _ = Task.Run(() => ConnectLoopAsync(_lifetime.Token));
     }
 

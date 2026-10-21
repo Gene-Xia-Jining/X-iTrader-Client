@@ -57,6 +57,29 @@ class RestartTakeoverTest(unittest.TestCase):
         self.assertFalse(self.info.exists())
         self.assertGreaterEqual(probes["n"], 2)
 
+    def test_dead_pid_residue_is_taken_over(self):
+        """残留 backend.json（pid 已死）必须被接管，而不是拒绝启动。
+
+        Windows 上曾不探测 pid，残留文件会让每个新后端启动即退出，
+        界面表现为「后端进程已退出，正在重启」无限循环。
+        """
+        self._write_info(999999)
+        env = {k: v for k, v in os.environ.items() if k != RESTART_ENV}
+        with mock.patch.dict(os.environ, env, clear=True), \
+             mock.patch.object(rpc, "_pid_alive", return_value=False):
+            self._server()._reject_stale_backend()
+
+        self.assertFalse(self.info.exists())
+
+    def test_alive_pid_is_still_rejected_on_any_platform(self):
+        """存活判定必须跨平台生效：真冲突仍要拒绝，不能被残留清理逻辑放过。"""
+        self._write_info(os.getpid())
+        env = {k: v for k, v in os.environ.items() if k != RESTART_ENV}
+        with mock.patch.dict(os.environ, env, clear=True), \
+             mock.patch.object(rpc, "_pid_alive", return_value=True):
+            with self.assertRaises(RuntimeError):
+                self._server()._reject_stale_backend()
+
 
 if __name__ == "__main__":
     unittest.main()
