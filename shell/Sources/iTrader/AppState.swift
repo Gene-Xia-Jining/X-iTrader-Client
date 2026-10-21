@@ -360,7 +360,7 @@ final class AppState: ObservableObject {
                     pendingUpdateMode = ""
                     updateInstalling = false
                 }
-                try await refreshAll()
+                await refreshAll()
                 checkUpdateOnConnect()
                 return
             } catch {
