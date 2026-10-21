@@ -305,6 +305,21 @@ public sealed partial class MainWindow : Window
         ServerPill.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
     }
 
+    /// <summary>版本胶囊悬停：与服务器胶囊同一套反馈（描边提亮 + 淡底），暗示整颗可点</summary>
+    private void OnVersionPillPointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        var palette = ThemeTokens.For(IsDark);
+        VersionButton.BorderBrush = new SolidColorBrush(palette.Dim);
+        VersionButton.Background = new SolidColorBrush(palette.Canvas);
+    }
+
+    private void OnVersionPillPointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        var palette = ThemeTokens.For(IsDark);
+        VersionButton.BorderBrush = new SolidColorBrush(palette.Hairline);
+        VersionButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+    }
+
     /// <summary>
     /// 服务器状态胶囊点击：弹出服务器信息（地址、连通性、探测方式、失败原因）。
     /// 连通性读后端心跳（每 10 秒探测 /api/health 后推送），不额外发请求；
@@ -903,7 +918,7 @@ public sealed partial class MainWindow : Window
         RefreshButton.Content = _state.SymbolsFetching || _state.StrategiesFetching ? "刷新中…" : "刷新";
 
         var online = engine.ServerOnline;
-        ServerStatusText.Text = $"服务器状态：{(online ? "已连接" : "未连接")}";
+        ServerStatusText.Text = $"服务器：{(online ? "已连接" : "未连接")}";
         ServerStatusText.Foreground = new SolidColorBrush(
             online ? ThemeTokens.StatusGreen : ThemeTokens.StatusRed);
 
@@ -979,6 +994,9 @@ public sealed partial class MainWindow : Window
         TopBar.BorderBrush = new SolidColorBrush(palette.Hairline);
         ServerPill.BorderBrush = new SolidColorBrush(palette.Hairline);
         ServerPill.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        // 切主题时指针可能正悬在版本胶囊上：hover 态一并复位，避免残留旧主题的底色
+        VersionButton.BorderBrush = new SolidColorBrush(palette.Hairline);
+        VersionButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
         AutoTradeHelpButton.Foreground = new SolidColorBrush(palette.Primary);
         AutoTradeHelpButton.BorderBrush = new SolidColorBrush(palette.Hairline);
         AutoTradeHelpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);

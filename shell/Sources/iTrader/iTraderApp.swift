@@ -168,6 +168,8 @@ struct RootView: View {
     @State private var versionHintToken = 0
     /// 服务器状态胶囊的悬停态（胶囊本身即弹窗入口，不再单独放问号）
     @State private var serverPillHovering = false
+    /// 版本胶囊的悬停态
+    @State private var versionPillHovering = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -261,6 +263,14 @@ struct RootView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
         .background(AppTheme.chrome(scheme))
+        .overlay(alignment: .top) {
+            // 标题栏（红绿灯那一行）与顶栏同为 chrome 底色，不画线会连成一片。
+            // 线位于窗口最顶端，放开命中测试免得1px 高度吃掉标题栏的拖动热区
+            Rectangle()
+                .fill(AppTheme.hairline(scheme))
+                .frame(height: 1)
+                .allowsHitTesting(false)
+        }
         .overlay(alignment: .bottom) {
             Rectangle().fill(AppTheme.hairline(scheme)).frame(height: 1)
         }
@@ -340,7 +350,7 @@ struct RootView: View {
     private var serverStatusPill: some View {
         let color = serverConnected ? AppTheme.statusGreen : AppTheme.statusRed
         return Button { showServerInfo = true } label: {
-            Text("服务器状态：\(serverConnected ? "已连接" : "未连接")")
+            Text("服务器：\(serverConnected ? "已连接" : "未连接")")
                 .font(AppTheme.bodyFont.weight(.semibold))
                 .foregroundColor(color)
                 .padding(.horizontal, 22)
@@ -376,9 +386,10 @@ struct RootView: View {
             }
             .padding(.horizontal, 14)
             .frame(minHeight: 36)
+            .background(versionPillHovering ? AppTheme.canvas(scheme) : .clear)
             .overlay(
                 RoundedRectangle(cornerRadius: 18)
-                    .stroke(AppTheme.hairline(scheme), lineWidth: 1)
+                    .stroke(versionPillHovering ? AppTheme.dim(scheme) : AppTheme.hairline(scheme), lineWidth: 1)
             )
             // 进度条叠在胶囊底部，随外层 cornerRadius 一起被裁成圆角
             .overlay(alignment: .bottom) { downloadProgressBar }
@@ -386,6 +397,7 @@ struct RootView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { versionPillHovering = $0 }
         .pointerCursor()
         .help(versionPillTooltip)
     }

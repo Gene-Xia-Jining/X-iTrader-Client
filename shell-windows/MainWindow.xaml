@@ -11,17 +11,29 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 顶部操作栏：版本胶囊 + 服务器状态 / 自动交易开关 / 深色浅色 / 刷新 / 退出 -->
-        <Border x:Name="TopBar" Grid.Row="0" BorderThickness="0,0,0,1" Padding="16,10">
+        <!-- 顶部操作栏：版本胶囊 + 服务器状态 / 自动交易开关 / 深色浅色 / 刷新 / 退出。
+             上下各一条发丝线：标题栏与顶栏同为白底，只有下边线会连成一片 -->
+        <Border x:Name="TopBar" Grid.Row="0" BorderThickness="0,1,0,1" Padding="16,10">
             <Grid>
                 <StackPanel Orientation="Horizontal" Spacing="10"
                             HorizontalAlignment="Left" VerticalAlignment="Center">
                     <!-- 版本胶囊：平时显示版本号；点击检查更新，发现新版本先确认。
                          下载中胶囊底部显示进度条，此时点击即取消下载 -->
-                    <Button x:Name="VersionButton" VerticalAlignment="Center" Click="OnVersionClick">
+                    <Button x:Name="VersionButton"
+                            VerticalAlignment="Center"
+                            MinHeight="36"
+                            MinWidth="0"
+                            Padding="14,0"
+                            BorderThickness="1"
+                            CornerRadius="18"
+                            Background="Transparent"
+                            Style="{StaticResource CapsuleButtonStyle}"
+                            Click="OnVersionClick"
+                            PointerEntered="OnVersionPillPointerEntered"
+                            PointerExited="OnVersionPillPointerExited">
                         <Grid>
                             <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                <TextBlock x:Name="VersionText" Text="-" VerticalAlignment="Center" />
+                                <TextBlock x:Name="VersionText" Text="-" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" />
                                 <Ellipse x:Name="VersionBadge"
                                          Width="7" Height="7"
                                          VerticalAlignment="Top"
@@ -52,7 +64,7 @@
                             PointerExited="OnServerPillPointerExited"
                             ToolTipService.ToolTip="点击查看服务器信息">
                         <TextBlock x:Name="ServerStatusText"
-                                   Text="服务器状态：未连接"
+                                   Text="服务器：未连接"
                                    FontSize="15"
                                    FontWeight="SemiBold"
                                    VerticalAlignment="Center" />
