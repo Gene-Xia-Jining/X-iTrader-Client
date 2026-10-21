@@ -668,6 +668,9 @@ public sealed partial class SimulationPage : Page
             FontSize = 15,
             Foreground = Brush(Palette.Dim),
             TextWrapping = TextWrapping.Wrap,
+            // 答案多为长段落，默认行距偏挤；26 ≈ 15px 自然行高 + 6，与 mac 的 lineSpacing(6) 对齐
+            LineHeight = 26,
+            LineStackingStrategy = LineStackingStrategy.MaxHeight,
             IsTextSelectionEnabled = true,
         });
 

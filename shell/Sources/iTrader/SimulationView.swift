@@ -309,6 +309,8 @@ struct SimulationView: View {
             Text(item.answer)
                 .font(AppTheme.bodyFont)
                 .foregroundColor(AppTheme.dim(scheme))
+                // 答案多为长段落，默认行距偏挤
+                .lineSpacing(6)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         }
