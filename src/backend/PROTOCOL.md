@@ -53,6 +53,7 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 | `config_changed` | `{}` | 配置/账户已保存（引擎运行中则下次启动生效） |
 | `token_status` | `{status, records: [...]}` | token 审批状态变化；后台轮询领取成功后广播，壳据此刷新 Token 页 |
 | `update_progress` | `{pct, received, total}` | pct=-1 表示总大小未知 |
+| `engine_start_progress` | `{stage, text, step, total}` | `engine.start`/`engine.stop` 执行中的阶段进度（该调用返回前过程状态无从获取）。`stage` 依次为 `server`/`accounts`/`tqsdk`/`engines`（stop 为 `stop`）；`text` 是可直接展示的中文阶段文案，壳自行加前缀；`step/total` 为阶段内完成数，`total=0` 表示该阶段不细分（不显示进度条）。刻意不给跨阶段总百分比——各阶段耗时差异极大，总百分比会长时间停在同一数字上 |
 | `update_ready` | `{kind, mode}` | kind 是给人看的中文包名（"差量更新包"/"完整更新包"）；mode 为 `"patch"`/`"full"`，壳据此决定装完是重连还是退出 |
 | `update_failed` / `update_cancelled` | `{message}` / `{}` | |
 | `backend_stopping` | `{reason: "quit"\|"update"}` | 后端即将退出，壳应断开并等待 |
@@ -74,8 +75,8 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 | `tokens.request` | `{description?}` | `{status}` 提交申请后立即触发一次后台领取轮询 |
 | `tokens.delete` | `{token_id}` | `{status, records, active_token_id, cached_token_ids}` 删除一条申请记录后返回刷新后的状态；删掉的若是当前生效记录，本地 token 与该记录的凭据缓存一并清除。记录不存在时抛错 |
 | `tokens.switch` | `{token_id}` | `{status, records, active_token_id, cached_token_ids}` 把该记录的 Token 设为当前使用：优先取本地缓存，没有则向服务器定向领取；两者都不可用时抛错。切换后若引擎在运行会被停止（信号流的请求头固定了旧 token），需重新开启自动交易 |
-| `engine.start` | - | engines 状态。启动前预检（服务器连通、已启用账户字段齐全（品种、策略必选）、本地 token、天勤握手）；任一项不过抛 `EngineStartBlockedError`（`data.issues` 为问题列表），不置 `auto_trade`、不启动任何引擎 |
-| `engine.stop` | - | engines 状态。等价 UI 的"自动交易"关 |
+| `engine.start` | - | engines 状态。启动前预检（服务器连通、已启用账户字段齐全（品种、策略必选）、本地 token、天勤握手）；任一项不过抛 `EngineStartBlockedError`（`data.issues` 为问题列表），不置 `auto_trade`、不启动任何引擎。执行中通过 `engine_start_progress` 事件推送阶段进度 |
+| `engine.stop` | - | engines 状态。等价 UI 的"自动交易"关；执行中同样推送 `engine_start_progress`（`stage: "stop"`） |
 | `engine.set_auto_trade` | `{value}` | `{}` 只改自动执行标志，不动引擎 |
 | `engine.status` | - | `{auto_trade, trading_active, server_online, server_error, accounts: [{account_id, running, server_connected}]}`；`server_online` 为后端心跳探测的 iTrader 服务器连通性（启动即测、每 10s 周期、保存配置后立即重测），与引擎是否运行无关；`server_error` 是最近一次探测失败的可读原因（在线时为空串），供界面展示 |
 | `trading.records` | `{kind?: "sim"\|"live", account_id?}` | `{accounts: [{account_id, kind, label, error?, account, positions, orders, trades}]}` 账户当日交易数据快照（字段见下）。不传 kind / account_id 时返回全部已配置账户；多账户并发取数，单账户失败只体现在该项 `error` |

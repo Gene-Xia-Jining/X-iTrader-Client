@@ -230,9 +230,13 @@ struct RootView: View {
 
     // ---- 顶部栏：品牌标题 + 自动交易/主题/退出（QFrame#head）----
 
-    /// 启动检查期间按钮显示"检查中…"，让用户知道预检（含天勤握手）在跑
+    /// 启动检查期间按钮显示当前阶段文案（如「自动交易：天勤握手 1/2…」），
+    /// 让用户知道预检里的天勤握手在跑，而不是以为按钮没反应
     private var startButtonTitle: String {
-        if appState.startChecking { return "自动交易：检查中…" }
+        if appState.startChecking {
+            let text = appState.startProgressText
+            return text.isEmpty ? "自动交易：检查中…" : "自动交易：\(text)"
+        }
         return appState.engineStatus.tradingActive ? "自动交易：开" : "自动交易：关"
     }
 
@@ -515,7 +519,27 @@ struct RootView: View {
             RoundedRectangle(cornerRadius: 18)
                 .stroke(border, lineWidth: active || disabled ? 0 : 1)
         )
+        // 进度条叠在胶囊底部，随外层 cornerRadius 一起被裁成圆角（同版本胶囊）
+        .overlay(alignment: .bottom) { startProgressBar }
         .cornerRadius(18)
+    }
+
+    /// 启停进度：阶段内有计数时按已完成比例延伸，无计数则只保留文字（如「检查服务器连通…」）
+    @ViewBuilder
+    private var startProgressBar: some View {
+        if appState.startChecking, appState.startProgressTotal > 0 {
+            GeometryReader { geo in
+                Rectangle()
+                    .fill(AppTheme.primary(scheme))
+                    .frame(
+                        width: geo.size.width
+                            * CGFloat(appState.startProgressStep) / CGFloat(appState.startProgressTotal),
+                        height: geo.size.height
+                    )
+            }
+            .frame(height: 3)
+            .allowsHitTesting(false)
+        }
     }
 
     /// 与后端 _preflight_start_checks 的实际检查项逐条对应，改预检时同步这里
@@ -557,7 +581,10 @@ struct RootView: View {
     }
 }
 
-// MARK: - 侧边栏导航按钮（SidebarButton：高 44、圆角 8、文字左对齐）
+// MARK: - 侧边栏导航按钮（SidebarButton：高 44、胶囊、文字左对齐）
+/// 外观对齐交易记录页的「模拟交易 / 实盘交易」分段胶囊：
+/// 选中为实心主题蓝 + 白字半粗，未选中为透明底 + 发丝描边，
+/// 悬停时底色与描边各提一档（同 AppButton.secondary 的悬停约定）。
 private struct SidebarNavButton: View {
     let title: String
     let isSelected: Bool
@@ -566,15 +593,22 @@ private struct SidebarNavButton: View {
     @Environment(\.colorScheme) private var scheme
     @State private var hovering = false
 
+    /// 胶囊圆角取按钮高度的一半（44 / 2），与分段胶囊按自身高度取圆角一致
+    private static let cornerRadius: CGFloat = 22
+
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(AppTheme.bodyFont)
+                .font(AppTheme.bodyFont.weight(isSelected ? .semibold : .regular))
                 .foregroundColor(isSelected ? .white : AppTheme.dim(scheme))
-                .padding(.leading, 24)
+                .padding(.horizontal, 24)
                 .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 .background(backgroundColor)
-                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Self.cornerRadius)
+                        .stroke(borderColor, lineWidth: 1)
+                )
+                .cornerRadius(Self.cornerRadius)
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
@@ -584,6 +618,11 @@ private struct SidebarNavButton: View {
     private var backgroundColor: Color {
         if isSelected { return AppTheme.sidebarSelected(scheme) }
         return hovering ? AppTheme.sidebarHover(scheme) : .clear
+    }
+
+    private var borderColor: Color {
+        if isSelected { return AppTheme.sidebarSelected(scheme) }
+        return hovering ? AppTheme.dim(scheme) : AppTheme.hairline(scheme)
     }
 }
 // MARK: - 服务器信息弹窗

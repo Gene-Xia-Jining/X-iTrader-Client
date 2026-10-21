@@ -452,6 +452,41 @@ public sealed class AppState : INotifyPropertyChanged
         private set => Set(ref _startChecking, value);
     }
 
+    private string _startProgressText = "";
+    /// <summary>
+    /// 启停的当前阶段文案（如「天勤握手 1/2…」），空串表示没有在跑。
+    /// engine.start 是一次 RPC 调用，过程状态只能靠后端 engine_start_progress 事件推来。
+    /// </summary>
+    public string StartProgressText
+    {
+        get => _startProgressText;
+        private set => Set(ref _startProgressText, value);
+    }
+
+    private int _startProgressStep;
+    /// <summary>当前阶段内的完成数（配合 <see cref="StartProgressTotal"/> 画进度条）</summary>
+    public int StartProgressStep
+    {
+        get => _startProgressStep;
+        private set => Set(ref _startProgressStep, value);
+    }
+
+    private int _startProgressTotal;
+    /// <summary>当前阶段内的总数；0 表示该阶段不细分，不显示进度条</summary>
+    public int StartProgressTotal
+    {
+        get => _startProgressTotal;
+        private set => Set(ref _startProgressTotal, value);
+    }
+
+    /// <summary>清空启停进度（操作结束或开始时调用，避免残留上一轮的数字）</summary>
+    private void ResetStartProgress()
+    {
+        StartProgressText = "";
+        StartProgressStep = 0;
+        StartProgressTotal = 0;
+    }
+
     internal void ClearStartBlockedIssues() => StartBlockedIssues = [];
 
     private VerifiedTqCredentials? _verifiedTqCredentials = XTrader.Shell.State.VerifiedTqCredentials.Load();
@@ -827,6 +862,16 @@ public sealed class AppState : INotifyPropertyChanged
             case "update_progress":
                 UpdateProgress = JsonHelpers.Int(data["pct"]) ?? -1;
                 break;
+            case "engine_start_progress":
+                // 只在开关操作进行中采纳：过期事件（如别的客户端发起的启停）不该
+                // 让本机顶栏显示一个不存在的进度
+                if (StartChecking)
+                {
+                    StartProgressText = data["text"]?.GetValue<string>() ?? "";
+                    StartProgressStep = JsonHelpers.Int(data["step"]) ?? 0;
+                    StartProgressTotal = JsonHelpers.Int(data["total"]) ?? 0;
+                }
+                break;
             case "update_ready":
                 // mode 是后加的字段：旧版后端只发中文 kind，按文案回退判断，
                 // 否则差量更新会被误当成完整更新而直接退出壳
@@ -918,6 +963,7 @@ public sealed class AppState : INotifyPropertyChanged
         }
         StartChecking = true;
         StartBlockedIssues = [];
+        ResetStartProgress();
         _ = Task.Run(async () =>
         {
             try
@@ -947,7 +993,11 @@ public sealed class AppState : INotifyPropertyChanged
             finally
             {
                 await RefreshEngineOnlyAsync();
-                Post(() => StartChecking = false);
+                Post(() =>
+                {
+                    StartChecking = false;
+                    ResetStartProgress();
+                });
             }
         });
     }

@@ -637,6 +637,18 @@ class BackendService:
     def _log(self, message: str, level: LogLevel = LogLevel.INFO) -> None:
         self.event_bus.publish(LogEvent(message=message, level=level))
 
+    def _start_progress(self, stage: str, text: str, step: int = 0, total: int = 0) -> None:
+        """广播启动进度。engine.start 是单次 RPC 调用，过程中壳拿不到任何状态，
+        只能靠事件推送；step/total 表示当前阶段内的完成数（0/0 = 该阶段不细分）。
+
+        阶段耗时差异很大（天勤握手可能数十秒，本地字段检查是毫秒级），所以
+        刻意不做跨阶段的总百分比——那会让进度条长时间卡在最后一个数字上。
+        """
+        self._broadcast(
+            "engine_start_progress",
+            {"stage": stage, "text": text, "step": step, "total": total},
+        )
+
     def _enabled_account_ids(self) -> list[str]:
         return [a.id for a in self.bootstrap.accounts if a.enabled]
 
@@ -684,17 +696,22 @@ class BackendService:
 
         单个账户的 TqApi 握手是阻塞网络调用，放线程池并发执行；任一账户
         失败记一条问题，不阻断其余账户的检查（让用户一次看到全部问题）。
+
+        各检查项按执行顺序广播 engine_start_progress：天勤握手可能耗时数十秒，
+        壳若只显示「检查中」用户无从判断是卡住了还是在跑。
         """
         issues: list[str] = []
         config = self.bootstrap.config
 
         # 1) 服务器连通
+        self._start_progress("server", "检查服务器连通…")
         try:
             await check_server_health(config.server_url)
         except Exception as e:
             issues.append(f"服务器未连接: {e}")
 
         # 2) 已启用账户与关键字段
+        self._start_progress("accounts", "检查账户配置…")
         enabled_accounts = [a for a in self.bootstrap.accounts if a.enabled]
         if not enabled_accounts:
             issues.append("没有已启用的账户，请先在模拟/实盘页启用至少一个账户")
@@ -728,25 +745,43 @@ class BackendService:
             if acc.tq_account and acc.tq_password
         ]
         if to_probe:
-            results = await asyncio.gather(
-                *(
+            # 并发执行，但不能用 gather 一把等：单个账户握手可能数十秒，
+            # 逐条广播完成数才能让界面上的计数真的在动
+            tasks = {
+                asyncio.create_task(
                     asyncio.to_thread(
                         test_account_session,
                         acc,
                         (acc.tq_account, acc.tq_password),
                     )
-                    for acc in to_probe
-                ),
-                return_exceptions=True,
-            )
-            for acc, exc in zip(to_probe, results):
-                if isinstance(exc, Exception):
-                    label = acc.label or acc.id
-                    issues.append(f"账户「{label}」天勤连接失败: {exc}")
+                ): acc
+                for acc in to_probe
+            }
+            total = len(tasks)
+            self._start_progress("tqsdk", f"天勤握手 0/{total}…", 0, total)
+            done = 0
+            pending = set(tasks)
+            while pending:
+                finished, pending = await asyncio.wait(
+                    pending, return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in finished:
+                    acc = tasks[task]
+                    exc = task.exception()
+                    if exc is not None:
+                        label = acc.label or acc.id
+                        issues.append(f"账户「{label}」天勤连接失败: {exc}")
+                    done += 1
+                    self._start_progress(
+                        "tqsdk", f"天勤握手 {done}/{total}…", done, total
+                    )
 
         return issues
 
     async def engine_stop(self, params: dict) -> dict:
+        # 停止要等每个引擎退出（单账户最多 5 秒），同样给个阶段提示。
+        # 文案不带「自动交易」前缀：壳展示时会加上「自动交易：」
+        self._start_progress("stop", "正在停止…")
         self.set_auto_trade({"value": False})
         await self.stop_engines()
         return self.engine_status()
@@ -763,9 +798,19 @@ class BackendService:
         # 与预检一致用 label 展示（无 label 时回落到 id），避免弹窗里
         # 同一账户在两条问题中出现两种称呼
         labels = {a.id: (a.label or a.id) for a in self.bootstrap.accounts}
-        for account_id in self._enabled_account_ids():
-            if account_id in self._engines and self._engines[account_id].is_running:
-                continue
+        pending = [
+            account_id
+            for account_id in self._enabled_account_ids()
+            if not (account_id in self._engines and self._engines[account_id].is_running)
+        ]
+        total = len(pending)
+        for done, account_id in enumerate(pending):
+            # step 用「已完成数」，与文案里的数字保持一致（壳按 step/total 画进度条）。
+            # 首个账户的 build_engine 会一次性构造所有账户的 TqApi（执行器是共享的），
+            # 所以这里会停在 0/N 上一段时间——文案用「启动交易会话」而非「账户已启动」
+            self._start_progress(
+                "engines", f"启动交易会话 {done}/{total}…", done, total
+            )
             try:
                 engine = await self.bootstrap.build_engine(account_id)
                 engine.set_auto_trade(self._auto_trade)
@@ -774,6 +819,8 @@ class BackendService:
                 started_ids.append(account_id)
             except Exception as e:
                 failures.append(f"账户「{labels.get(account_id, account_id)}」启动失败: {e}")
+        if total:
+            self._start_progress("engines", f"启动交易会话 {total}/{total}…", total, total)
         if failures:
             # 已启动的引擎交由 engine_stop 回滚，这里只汇总问题抛出
             raise EngineStartBlockedError(failures)

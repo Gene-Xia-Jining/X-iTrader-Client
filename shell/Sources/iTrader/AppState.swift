@@ -257,6 +257,12 @@ final class AppState: ObservableObject {
     @Published var startBlockedIssues: [String] = []
     /// 启动检查进行中（顶栏按钮置灰防重复点击）
     @Published var startChecking = false
+    /// 启动/停止的当前阶段文案（如「天勤握手 1/2…」），空串表示没有在跑。
+    /// engine.start 是一次 RPC 调用，过程状态只能靠后端 engine_start_progress 事件推来
+    @Published var startProgressText = ""
+    /// 当前阶段内的完成数/总数，total 为 0 表示该阶段不细分（不显示进度条）
+    @Published var startProgressStep = 0
+    @Published var startProgressTotal = 0
     /// 「测试连接」验证通过的那组快期凭据（手机号 + 密码摘要），跨页面、跨重启保留。
     /// 只存摘要不存明文：这里只用于让步骤 3 胶囊显示绿色，不参与任何登录
     @Published private(set) var verifiedTqCredentials: VerifiedTqCredentials? =
@@ -472,6 +478,13 @@ final class AppState: ObservableObject {
             appendLog(level: "ERROR", message: "交易失败: \(data["symbol"] ?? "?") \(data["error"] ?? "")")
         case "update_progress":
             updateProgress = data["pct"] as? Int ?? -1
+        case "engine_start_progress":
+            // 只在开关操作进行中采纳：过期事件（如别的客户端发起的启停）不该
+            // 让本机顶栏显示一个不存在的进度
+            guard startChecking else { break }
+            startProgressText = data["text"] as? String ?? ""
+            startProgressStep = data["step"] as? Int ?? 0
+            startProgressTotal = data["total"] as? Int ?? 0
         case "update_ready":
             // mode 是后加的字段：旧版后端只发中文 kind，按文案回退判断，
             // 否则差量更新会被误当成完整更新而直接退出壳
@@ -535,8 +548,16 @@ final class AppState: ObservableObject {
         guard !startChecking else { return }
         startChecking = true
         startBlockedIssues = []
+        startProgressText = ""
+        startProgressStep = 0
+        startProgressTotal = 0
         Task {
-            defer { startChecking = false }
+            defer {
+                startChecking = false
+                startProgressText = ""
+                startProgressStep = 0
+                startProgressTotal = 0
+            }
             do {
                 lastActionError = ""
                 _ = try await call(method: on ? "engine.start" : "engine.stop")

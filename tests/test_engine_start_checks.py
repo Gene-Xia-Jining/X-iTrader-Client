@@ -78,6 +78,34 @@ async def _noop():
     return None
 
 
+async def _fake_build_engine(account_id: str):
+    """替身引擎：只满足 _start_engines 用到的 is_running / set_auto_trade / start。"""
+
+    class _Engine:
+        is_running = False
+        server_connected = False
+
+        def set_auto_trade(self, value: bool) -> None:
+            pass
+
+        async def start(self) -> None:
+            return None
+
+    return _Engine()
+
+
+def _collect_progress(service) -> list[tuple[str, str, int, int]]:
+    """把启动进度广播收进列表：engine.start 期间壳只能靠它看进度。"""
+    events: list[tuple[str, str, int, int]] = []
+
+    def on_broadcast(name: str, data: dict) -> None:
+        if name == "engine_start_progress":
+            events.append((data["stage"], data["text"], data["step"], data["total"]))
+
+    service.attach_broadcast(on_broadcast)
+    return events
+
+
 class EngineStartPreflightTest(unittest.TestCase):
     def test_no_enabled_account_blocks(self):
         service = _make_service()
@@ -240,6 +268,66 @@ class EngineStartPreflightTest(unittest.TestCase):
         error = EngineStartBlockedError(["问题一", "问题二"])
         self.assertEqual(error.to_payload(), {"data": {"issues": ["问题一", "问题二"]}})
         self.assertEqual(str(error), "问题一；问题二")
+
+
+class EngineStartProgressTest(unittest.TestCase):
+    """预检/启动各阶段要广播进度，否则壳只能显示「检查中」无从判断卡在哪。"""
+
+    def test_preflight_broadcasts_stages_in_order(self):
+        service = _make_service()
+        service.bootstrap.save_account(_sim_account())
+        events = _collect_progress(service)
+        _start_with(service)
+        stages = [stage for stage, _, _, _ in events]
+        self.assertEqual(stages, ["server", "accounts", "tqsdk", "tqsdk"])
+
+    def test_tqsdk_probe_reports_completion_count(self):
+        service = _make_service()
+        service.bootstrap.save_account(_sim_account())
+        service.bootstrap.save_account(
+            _live_account(id="live", label="实盘账户")
+        )
+        events = _collect_progress(service)
+        _start_with(service)
+        tqsdk = [(text, step, total) for stage, text, step, total in events if stage == "tqsdk"]
+        # 起始 0/2，每完成一个账户推进一次，最后落在 2/2
+        self.assertEqual(tqsdk[0], ("天勤握手 0/2…", 0, 2))
+        self.assertEqual(tqsdk[-1], ("天勤握手 2/2…", 2, 2))
+        self.assertEqual(sorted(step for _, step, _ in tqsdk), [0, 1, 2])
+
+    def test_no_probe_skips_tqsdk_stage(self):
+        service = _make_service()
+        service.bootstrap.save_account(_sim_account(tq_password=""))
+        events = _collect_progress(service)
+        _start_with(service)
+        self.assertNotIn("tqsdk", [stage for stage, _, _, _ in events])
+
+    def test_start_engines_reports_session_progress(self):
+        service = _make_service()
+        service.bootstrap.save_account(_sim_account())
+        service.bootstrap.save_account(_live_account(id="live", label="实盘账户"))
+        service.bootstrap.token_service.token_store.have_token = lambda: True
+        events = _collect_progress(service)
+
+        async def fake_start(self) -> None:
+            return None
+
+        with patch("src.backend.service.check_server_health", new=_health_ok), \
+             patch("src.backend.service.test_account_session", return_value=None), \
+             patch.object(service.bootstrap, "build_engine", new=_fake_build_engine), \
+             patch("src.application.trading_engine.TradingEngine.start", new=fake_start):
+            asyncio.run(service.engine_start({}))
+
+        engines = [(text, step, total) for stage, text, step, total in events if stage == "engines"]
+        # 文案里的数字与 step 必须一致，否则进度条和文字会打架
+        self.assertEqual(engines[0], ("启动交易会话 0/2…", 0, 2))
+        self.assertEqual(engines[-1][1:], (2, 2))
+
+    def test_stop_broadcasts_stage(self):
+        service = _make_service()
+        events = _collect_progress(service)
+        asyncio.run(service.engine_stop({}))
+        self.assertIn("stop", [stage for stage, _, _, _ in events])
 
 
 if __name__ == "__main__":

@@ -188,7 +188,12 @@ public sealed partial class MainWindow : Window
         ApplyNavItemState(tag);
     }
 
-    /// <summary>按当前路由与悬停状态刷新导航项配色。</summary>
+    /// <summary>
+    /// 按当前路由与悬停状态刷新导航项配色。
+    ///
+    /// 外观对齐交易记录页的「模拟/实盘」分段胶囊：选中为实心主题蓝 + 白字半粗、
+    /// 描边同色；未选中为透明底 + 发丝描边，悬停时底色与描边各提一档。
+    /// </summary>
     private void ApplyNavItemState(string tag)
     {
         var index = Array.FindIndex(_navRoutes, r => r.Tag == tag);
@@ -199,11 +204,19 @@ public sealed partial class MainWindow : Window
 
         var palette = ThemeTokens.For(IsDark);
         var selected = tag == _currentTag;
+        var hovering = _hoveredTags.Contains(tag);
         _navLabels[index].Foreground = new SolidColorBrush(selected ? Microsoft.UI.Colors.White : palette.Dim);
+        _navLabels[index].FontWeight = selected
+            ? Microsoft.UI.Text.FontWeights.SemiBold
+            : Microsoft.UI.Text.FontWeights.Normal;
         _navItems[index].Background = new SolidColorBrush(
             selected
                 ? palette.SidebarSelected
-                : _hoveredTags.Contains(tag) ? palette.SidebarHover : Microsoft.UI.Colors.Transparent);
+                : hovering ? palette.SidebarHover : Microsoft.UI.Colors.Transparent);
+        _navItems[index].BorderBrush = new SolidColorBrush(
+            selected
+                ? palette.SidebarSelected
+                : hovering ? palette.Dim : palette.Hairline);
     }
 
     /// <summary>供页面内按钮切换导航（如仪表盘的「配置设置」）。</summary>
@@ -857,10 +870,25 @@ public sealed partial class MainWindow : Window
         AutoTradeToggle.IsOn = engine.TradingActive;
         _syncingToggle = false;
 
-        // 预检（含天勤握手）在跑时让用户看到进度，而不是以为按钮没反应
-        var toggleContent = _state.StartChecking ? "自动交易：检查中…" : "自动交易";
+        // 预检（含天勤握手）在跑时让用户看到具体阶段与进度，而不是以为按钮没反应
+        var toggleContent = _state.StartChecking
+            ? (_state.StartProgressText.Length > 0 ? $"自动交易：{_state.StartProgressText}" : "自动交易：检查中…")
+            : "自动交易";
         AutoTradeToggle.OnContent = toggleContent;
         AutoTradeToggle.OffContent = toggleContent;
+
+        // 阶段内可计数时才画进度条；像「检查服务器连通…」这类没有分母的阶段只显示文字
+        // （颜色随主题，在 ApplyThemeToChrome 里统一设置）
+        if (_state.StartChecking && _state.StartProgressTotal > 0)
+        {
+            AutoTradeProgress.Maximum = _state.StartProgressTotal;
+            AutoTradeProgress.Value = _state.StartProgressStep;
+            AutoTradeProgress.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            AutoTradeProgress.Visibility = Visibility.Collapsed;
+        }
 
         RefreshButton.IsEnabled = !(_state.SymbolsFetching || _state.StrategiesFetching);
         RefreshButton.Content = _state.SymbolsFetching || _state.StrategiesFetching ? "刷新中…" : "刷新";
@@ -946,6 +974,7 @@ public sealed partial class MainWindow : Window
         AutoTradeHelpButton.BorderBrush = new SolidColorBrush(palette.Hairline);
         AutoTradeHelpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
         AutoTradePill.BorderBrush = new SolidColorBrush(palette.Hairline);
+        AutoTradeProgress.Foreground = new SolidColorBrush(palette.Primary);
         QuitButton.Foreground = new SolidColorBrush(palette.Danger);
         ThemeButton.Content = IsDark ? "浅色" : "深色";
 
