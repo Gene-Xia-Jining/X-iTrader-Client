@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
+using XTrader.Shell.Core;
 using XTrader.Shell.State;
 
 namespace XTrader.Shell.Views;
@@ -69,6 +70,66 @@ public sealed partial class SimulationPage : Page
     private string _symbolKey = "";
     private string _strategyKey = "";
 
+    // -------- 常见问题（展开状态存 ShellPrefs；展开后只列问题，点问题弹窗看详细）--------
+
+    private const string FaqPrefKey = "simulation.faqExpanded";
+
+    /// <summary>单条问答：列表里只显示问题，答案在 ContentDialog 里展开</summary>
+    private sealed record FaqItem(string Question, string Answer);
+
+    private static readonly FaqItem[] FaqItems =
+    [
+        new(
+            "模拟交易和实盘交易有什么区别？",
+            "模拟交易用的是快期模拟账户，资金是虚拟的，与快期客户端 / APP / 专业版里的模拟账户互通。"
+            + "把回测和模拟当作实盘前的体检，确认下单、平仓、信号接收都正常后再转到实盘。"),
+        new(
+            "为什么点击「自动交易」没有开启？",
+            "开启前客户端会先做一次启动前预检：服务器连通、账户的手机号 / 密码 / 品种 / 策略是否齐全、"
+            + "Token 是否已领取、天勤账户能否登录。任一项不通过都会弹出问题清单，按清单逐项处理后重新开启即可。"),
+        new(
+            "为什么改了配置要重新开启自动交易？",
+            "自动交易运行中修改账户、品种或策略不会立即生效，客户端会在日志里提示「下次启动生效」，"
+            + "避免正在持仓的账户策略被中途换掉。想让改动生效，先关掉自动交易再重新开启。"),
+        new(
+            "自动交易关着的时候收到信号会怎样？",
+            "信号会照常记录到交易记录里，但不会下单。这些信号不会在重新开启后补做——"
+            + "恢复自动交易只对之后新到的信号生效。"),
+        new(
+            "交易价格是怎么定的？",
+            "方向、目标仓位都由服务器决定，客户端只负责执行；成交价用的是客户端实时行情，"
+            + "以对手价优先成交，不沿用信号里的参考价。"),
+        new(
+            "如何选择交易品种？",
+            "第 6 步选的是品种（如螺纹钢、甲醇），不是具体合约：具体月份合约由服务器信号给出，"
+            + "客户端只按实时行情以对手价成交。一个账户同一时间只能选一个品种。\n\n"
+            + "选品种可以按三点筛：\n"
+            + "1，权限。模拟账户只支持国内商品和股指 / 国债，不支持组合、套利和期权。"
+            + "铁矿石、棕榈油、PTA、豆粕、原油属于特定品种，股指和国债也要单独开通，"
+            + "转实盘前要先在期货公司确认权限，否则下单会报权限不足。\n"
+            + "2，流动性。看持仓量和盘口深度，不要只看成交量——成交量最大的品种盘口未必厚，滑点会更大。"
+            + "螺纹钢、甲醇、玻璃、纯碱、玉米、热卷、白糖、PVC 等持仓量大、盘口厚，适合起步。\n"
+            + "3，单手规模。保证金 = 价格 × 合约单位 × 保证金比例。黄金一手保证金约 18–20 万，"
+            + "纯碱只要约 2000 元，相差 90 倍：同样手数下风险完全不同，资金不多时先避开黄金、原油、股指这类大合约。\n\n"
+            + "建议先用一个自己熟悉、流动性好的普通商品跑顺流程，稳定后再换成其他品种。"),
+        new(
+            "同一个信号会被重复执行吗？",
+            "不会。每条信号在本地 SQLite 里按账户登记，已执行过的信号再次收到时只记一条日志，不会重复下单。"),
+        new(
+            "关闭客户端后会继续交易吗？",
+            "不会。自动交易不会在下次启动时自动开启，需要手动再点一次；"
+            + "关闭客户端期间也不会接收信号，重新开启后不会补做关闭期间的信号。"),
+        new(
+            "出问题的时候去哪里看？",
+            "「系统日志」页有完整的运行日志，包含连接、信号、下单与错误信息；"
+            + "交易执行明细可以在「交易记录」页按模拟 / 实盘分别查看。"),
+    ];
+
+    private bool _faqExpanded;
+    /// <summary>问答详情弹窗：同一个 ContentDialog 不能并发 ShowAsync，重复点击直接忽略</summary>
+    private ContentDialog? _faqDialog;
+    private bool _faqDialogOpen;
+
     // -------- 第 1 步的下载链接弹窗（控件在代码里构建，对应 mac 壳的 downloadLinks）--------
 
     private TextBlock LinkMobile = null!;
@@ -124,6 +185,9 @@ public sealed partial class SimulationPage : Page
         BuildAccountEditor();
         BuildSymbolDialog();
         BuildTokenRecordsDialog();
+        // 展开状态在构造时恢复：页面切走再回来不该被重置成收起
+        _faqExpanded = ShellPrefs.Get(FaqPrefKey) is "1";
+        RenderFaq();
         ServerBox.LostFocus += (_, _) => SaveServerIfChanged();
         ServerBox.KeyDown += (_, e) =>
         {
@@ -487,6 +551,142 @@ public sealed partial class SimulationPage : Page
         }
     }
 
+    // -------- 常见问题（展开后只列问题，点问题弹窗看详细）--------
+
+    private void OnFaqHeaderTapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+    {
+        _faqExpanded = !_faqExpanded;
+        ShellPrefs.Set(FaqPrefKey, _faqExpanded ? "1" : "0");
+        RenderFaq();
+    }
+
+    /// <summary>按展开状态重建标题右侧的「展开 / 收起」与问题列表</summary>
+    private void RenderFaq()
+    {
+        FaqToggleText.Text = _faqExpanded ? "收起" : "展开";
+        FaqChevron.Glyph = _faqExpanded ? "\uE70E" : "\uE70D";
+        FaqBody.Visibility = _faqExpanded ? Visibility.Visible : Visibility.Collapsed;
+        FaqBody.Children.Clear();
+
+        if (!_faqExpanded)
+        {
+            return;
+        }
+        // 标题行与列表之间、以及每两个问题之间各一条发丝线
+        FaqBody.Children.Add(BuildFaqDivider());
+        for (var i = 0; i < FaqItems.Length; i++)
+        {
+            if (i > 0)
+            {
+                FaqBody.Children.Add(BuildFaqDivider());
+            }
+            FaqBody.Children.Add(BuildFaqRow(FaqItems[i]));
+        }
+    }
+
+    private Microsoft.UI.Xaml.Shapes.Rectangle BuildFaqDivider() =>
+        new() { Height = 1, Fill = Brush(Palette.Divider), Margin = new Thickness(0, 4, 0, 4) };
+
+    /// <summary>一行问题：整行可点（问题较长时会换行），右侧一个右箭头提示可展开</summary>
+    private Button BuildFaqRow(FaqItem item)
+    {
+        var grid = new Grid { ColumnSpacing = 12, Padding = new Thickness(0, 8, 0, 8) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.Children.Add(new TextBlock
+        {
+            Text = item.Question,
+            FontSize = 15,
+            Foreground = Brush(Palette.Ink),
+            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        var chevron = new FontIcon
+        {
+            Glyph = "\uE76C",
+            FontSize = 11,
+            Foreground = Brush(Palette.Dim),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(chevron, 1);
+        grid.Children.Add(chevron);
+
+        var row = new Button
+        {
+            Content = grid,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(0),
+            CornerRadius = new CornerRadius(8),
+        };
+        row.Click += (_, _) => _ = ShowFaqDetailAsync(item);
+        return row;
+    }
+
+    /// <summary>问答详情弹窗：问题作标题，答案按正文；「关闭」放在标题行右侧（同其它弹窗）</summary>
+    private async Task ShowFaqDetailAsync(FaqItem item)
+    {
+        if (_faqDialogOpen)
+        {
+            return;
+        }
+
+        var question = new TextBlock
+        {
+            Text = item.Question,
+            FontSize = 15,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = Brush(Palette.Ink),
+            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var close = new Button
+        {
+            Content = "关闭",
+            FontSize = 13,
+            MinHeight = 32,
+            Padding = new Thickness(14, 0, 14, 0),
+            CornerRadius = new CornerRadius(8),
+        };
+        close.Click += (_, _) => _faqDialog?.Hide();
+
+        var titleRow = new Grid { ColumnSpacing = 12 };
+        titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        titleRow.Children.Add(question);
+        Grid.SetColumn(close, 1);
+        titleRow.Children.Add(close);
+
+        var content = new StackPanel { Spacing = 12, Width = 460 };
+        content.Children.Add(titleRow);
+        content.Children.Add(new Microsoft.UI.Xaml.Shapes.Rectangle { Height = 1, Fill = Brush(Palette.Divider) });
+        content.Children.Add(new TextBlock
+        {
+            Text = item.Answer,
+            FontSize = 15,
+            Foreground = Brush(Palette.Dim),
+            TextWrapping = TextWrapping.Wrap,
+            IsTextSelectionEnabled = true,
+        });
+
+        // 不再用 ContentDialog 的 Title / CloseButtonText，系统按钮行会另起一行
+        var dialog = new ContentDialog { Content = content };
+        _faqDialog = dialog;
+        dialog.XamlRoot = Root.XamlRoot;
+        _faqDialogOpen = true;
+        try
+        {
+            await dialog.ShowAsync();
+        }
+        finally
+        {
+            _faqDialogOpen = false;
+            _faqDialog = null;
+        }
+    }
+
     private void OnSymbolPickerClick(object sender, RoutedEventArgs e)
     {
         RenderCapsules();
@@ -552,6 +752,14 @@ public sealed partial class SimulationPage : Page
         SymbolHint.Foreground = Brush(Palette.Dim);
         StrategyHint.Foreground = Brush(Palette.Dim);
         UpdateAccountHint();
+
+        // 常见问题卡片：外观随主题，列表整体重建（分隔线与文字色都在渲染时取）
+        FaqCard.Background = Brush(Palette.Card);
+        FaqCard.BorderBrush = Brush(Palette.Hairline);
+        FaqTitle.Foreground = Brush(Palette.Ink);
+        FaqToggleText.Foreground = Brush(Palette.Primary);
+        FaqChevron.Foreground = Brush(Palette.Primary);
+        RenderFaq();
 
         foreach (var label in new[] { PhoneLabel, PasswordLabel })
         {

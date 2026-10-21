@@ -65,6 +65,11 @@ struct SimulationView: View {
     @State private var testHintError = false
     // 弹窗（对应 Qt QMessageBox）
     @State private var alert: ActiveAlert?
+    // 常见问题展开状态：存在 UserDefaults，重启后保持上次的展开/收起
+    private static let faqExpandedKey = "simulation.faqExpanded"
+    @State private var faqExpanded = UserDefaults.standard.bool(forKey: SimulationView.faqExpandedKey)
+    /// 点开的那条常见问题：非空即弹出详情
+    @State private var faqQuestion: FaqItem?
 
     var body: some View {
         PageContainer {
@@ -113,6 +118,8 @@ struct SimulationView: View {
                 }
                 .padding(20)
             }
+
+            faqCard
         }
         .onAppear {
             fillFromAccount()
@@ -143,12 +150,170 @@ struct SimulationView: View {
         .sheet(isPresented: $showTokenRecords) {
             tokenRecordsDialog
         }
+        .sheet(item: $faqQuestion) { item in
+            faqDetail(item)
+        }
         // 步骤 6 用自绘弹层而非 sheet：macOS 的 sheet 点空白处不会关闭
         .overlay {
             if showSymbolPicker {
                 symbolPickerOverlay
             }
         }
+    }
+
+    // MARK: - 常见问题（可展开；展开后只列问题，点问题弹窗看详细）
+
+    /// 每条问答：列表里只显示问题，答案在弹窗里展开
+    struct FaqItem: Identifiable {
+        let question: String
+        let answer: String
+        var id: String { question }
+    }
+
+    private static let faqItems: [FaqItem] = [
+        FaqItem(
+            question: "模拟交易和实盘交易有什么区别？",
+            answer: "模拟交易用的是快期模拟账户，资金是虚拟的，与快期客户端 / APP / 专业版里的模拟账户互通。"
+            + "把回测和模拟当作实盘前的体检，确认下单、平仓、信号接收都正常后再转到实盘。"
+        ),
+        FaqItem(
+            question: "为什么点击「自动交易」没有开启？",
+            answer: "开启前客户端会先做一次启动前预检：服务器连通、账户的手机号 / 密码 / 品种 / 策略是否齐全、"
+            + "Token 是否已领取、天勤账户能否登录。任一项不通过都会弹出问题清单，按清单逐项处理后重新开启即可。"
+        ),
+        FaqItem(
+            question: "为什么改了配置要重新开启自动交易？",
+            answer: "自动交易运行中修改账户、品种或策略不会立即生效，客户端会在日志里提示「下次启动生效」，"
+            + "避免正在持仓的账户策略被中途换掉。想让改动生效，先关掉自动交易再重新开启。"
+        ),
+        FaqItem(
+            question: "自动交易关着的时候收到信号会怎样？",
+            answer: "信号会照常记录到交易记录里，但不会下单。这些信号不会在重新开启后补做——"
+            + "恢复自动交易只对之后新到的信号生效。"
+        ),
+        FaqItem(
+            question: "交易价格是怎么定的？",
+            answer: "方向、目标仓位都由服务器决定，客户端只负责执行；成交价用的是客户端实时行情，"
+            + "以对手价优先成交，不沿用信号里的参考价。"
+        ),
+        FaqItem(
+            question: "如何选择交易品种？",
+            answer: "第 6 步选的是品种（如螺纹钢、甲醇），不是具体合约：具体月份合约由服务器信号给出，"
+            + "客户端只按实时行情以对手价成交。一个账户同一时间只能选一个品种。\n\n"
+            + "选品种可以按三点筛：\n"
+            + "1，权限。模拟账户只支持国内商品和股指 / 国债，不支持组合、套利和期权。"
+            + "铁矿石、棕榈油、PTA、豆粕、原油属于特定品种，股指和国债也要单独开通，"
+            + "转实盘前要先在期货公司确认权限，否则下单会报权限不足。\n"
+            + "2，流动性。看持仓量和盘口深度，不要只看成交量——成交量最大的品种盘口未必厚，滑点会更大。"
+            + "螺纹钢、甲醇、玻璃、纯碱、玉米、热卷、白糖、PVC 等持仓量大、盘口厚，适合起步。\n"
+            + "3，单手规模。保证金 = 价格 × 合约单位 × 保证金比例。黄金一手保证金约 18–20 万，"
+            + "纯碱只要约 2000 元，相差 90 倍：同样手数下风险完全不同，资金不多时先避开黄金、原油、股指这类大合约。\n\n"
+            + "建议先用一个自己熟悉、流动性好的普通商品跑顺流程，稳定后再换成其他品种。"
+        ),
+        FaqItem(
+            question: "同一个信号会被重复执行吗？",
+            answer: "不会。每条信号在本地 SQLite 里按账户登记，已执行过的信号再次收到时只记一条日志，不会重复下单。"
+        ),
+        FaqItem(
+            question: "关闭客户端后会继续交易吗？",
+            answer: "不会。自动交易不会在下次启动时自动开启，需要手动再点一次；"
+            + "关闭客户端期间也不会接收信号，重新开启后不会补做关闭期间的信号。"
+        ),
+        FaqItem(
+            question: "出问题的时候去哪里看？",
+            answer: "「系统日志」页有完整的运行日志，包含连接、信号、下单与错误信息；"
+            + "交易执行明细可以在「交易记录」页按模拟 / 实盘分别查看。"
+        ),
+    ]
+
+    private var faqCard: some View {
+        AppCard {
+            VStack(alignment: .leading, spacing: 0) {
+                // 整行可点：避免只能点小箭头，标题区域也就成了命中区
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        faqExpanded.toggle()
+                    }
+                    UserDefaults.standard.set(faqExpanded, forKey: Self.faqExpandedKey)
+                } label: {
+                    HStack(spacing: 8) {
+                        Text("常见问题")
+                            .font(AppTheme.bodyFont.weight(.semibold))
+                            .foregroundColor(AppTheme.ink(scheme))
+                        Spacer(minLength: 12)
+                        Text(faqExpanded ? "收起" : "展开")
+                            .font(AppTheme.dimFont)
+                            .foregroundColor(AppTheme.primary(scheme))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(AppTheme.primary(scheme))
+                            .rotationEffect(.degrees(faqExpanded ? 180 : 0))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+
+                if faqExpanded {
+                    VStack(alignment: .leading, spacing: 0) {
+                        HairlineDivider()
+                            .padding(.bottom, 4)
+                        ForEach(Array(Self.faqItems.enumerated()), id: \.offset) { index, item in
+                            // 只列问题，点开弹窗看详细：答案较长，平铺会把卡片撑得很高
+                            Button {
+                                faqQuestion = item
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Text(item.question)
+                                        .font(AppTheme.bodyFont)
+                                        .foregroundColor(AppTheme.ink(scheme))
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Spacer(minLength: 12)
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(AppTheme.dim(scheme))
+                                }
+                                .padding(.vertical, 8)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .pointerCursor()
+                            if index < Self.faqItems.count - 1 {
+                                HairlineDivider()
+                            }
+                        }
+                    }
+                    .padding(.top, 12)
+                }
+            }
+            .padding(20)
+        }
+    }
+
+    /// 常见问题详情弹窗：问题作标题，答案按正文；「关闭」放在标题行右侧（同其它弹窗）
+    private func faqDetail(_ item: FaqItem) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Text(item.question)
+                    .font(AppTheme.bodyFont.weight(.semibold))
+                    .foregroundColor(AppTheme.ink(scheme))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 12)
+                AppButton("关闭", variant: .secondary, size: .inline) {
+                    faqQuestion = nil
+                }
+            }
+
+            HairlineDivider()
+
+            Text(item.answer)
+                .font(AppTheme.bodyFont)
+                .foregroundColor(AppTheme.dim(scheme))
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+        .padding(20)
+        .frame(width: 520)
     }
 
     // MARK: - 文本与链接

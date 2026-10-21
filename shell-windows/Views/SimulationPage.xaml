@@ -103,6 +103,27 @@
                         </StackPanel>
                     </StackPanel>
                 </Border>
+
+                <!-- 常见问题：整行可点展开/收起，展开状态存在 ShellPrefs，重启后保持 -->
+                <Border x:Name="FaqCard" BorderThickness="1" CornerRadius="18" Padding="20">
+                    <StackPanel Spacing="12">
+                        <Grid x:Name="FaqHeader" Background="Transparent" Tapped="OnFaqHeaderTapped">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="FaqTitle" Text="常见问题" FontSize="15"
+                                       FontWeight="SemiBold" VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"
+                                        VerticalAlignment="Center">
+                                <TextBlock x:Name="FaqToggleText" Text="展开" FontSize="13"
+                                           VerticalAlignment="Center" />
+                                <FontIcon x:Name="FaqChevron" Glyph="&#xE70D;" FontSize="11" />
+                            </StackPanel>
+                        </Grid>
+                        <StackPanel x:Name="FaqBody" Spacing="0" Visibility="Collapsed" />
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </ScrollViewer>
 
