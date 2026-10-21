@@ -707,6 +707,7 @@ public sealed class AppState : INotifyPropertyChanged
         {
             AppendLog("ERROR", $"后端输出：{tail}");
         }
+        AppendLog("ERROR", $"完整日志：{AppPaths.BackendLogFile}");
         _ = Task.Run(() => ConnectLoopAsync(_lifetime.Token));
     }
 

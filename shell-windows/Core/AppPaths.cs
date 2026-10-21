@@ -32,4 +32,7 @@ internal static class AppPaths
 
     /// <summary>backend.json 的路径（后端启动后写入，壳据此连接）</summary>
     internal static string BackendInfoFile => Path.Combine(DataRoot, "data", "backend.json");
+
+    /// <summary>后端日志文件（由后端自己写入，5MB × 6 份轮转）</summary>
+    internal static string BackendLogFile => Path.Combine(DataRoot, "data", "logs", "backend.log");
 }

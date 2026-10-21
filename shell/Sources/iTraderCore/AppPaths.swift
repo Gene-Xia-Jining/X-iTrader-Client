@@ -32,4 +32,9 @@ public enum AppPaths {
     public static var backendExecutable: URL {
         backendDir.appendingPathComponent("backend")
     }
+
+    /// 后端日志文件（由后端自己写入，5MB × 6 份轮转）
+    public static var backendLogFile: URL {
+        dataRoot.appendingPathComponent("data/logs/backend.log")
+    }
 }

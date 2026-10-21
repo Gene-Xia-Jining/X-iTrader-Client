@@ -6,6 +6,7 @@ frozen 打包时工作目录为数据根（见 infrastructure.paths.data_root()�
 """
 
 import asyncio
+import logging
 import os
 import signal
 import sys
@@ -13,6 +14,7 @@ import threading
 import time
 from pathlib import Path
 
+from ..infrastructure.logging_setup import log_asyncio_exception, setup_logging
 from ..infrastructure.paths import data_root, migrate_legacy_data_root
 
 
@@ -38,6 +40,18 @@ async def run() -> int:
     workdir = Path.cwd()
     Path("data").mkdir(parents=True, exist_ok=True)
 
+    # 日志必须早于下面的延迟导入：依赖缺失、路径不可写这类启动失败只有落进
+    # 文件才有事后排查的可能（壳默认丢弃 stdout/stderr）。日志自身失败不能
+    # 反过来挡住启动，降级为仅 stderr。
+    try:
+        log_path = setup_logging(workdir / "data" / "logs")
+    except Exception as e:
+        log_path = None
+        print(f"警告：日志初始化失败，本次不落盘: {e}", file=sys.stderr, flush=True)
+    logging.getLogger("backend").info(
+        "后端启动 pid=%s cwd=%s frozen=%s", os.getpid(), workdir, getattr(sys, "frozen", False)
+    )
+
     # 延迟导入：保证 chdir 先于任何 data/ 相对路径的使用
     from .rpc import RpcServer
     from .service import BackendService, build_routes
@@ -51,6 +65,8 @@ async def run() -> int:
         stop_signal.set()
 
     loop = asyncio.get_running_loop()
+    # asyncio 的未处理异常不走 sys.excepthook，任务里吞掉的 traceback 只能在这里捞
+    loop.set_exception_handler(log_asyncio_exception)
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, _request_stop)
@@ -90,6 +106,7 @@ async def run() -> int:
         # 信号退出也要释放引擎与 TqApi 连接（requested 路径已在 quit/update_apply 里清理）
         await service.shutdown()
     print(f"后端已退出（{exit_reason}）", flush=True)
+    logging.getLogger("backend").info("后端已退出（%s），日志: %s", exit_reason, log_path)
     return 0
 
 
@@ -102,7 +119,12 @@ def main():
     except RuntimeError as e:
         # 典型场景：已有后端在运行（见 rpc._reject_stale_backend）
         print(f"启动失败: {e}", file=sys.stderr, flush=True)
+        logging.getLogger("backend").error("启动失败: %s", e, exc_info=True)
         sys.exit(1)
+    except Exception:
+        # 落盘后重新抛出，保留原有的非零退出码与终端表现
+        logging.getLogger("backend").critical("后端异常退出", exc_info=True)
+        raise
 
 
 if __name__ == "__main__":

@@ -410,6 +410,7 @@ final class AppState: ObservableObject {
         connState = .disconnected
         guard !waitingForUpdateBackend else { return }
         appendLog(level: "ERROR", message: "后端进程已退出，正在重启…")
+        appendLog(level: "ERROR", message: "完整日志：\(AppPaths.backendLogFile.path)")
         reconnect()
     }
 

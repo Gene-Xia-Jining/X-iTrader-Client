@@ -10,6 +10,7 @@ EventBus 事件经 _on_event 序列化后广播给所有已连接的 RPC 客户�
 """
 
 import asyncio
+import logging
 import os
 import shutil
 from dataclasses import fields
@@ -83,6 +84,14 @@ _START_STAGE_WEIGHTS = {
     "accounts": 5,  # 纯本地字段校验
     "tqsdk": 55,    # 登录 + 网关探测 + TqApi 构造，最慢
     "engines": 30,  # 建会话 + 起信号流
+}
+
+# LogLevel（含 SUCCESS 这种只存在于界面的级别）→ 标准 logging 级别
+_LOG_LEVELS = {
+    LogLevel.INFO: logging.INFO,
+    LogLevel.SUCCESS: logging.INFO,
+    LogLevel.WARNING: logging.WARNING,
+    LogLevel.ERROR: logging.ERROR,
 }
 
 
@@ -1021,6 +1030,7 @@ class BackendService:
 
     def _subscribe_events(self) -> None:
         self.event_bus.subscribe(LogEvent, self._on_event(LogEvent, "log"))
+        self.event_bus.subscribe(LogEvent, self._persist_log)
         self.event_bus.subscribe(StatusChangedEvent, self._on_event(StatusChangedEvent, "status"))
         self.event_bus.subscribe(TradingStartedEvent, self._on_event(TradingStartedEvent, "trading_started"))
         self.event_bus.subscribe(TradingStoppedEvent, self._on_event(TradingStoppedEvent, "trading_stopped"))
@@ -1028,6 +1038,12 @@ class BackendService:
         self.event_bus.subscribe(TradeExecutedEvent, self._on_event(TradeExecutedEvent, "trade_executed"))
         self.event_bus.subscribe(TradeFailedEvent, self._on_event(TradeFailedEvent, "trade_failed"))
         self.event_bus.subscribe(ConfigChangedEvent, self._on_event(ConfigChangedEvent, "config_changed"))
+
+    def _persist_log(self, event: LogEvent) -> None:
+        """业务日志同时落盘：界面那 500 行重启即失，事后排查只能靠文件。"""
+        logging.getLogger("event").log(
+            _LOG_LEVELS.get(event.level, logging.INFO), "%s", event.message
+        )
 
     def _on_event(self, event_type: type, name: str):
         def handler(event) -> None:

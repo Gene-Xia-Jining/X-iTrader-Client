@@ -1,7 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import ast
+import importlib.util
 import os
 import sys
+from pathlib import Path
 
 from PyInstaller.building.datastruct import Tree
 from PyInstaller.utils.hooks import collect_all, collect_submodules
@@ -34,6 +37,47 @@ hiddenimports = [
     *collect_submodules('httpx'),
     *collect_submodules('aiosqlite'),
 ]
+
+# src 以源码外置（见上方 datas），PyInstaller 的静态分析完全看不到它的 import
+# 图，标准库模块也不会被顺带收进 PYZ。历史上漏过 plistlib / logging.handlers：
+# 后端在 import 阶段就 ModuleNotFoundError 退出，客户端表现为
+# 「后端进程已退出，正在重启」无限循环 + backend.json 超时。
+# 改为从源码自动推导：必须用**完整模块名**（logging.handlers 而非 logging），
+# 否则子模块仍会缺失；src 里新增 import 也不必再手工补 hiddenimports。
+def _src_imports(src_dir):
+    names = set()
+    for path in Path(src_dir).rglob('*.py'):
+        for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+            if isinstance(node, ast.Import):
+                names |= {a.name for a in node.names}
+            elif isinstance(node, ast.ImportFrom):
+                if node.level or not node.module:
+                    continue  # 包内相对导入属 src 自身，不收集
+                names.add(node.module)
+    # 只保留当前解释器能找到的模块：跨平台的专属模块（如 winreg）在另一平台上
+    # 找不到，强行加入只会产生一堆 missing hidden import 警告。
+    # 同时展开父包：import a.b 时 a 自身也要能定位。
+    resolved = set()
+    for name in names:
+        if name == 'src' or not _importable(name):
+            continue
+        resolved.add(name)
+        parts = name.split('.')
+        for i in range(1, len(parts)):
+            parent = '.'.join(parts[:i])
+            if _importable(parent):
+                resolved.add(parent)
+    return sorted(resolved)
+
+
+def _importable(name):
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+hiddenimports += _src_imports(SRC)
 
 # cryptography（含 Fernet、hazmat 等全部子模块及 cffi 绑定）
 crypto_datas, crypto_binaries, crypto_hiddenimports = collect_all('cryptography')

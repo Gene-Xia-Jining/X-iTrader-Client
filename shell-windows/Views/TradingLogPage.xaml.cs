@@ -2,6 +2,7 @@ using XTrader.Shell.Theme;
 using System.Collections.Specialized;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
 using XTrader.Shell.State;
@@ -11,7 +12,10 @@ namespace XTrader.Shell.Views;
 /// <summary>
 /// 系统日志页：内存会话日志（对应 mac 壳的 TradingLogView / Qt LogPage）。
 ///
-/// 直接订阅 AppState.Logs 的集合变更增量追加 TextBlock，而不是每次全量重建：
+/// 整个日志区是一个 RichTextBlock、每行一个 Paragraph：原来每行一个 TextBlock 时，
+/// 选中范围被限制在单个控件内，只能复制一行。合并后保留按级别着色，同时可跨行拖选复制。
+///
+/// 直接订阅 AppState.Logs 的集合变更增量追加，而不是每次全量重建：
 /// 日志可达 500 行，全量重建在滚动时会明显掉帧。
 /// </summary>
 public sealed partial class TradingLogPage : Page
@@ -72,12 +76,12 @@ public sealed partial class TradingLogPage : Page
             case NotifyCollectionChangedAction.Add when e.NewItems is not null:
                 foreach (var item in e.NewItems.OfType<LogLine>())
                 {
-                    LogPanel.Children.Add(BuildLine(item));
+                    LogText.Blocks.Add(BuildLine(item));
                 }
-                // 超过上限时 AppState 会移除最旧的若干条
-                while (LogPanel.Children.Count > State.Logs.Count)
+                // 超过上限时 AppState 会移除最旧的若干条，Blocks 比 Logs 多出的就是需要裁掉的量
+                while (LogText.Blocks.Count > State.Logs.Count)
                 {
-                    LogPanel.Children.RemoveAt(0);
+                    LogText.Blocks.RemoveAt(0);
                 }
                 LogScroll.ChangeView(null, LogScroll.ScrollableHeight, null);
                 break;
@@ -89,22 +93,26 @@ public sealed partial class TradingLogPage : Page
 
     private void RebuildLogs()
     {
-        LogPanel.Children.Clear();
+        LogText.Blocks.Clear();
         foreach (var line in State.Logs)
         {
-            LogPanel.Children.Add(BuildLine(line));
+            LogText.Blocks.Add(BuildLine(line));
         }
         LogScroll.ChangeView(null, LogScroll.ScrollableHeight, null);
     }
 
-    private TextBlock BuildLine(LogLine line) => new()
+    /// <summary>一行日志 = 一个 Paragraph，段后留 2px（原来每行 TextBlock 的垂直 padding）</summary>
+    private Paragraph BuildLine(LogLine line) => new()
     {
-        Text = $"[{line.Time:HH:mm:ss}] [{line.Level}] {line.Message}",
-        FontFamily = new FontFamily("Consolas"),
-        FontSize = 12,
-        Foreground = Brush(LogLevelColor(line.Level, Host.IsDark)),
-        TextWrapping = TextWrapping.Wrap,
-        IsTextSelectionEnabled = true,
+        Margin = new Thickness(0, 0, 0, 2),
+        Inlines =
+        {
+            new Run
+            {
+                Text = $"[{line.Time:HH:mm:ss}] [{line.Level}] {line.Message}",
+                Foreground = Brush(LogLevelColor(line.Level, Host.IsDark)),
+            },
+        },
     };
 
     private void OnClearClick(object sender, RoutedEventArgs e) => State.Logs.Clear();

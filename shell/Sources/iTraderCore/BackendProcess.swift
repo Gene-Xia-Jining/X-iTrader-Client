@@ -36,7 +36,7 @@ public final class BackendProcess {
             case .backendMissing(let path):
                 return "未找到打包后端可执行文件: \(path)"
             case .infoTimeout(let path):
-                return "等待 \(path) 超时，后端可能启动失败"
+                return "等待 \(path) 超时，后端可能启动失败（详见 \(AppPaths.backendLogFile.path)）"
             case .alreadyRunning:
                 return "后端已在运行"
             }

@@ -22,10 +22,13 @@
             <Button Content="清空日志" Click="OnClearClick" HorizontalAlignment="Right" />
         </Grid>
 
+        <!-- 必须是单个 RichTextBlock：每行一个 TextBlock 时选中范围无法跨行。
+             选中文本后由 WinUI 自带的选择浮动菜单 / Ctrl+C 复制 -->
         <ScrollViewer x:Name="LogScroll" Grid.Row="2" BorderThickness="1"
                       CornerRadius="11" Padding="12"
                       VerticalScrollBarVisibility="Auto">
-            <StackPanel x:Name="LogPanel" />
+            <RichTextBlock x:Name="LogText" FontFamily="Consolas" FontSize="12"
+                           TextWrapping="Wrap" IsTextSelectionEnabled="True" />
         </ScrollViewer>
     </Grid>
 </Page>
