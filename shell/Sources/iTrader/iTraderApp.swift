@@ -481,10 +481,15 @@ struct RootView: View {
     /// 自动交易胶囊：外观同 AppButton（开关语义色），问号放在胶囊内部右侧
     private var autoTradePill: some View {
         let active = appState.engineStatus.tradingActive
-        let disabled = appState.connState != .connected || appState.startChecking
-        let fg: Color = disabled
-            ? (scheme == .dark ? Color(hex: 0x86868B) : Color(hex: 0xCCCCCC))
-            : (active ? .white : AppTheme.primary(scheme))
+        let checking = appState.startChecking
+        let disabled = appState.connState != .connected || checking
+        // 启停进行中文字用主色而不是禁用灰：进度填充本身也是主色系，
+        // 灰字压在半透明填充上对比度太低（浅色主题几乎看不清）
+        let fg: Color = checking
+            ? AppTheme.primary(scheme)
+            : (disabled
+                ? (scheme == .dark ? Color(hex: 0x86868B) : Color(hex: 0xCCCCCC))
+                : (active ? .white : AppTheme.primary(scheme)))
         let bg: Color = disabled
             ? (active ? AppTheme.hairline(scheme) : .clear)
             : (active ? (autoTradeHovering ? AppTheme.successHover(scheme) : AppTheme.success(scheme))
@@ -504,6 +509,11 @@ struct RootView: View {
                 Text(startButtonTitle)
                     .font(AppTheme.bodyFont.weight(.semibold))
                     .foregroundColor(fg)
+                    // 固定文字槽位：各阶段文案长短不一，不占位会让胶囊宽度随
+                    // 阶段跳变，进度填充的比例也跟着抖。宽度按最长的阶段文案留足
+                    .frame(minWidth: 158, alignment: .leading)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -514,30 +524,32 @@ struct RootView: View {
         .padding(.leading, 14)
         .padding(.trailing, 22)
         .frame(minHeight: 36)
-        .background(bg)
+        // 进度直接填在胶囊底色上（整颗从左向右），文字仍在上层保持可读
+        .background {
+            ZStack(alignment: .leading) {
+                bg
+                startProgressFill
+            }
+        }
         .overlay(
             RoundedRectangle(cornerRadius: 18)
                 .stroke(border, lineWidth: active || disabled ? 0 : 1)
         )
-        // 进度条叠在胶囊底部，随外层 cornerRadius 一起被裁成圆角（同版本胶囊）
-        .overlay(alignment: .bottom) { startProgressBar }
-        .cornerRadius(18)
+        // 裁剪到胶囊形状：否则填充的右边缘在半途会露出直角，与圆角胶囊打架
+        .clipShape(RoundedRectangle(cornerRadius: 18))
     }
 
-    /// 启停进度：阶段内有计数时按已完成比例延伸，无计数则只保留文字（如「检查服务器连通…」）
+    /// 启动进度：整颗胶囊从左向右被主色填满，宽度即完成百分比。
+    /// 用半透明填充而不是实色，避免盖住上面的阶段文字。
+    /// pct=-1（如停止操作）不填充，只显示文字。
     @ViewBuilder
-    private var startProgressBar: some View {
-        if appState.startChecking, appState.startProgressTotal > 0 {
+    private var startProgressFill: some View {
+        if appState.startChecking, appState.startProgressPct >= 0 {
             GeometryReader { geo in
                 Rectangle()
-                    .fill(AppTheme.primary(scheme))
-                    .frame(
-                        width: geo.size.width
-                            * CGFloat(appState.startProgressStep) / CGFloat(appState.startProgressTotal),
-                        height: geo.size.height
-                    )
+                    .fill(AppTheme.primary(scheme).opacity(0.22))
+                    .frame(width: geo.size.width * CGFloat(appState.startProgressPct) / 100)
             }
-            .frame(height: 3)
             .allowsHitTesting(false)
         }
     }

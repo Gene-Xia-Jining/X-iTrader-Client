@@ -454,7 +454,7 @@ public sealed class AppState : INotifyPropertyChanged
 
     private string _startProgressText = "";
     /// <summary>
-    /// 启停的当前阶段文案（如「天勤握手 1/2…」），空串表示没有在跑。
+    /// 启停的当前阶段文案（如「测试天勤连接…」），空串表示没有在跑。
     /// engine.start 是一次 RPC 调用，过程状态只能靠后端 engine_start_progress 事件推来。
     /// </summary>
     public string StartProgressText
@@ -463,28 +463,22 @@ public sealed class AppState : INotifyPropertyChanged
         private set => Set(ref _startProgressText, value);
     }
 
-    private int _startProgressStep;
-    /// <summary>当前阶段内的完成数（配合 <see cref="StartProgressTotal"/> 画进度条）</summary>
-    public int StartProgressStep
+    private int _startProgressPct = -1;
+    /// <summary>
+    /// 整次启动的百分比（后端按各阶段权重折算）；-1 表示该阶段没有可画的进度
+    /// （如停止操作），此时只显示文案不画进度条。
+    /// </summary>
+    public int StartProgressPct
     {
-        get => _startProgressStep;
-        private set => Set(ref _startProgressStep, value);
-    }
-
-    private int _startProgressTotal;
-    /// <summary>当前阶段内的总数；0 表示该阶段不细分，不显示进度条</summary>
-    public int StartProgressTotal
-    {
-        get => _startProgressTotal;
-        private set => Set(ref _startProgressTotal, value);
+        get => _startProgressPct;
+        private set => Set(ref _startProgressPct, value);
     }
 
     /// <summary>清空启停进度（操作结束或开始时调用，避免残留上一轮的数字）</summary>
     private void ResetStartProgress()
     {
         StartProgressText = "";
-        StartProgressStep = 0;
-        StartProgressTotal = 0;
+        StartProgressPct = -1;
     }
 
     internal void ClearStartBlockedIssues() => StartBlockedIssues = [];
@@ -868,8 +862,7 @@ public sealed class AppState : INotifyPropertyChanged
                 if (StartChecking)
                 {
                     StartProgressText = data["text"]?.GetValue<string>() ?? "";
-                    StartProgressStep = JsonHelpers.Int(data["step"]) ?? 0;
-                    StartProgressTotal = JsonHelpers.Int(data["total"]) ?? 0;
+                    StartProgressPct = JsonHelpers.Int(data["pct"]) ?? -1;
                 }
                 break;
             case "update_ready":

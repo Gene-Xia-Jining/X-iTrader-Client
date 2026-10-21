@@ -3,6 +3,7 @@
 import asyncio
 import tempfile
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
@@ -59,14 +60,29 @@ async def _health_ok(url):
     return {}
 
 
-def _start_with(service, health=None, session=None, token=True):
-    """在可控依赖下调用 engine_start，返回捕获的异常（None 表示未抛）。"""
+def _start_with(service, health=None, session=None, token=True, real_start=False):
+    """在可控依赖下调用 engine_start，返回捕获的异常（None 表示未抛）。
+
+    real_start=True 时让 _start_engines 真正执行（引擎用替身），
+    这样进度会一路推到 100%；默认跳过，测试只关心预检本身。
+    """
     service.bootstrap.token_service.token_store.have_token = lambda: token
     health_mock = health or _health_ok
     session_mock = session or (lambda account, auth: None)
-    with patch("src.backend.service.check_server_health", new=health_mock), \
-         patch("src.backend.service.test_account_session", new=session_mock), \
-         patch.object(service, "_start_engines", new=_noop):
+    patches = [
+        patch("src.backend.service.check_server_health", new=health_mock),
+        patch("src.backend.service.test_account_session", new=session_mock),
+    ]
+    if real_start:
+        patches += [
+            patch.object(service.bootstrap, "build_engine", new=_fake_build_engine),
+            patch("src.application.trading_engine.TradingEngine.start", new=_fake_engine_start),
+        ]
+    else:
+        patches.append(patch.object(service, "_start_engines", new=_noop))
+    with ExitStack() as stack:
+        for p in patches:
+            stack.enter_context(p)
         try:
             asyncio.run(service.engine_start({}))
         except EngineStartBlockedError as e:
@@ -75,6 +91,10 @@ def _start_with(service, health=None, session=None, token=True):
 
 
 async def _noop():
+    return None
+
+
+async def _fake_engine_start(self) -> None:
     return None
 
 
@@ -94,13 +114,13 @@ async def _fake_build_engine(account_id: str):
     return _Engine()
 
 
-def _collect_progress(service) -> list[tuple[str, str, int, int]]:
+def _collect_progress(service) -> list[tuple[str, str, int]]:
     """把启动进度广播收进列表：engine.start 期间壳只能靠它看进度。"""
-    events: list[tuple[str, str, int, int]] = []
+    events: list[tuple[str, str, int]] = []
 
     def on_broadcast(name: str, data: dict) -> None:
         if name == "engine_start_progress":
-            events.append((data["stage"], data["text"], data["step"], data["total"]))
+            events.append((data["stage"], data["text"], data["pct"]))
 
     service.attach_broadcast(on_broadcast)
     return events
@@ -277,11 +297,37 @@ class EngineStartProgressTest(unittest.TestCase):
         service = _make_service()
         service.bootstrap.save_account(_sim_account())
         events = _collect_progress(service)
-        _start_with(service)
-        stages = [stage for stage, _, _, _ in events]
-        self.assertEqual(stages, ["server", "accounts", "tqsdk", "tqsdk"])
+        _start_with(service, real_start=True)
+        stages = [stage for stage, _, _ in events]
+        # 预检阶段按 server → accounts → tqsdk 推进，最后是启动会话
+        self.assertEqual(stages[0], "server")
+        self.assertLess(stages.index("accounts"), stages.index("tqsdk"))
+        self.assertEqual(stages[-1], "engines")
 
-    def test_tqsdk_probe_reports_completion_count(self):
+    def test_progress_increases_monotonically_to_100(self):
+        """单账户时 pct 也要从低到 100 连续推进——否则进度条根本看不见。"""
+        service = _make_service()
+        service.bootstrap.save_account(_sim_account())
+        events = _collect_progress(service)
+        _start_with(service, real_start=True)
+        pcts = [pct for _, _, pct in events if pct >= 0]
+        self.assertGreaterEqual(len(pcts), 4, events)
+        self.assertEqual(pcts[-1], 100)
+        self.assertEqual(pcts, sorted(pcts), f"pct 必须单调不减：{pcts}")
+        # 起步不能是 0：从 0 开始会让进度条在最初一段时间里完全为空白
+        self.assertGreater(pcts[0], 0, events)
+
+    def test_single_account_hides_item_counter(self):
+        """只有一个账户时不显示「0/1」——看着像没动。"""
+        service = _make_service()
+        service.bootstrap.save_account(_sim_account())
+        events = _collect_progress(service)
+        _start_with(service)
+        texts = [text for _, text, _ in events]
+        self.assertIn("测试天勤连接…", texts)
+        self.assertFalse(any("/1" in t for t in texts), texts)
+
+    def test_multi_account_counts_items(self):
         service = _make_service()
         service.bootstrap.save_account(_sim_account())
         service.bootstrap.save_account(
@@ -289,18 +335,22 @@ class EngineStartProgressTest(unittest.TestCase):
         )
         events = _collect_progress(service)
         _start_with(service)
-        tqsdk = [(text, step, total) for stage, text, step, total in events if stage == "tqsdk"]
-        # 起始 0/2，每完成一个账户推进一次，最后落在 2/2
-        self.assertEqual(tqsdk[0], ("天勤握手 0/2…", 0, 2))
-        self.assertEqual(tqsdk[-1], ("天勤握手 2/2…", 2, 2))
-        self.assertEqual(sorted(step for _, step, _ in tqsdk), [0, 1, 2])
+        tqsdk = [text for stage, text, _ in events if stage == "tqsdk"]
+        self.assertEqual(tqsdk[0], "测试天勤连接 0/2…")
+        self.assertEqual(tqsdk[-1], "测试天勤连接 2/2…")
 
-    def test_no_probe_skips_tqsdk_stage(self):
+    def test_blocked_start_does_not_claim_completion(self):
+        """预检被拦时进度停在拦截点，不能假装走完——用户看到的是问题清单。"""
         service = _make_service()
         service.bootstrap.save_account(_sim_account(tq_password=""))
         events = _collect_progress(service)
-        _start_with(service)
-        self.assertNotIn("tqsdk", [stage for stage, _, _, _ in events])
+        error = _start_with(service, real_start=True)
+        self.assertIsNotNone(error)
+        self.assertTrue(any("未配置快期密码" in i for i in error.issues))
+        stages = [stage for stage, _, _ in events]
+        self.assertNotIn("tqsdk", stages)
+        self.assertNotIn("engines", stages)
+        self.assertLess([pct for _, _, pct in events if pct >= 0][-1], 100)
 
     def test_start_engines_reports_session_progress(self):
         service = _make_service()
@@ -308,26 +358,19 @@ class EngineStartProgressTest(unittest.TestCase):
         service.bootstrap.save_account(_live_account(id="live", label="实盘账户"))
         service.bootstrap.token_service.token_store.have_token = lambda: True
         events = _collect_progress(service)
+        _start_with(service, real_start=True)
 
-        async def fake_start(self) -> None:
-            return None
+        engines = [text for stage, text, _ in events if stage == "engines"]
+        self.assertEqual(engines[0], "启动交易会话 0/2…")
+        self.assertEqual(engines[-1], "启动交易会话 2/2…")
 
-        with patch("src.backend.service.check_server_health", new=_health_ok), \
-             patch("src.backend.service.test_account_session", return_value=None), \
-             patch.object(service.bootstrap, "build_engine", new=_fake_build_engine), \
-             patch("src.application.trading_engine.TradingEngine.start", new=fake_start):
-            asyncio.run(service.engine_start({}))
-
-        engines = [(text, step, total) for stage, text, step, total in events if stage == "engines"]
-        # 文案里的数字与 step 必须一致，否则进度条和文字会打架
-        self.assertEqual(engines[0], ("启动交易会话 0/2…", 0, 2))
-        self.assertEqual(engines[-1][1:], (2, 2))
-
-    def test_stop_broadcasts_stage(self):
+    def test_stop_broadcasts_stage_without_pct(self):
+        """停止没有细分阶段：只给文案，pct=-1 让壳不画进度条。"""
         service = _make_service()
         events = _collect_progress(service)
         asyncio.run(service.engine_stop({}))
-        self.assertIn("stop", [stage for stage, _, _, _ in events])
+        stop = [(text, pct) for stage, text, pct in events if stage == "stop"]
+        self.assertEqual(stop, [("正在停止…", -1)])
 
 
 if __name__ == "__main__":

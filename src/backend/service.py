@@ -75,6 +75,17 @@ def _dataclass_dict(obj) -> dict:
     return result
 
 
+# 启动各阶段在总进度里的权重（按经验耗时分配，非精确计时）：
+# 天勤握手要连天勤并校验账户，是唯一可能耗时数十秒的阶段，占主要份额；
+# 其余阶段基本是毫秒到数秒。改这里的比例只会影响进度条推进的快慢观感。
+_START_STAGE_WEIGHTS = {
+    "server": 10,   # /api/health，超时 5s
+    "accounts": 5,  # 纯本地字段校验
+    "tqsdk": 55,    # 登录 + 网关探测 + TqApi 构造，最慢
+    "engines": 30,  # 建会话 + 起信号流
+}
+
+
 class BackendService:
     def __init__(self, workdir: Path):
         self.workdir = workdir
@@ -104,6 +115,8 @@ class BackendService:
         self._update_kind = "full"
         # RPC 广播函数由 rpc 层注入：fn(event_name, data_dict)
         self._broadcast_fn = None
+        # 本次启动各阶段在总进度里的区间，_begin_start_progress 填充
+        self._start_progress_bounds: dict[str, tuple[float, float]] = {}
         # update_apply / quit 完成清理后置位，主循环据此优雅退出
         self.exit_requested = asyncio.Event()
 
@@ -637,16 +650,51 @@ class BackendService:
     def _log(self, message: str, level: LogLevel = LogLevel.INFO) -> None:
         self.event_bus.publish(LogEvent(message=message, level=level))
 
-    def _start_progress(self, stage: str, text: str, step: int = 0, total: int = 0) -> None:
-        """广播启动进度。engine.start 是单次 RPC 调用，过程中壳拿不到任何状态，
-        只能靠事件推送；step/total 表示当前阶段内的完成数（0/0 = 该阶段不细分）。
+    def _start_progress_stages(self) -> list[str]:
+        """本次启动实际会经过的阶段。没有可握手的凭据时跳过 tqsdk，
+        否则该阶段的权重会白白占掉一段进度、让进度条冲到一半后停住。"""
+        enabled = [a for a in self.bootstrap.accounts if a.enabled]
+        stages = ["server", "accounts"]
+        if any(a.tq_account and a.tq_password for a in enabled):
+            stages.append("tqsdk")
+        stages.append("engines")
+        return stages
 
-        阶段耗时差异很大（天勤握手可能数十秒，本地字段检查是毫秒级），所以
-        刻意不做跨阶段的总百分比——那会让进度条长时间卡在最后一个数字上。
+    def _begin_start_progress(self) -> None:
+        """按本次实际阶段算出各阶段在总进度里的区间（0-100）。
+
+        用跨阶段总进度而不是阶段内的 step/total：单账户时 step/total 只会在
+        0/1 与 1/1 之间跳两次，进度条几乎看不到。权重按经验耗时分配，
+        让可能耗时数十秒的天勤握手占据主要一段。
         """
+        stages = self._start_progress_stages()
+        total_weight = sum(_START_STAGE_WEIGHTS[s] for s in stages)
+        bounds: dict[str, tuple[float, float]] = {}
+        acc = 0.0
+        for stage in stages:
+            span = _START_STAGE_WEIGHTS[stage] / total_weight * 100
+            bounds[stage] = (acc, acc + span)
+            acc += span
+        self._start_progress_bounds = bounds
+
+    def _start_progress(self, stage: str, text: str, done: int = 0, total: int = 0) -> None:
+        """广播启动进度。engine.start 是单次 RPC 调用，过程中壳拿不到任何状态，
+        只能靠事件推送。
+
+        pct 是折算到整次启动的百分比，-1 表示该阶段没有可展示的进度
+        （如停止，没有细分阶段），此时壳只显示文案不画进度条。
+        """
+        pct = -1
+        bounds = self._start_progress_bounds.get(stage)
+        if bounds is not None:
+            start, end = bounds
+            ratio = (done / total) if total > 0 else 0.0
+            ratio = max(0.0, min(1.0, ratio))
+            # 下限 1%：阶段刚开始时 ratio 为 0，若如实报 0 则进度条宽度为 0，
+            # 在界面上完全看不见——用户会以为压根没开始
+            pct = max(1, int(round(start + (end - start) * ratio)))
         self._broadcast(
-            "engine_start_progress",
-            {"stage": stage, "text": text, "step": step, "total": total},
+            "engine_start_progress", {"stage": stage, "text": text, "pct": pct}
         )
 
     def _enabled_account_ids(self) -> list[str]:
@@ -672,6 +720,8 @@ class BackendService:
         同样回滚（停掉已启动的引擎、不置 auto_trade）并抛出问题列表，避免
         出现「按钮已显示开启但实际半数账户未起」的不一致状态。
         """
+        # 先算出本次会经过哪些阶段，后续各阶段据此折算成整次启动的百分比
+        self._begin_start_progress()
         issues = await self._preflight_start_checks()
         if issues:
             # 拼成多行文案便于日志；结构化 issues 经异常 type 字段回传 UI
@@ -709,6 +759,7 @@ class BackendService:
             await check_server_health(config.server_url)
         except Exception as e:
             issues.append(f"服务器未连接: {e}")
+        self._start_progress("server", "检查服务器连通…", 1, 1)
 
         # 2) 已启用账户与关键字段
         self._start_progress("accounts", "检查账户配置…")
@@ -738,6 +789,7 @@ class BackendService:
         token_service = self.bootstrap.token_service
         if not token_service.token_store.have_token():
             issues.append("本地 API token 未领取，请在 Token 管理页申请并等待服务器审批")
+        self._start_progress("accounts", "检查账户配置…", 1, 1)
 
         # 4) 天勤账户握手（字段齐全才试，避免重复报密码错误）
         to_probe = [
@@ -758,7 +810,12 @@ class BackendService:
                 for acc in to_probe
             }
             total = len(tasks)
-            self._start_progress("tqsdk", f"天勤握手 0/{total}…", 0, total)
+
+            # 单账户时不显示「0/1」——看上去像没动；多账户才逐个头
+            def probe_text(n: int) -> str:
+                return "测试天勤连接…" if total <= 1 else f"测试天勤连接 {n}/{total}…"
+
+            self._start_progress("tqsdk", probe_text(0), 0, total)
             done = 0
             pending = set(tasks)
             while pending:
@@ -772,15 +829,14 @@ class BackendService:
                         label = acc.label or acc.id
                         issues.append(f"账户「{label}」天勤连接失败: {exc}")
                     done += 1
-                    self._start_progress(
-                        "tqsdk", f"天勤握手 {done}/{total}…", done, total
-                    )
+                    self._start_progress("tqsdk", probe_text(done), done, total)
 
         return issues
 
     async def engine_stop(self, params: dict) -> dict:
         # 停止要等每个引擎退出（单账户最多 5 秒），同样给个阶段提示。
-        # 文案不带「自动交易」前缀：壳展示时会加上「自动交易：」
+        # 文案不带「自动交易」前缀：壳展示时会加上「自动交易：」。
+        # pct 恒为 -1（停止没有细分阶段），壳此时只显示文案不画进度条
         self._start_progress("stop", "正在停止…")
         self.set_auto_trade({"value": False})
         await self.stop_engines()
@@ -805,12 +861,11 @@ class BackendService:
         ]
         total = len(pending)
         for done, account_id in enumerate(pending):
-            # step 用「已完成数」，与文案里的数字保持一致（壳按 step/total 画进度条）。
             # 首个账户的 build_engine 会一次性构造所有账户的 TqApi（执行器是共享的），
-            # 所以这里会停在 0/N 上一段时间——文案用「启动交易会话」而非「账户已启动」
-            self._start_progress(
-                "engines", f"启动交易会话 {done}/{total}…", done, total
-            )
+            # 所以这里会停在起始位置一段时间——文案用「启动交易会话」而非「账户已启动」。
+            # 单账户时不显示计数（「0/1」看着像没动），多账户才逐个头。
+            text = "启动交易会话…" if total <= 1 else f"启动交易会话 {done}/{total}…"
+            self._start_progress("engines", text, done, total)
             try:
                 engine = await self.bootstrap.build_engine(account_id)
                 engine.set_auto_trade(self._auto_trade)
@@ -820,7 +875,9 @@ class BackendService:
             except Exception as e:
                 failures.append(f"账户「{labels.get(account_id, account_id)}」启动失败: {e}")
         if total:
-            self._start_progress("engines", f"启动交易会话 {total}/{total}…", total, total)
+            # 收尾推到阶段终点，避免进度条停在 100% 之前一点点
+            text = "启动交易会话…" if total <= 1 else f"启动交易会话 {total}/{total}…"
+            self._start_progress("engines", text, total, total)
         if failures:
             # 已启动的引擎交由 engine_stop 回滚，这里只汇总问题抛出
             raise EngineStartBlockedError(failures)

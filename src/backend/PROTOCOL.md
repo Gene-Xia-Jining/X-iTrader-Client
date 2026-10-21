@@ -53,7 +53,7 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 | `config_changed` | `{}` | 配置/账户已保存（引擎运行中则下次启动生效） |
 | `token_status` | `{status, records: [...]}` | token 审批状态变化；后台轮询领取成功后广播，壳据此刷新 Token 页 |
 | `update_progress` | `{pct, received, total}` | pct=-1 表示总大小未知 |
-| `engine_start_progress` | `{stage, text, step, total}` | `engine.start`/`engine.stop` 执行中的阶段进度（该调用返回前过程状态无从获取）。`stage` 依次为 `server`/`accounts`/`tqsdk`/`engines`（stop 为 `stop`）；`text` 是可直接展示的中文阶段文案，壳自行加前缀；`step/total` 为阶段内完成数，`total=0` 表示该阶段不细分（不显示进度条）。刻意不给跨阶段总百分比——各阶段耗时差异极大，总百分比会长时间停在同一数字上 |
+| `engine_start_progress` | `{stage, text, pct}` | `engine.start`/`engine.stop` 执行中的进度（该调用返回前过程状态无从获取）。`stage` 依次为 `server`/`accounts`/`tqsdk`/`engines`（stop 为 `stop`，且没有可握手的账户时 `tqsdk` 会被跳过）；`text` 是可直接展示的中文阶段文案，壳自行加前缀；`pct` 是**整次启动**的百分比（按各阶段经验权重折算，起步即 ≥1，正常走到 100），`pct=-1` 表示没有可画的进度（停止操作），壳此时只显示文案。预检被拦时 `pct` 停在拦截点，不会走满 |
 | `update_ready` | `{kind, mode}` | kind 是给人看的中文包名（"差量更新包"/"完整更新包"）；mode 为 `"patch"`/`"full"`，壳据此决定装完是重连还是退出 |
 | `update_failed` / `update_cancelled` | `{message}` / `{}` | |
 | `backend_stopping` | `{reason: "quit"\|"update"}` | 后端即将退出，壳应断开并等待 |

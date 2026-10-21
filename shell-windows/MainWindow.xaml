@@ -59,15 +59,26 @@
                     </Button>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Right">
-                    <!-- 自动交易胶囊：Padding 移到内层 StackPanel，好让进度条能贴到胶囊底部
-                         （与版本胶囊的下载进度条同一手法） -->
+                    <!-- 自动交易胶囊：胶囊底色本身随启动进度从左向右填充，
+                         所以 Padding 放在内层 StackPanel、进度条置于最底层 -->
                     <Border x:Name="AutoTradePill"
                             VerticalAlignment="Center"
                             MinHeight="36"
                             BorderThickness="1"
                             CornerRadius="18"
-                            Padding="0">
+                            Padding="0"
+                            SizeChanged="OnAutoTradePillSizeChanged">
                         <Grid>
+                            <!-- Border 的 CornerRadius 不裁剪子元素，填充的右边缘会
+                                 露出直角；外面套一层同圆角的 Border 做裁剪 -->
+                            <Border CornerRadius="18">
+                                <!-- 启动进度：宽度即完成百分比，半透明避免盖住阶段文字 -->
+                                <Rectangle x:Name="AutoTradeProgress"
+                                           HorizontalAlignment="Left"
+                                           VerticalAlignment="Stretch"
+                                           Visibility="Collapsed"
+                                           IsHitTestVisible="False" />
+                            </Border>
                             <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center"
                                         Margin="14,0,22,0">
                                 <Button x:Name="AutoTradeHelpButton" Content="?" Click="OnAutoTradeHelpClick"
@@ -79,14 +90,6 @@
                                               MinWidth="0"
                                               Toggled="OnAutoTradeToggled" />
                             </StackPanel>
-                            <!-- 启停进度：仅阶段内可计数时显示（如「天勤握手 1/2」） -->
-                            <ProgressBar x:Name="AutoTradeProgress"
-                                         Height="3"
-                                         VerticalAlignment="Bottom"
-                                         Margin="10,0,10,1"
-                                         Minimum="0" Maximum="100"
-                                         Visibility="Collapsed"
-                                         IsHitTestVisible="False" />
                         </Grid>
                     </Border>
                     <Button x:Name="ThemeButton" Click="OnThemeToggleClick" Content="深色" />

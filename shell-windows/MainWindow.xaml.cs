@@ -254,6 +254,18 @@ public sealed partial class MainWindow : Window
 
     // -------- 顶部操作栏 --------
 
+    /// <summary>
+    /// 胶囊宽度变化时重算进度填充宽度：文案随阶段变化（如「自动交易：测试天勤连接…」）
+    /// 会让胶囊变宽，而进度是按胶囊实际宽度换算的百分比。
+    /// </summary>
+    private void OnAutoTradePillSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_state.StartChecking && _state.StartProgressPct >= 0)
+        {
+            AutoTradeProgress.Width = e.NewSize.Width * _state.StartProgressPct / 100;
+        }
+    }
+
     private void OnAutoTradeToggled(object sender, RoutedEventArgs e)
     {
         // 初始化/状态回填阶段抑制 Toggled 的副作用，避免把 UI 同步当成用户操作
@@ -877,12 +889,12 @@ public sealed partial class MainWindow : Window
         AutoTradeToggle.OnContent = toggleContent;
         AutoTradeToggle.OffContent = toggleContent;
 
-        // 阶段内可计数时才画进度条；像「检查服务器连通…」这类没有分母的阶段只显示文字
-        // （颜色随主题，在 ApplyThemeToChrome 里统一设置）
-        if (_state.StartChecking && _state.StartProgressTotal > 0)
+        // 后端已按各阶段权重折算成整次启动的百分比，从 0 起连续推进。
+        // 进度直接填在胶囊里（整颗从左向右），宽度按胶囊实际宽度换算；
+        // pct<0（如停止操作）不填充，只显示文案
+        if (_state.StartChecking && _state.StartProgressPct >= 0 && AutoTradePill.ActualWidth > 0)
         {
-            AutoTradeProgress.Maximum = _state.StartProgressTotal;
-            AutoTradeProgress.Value = _state.StartProgressStep;
+            AutoTradeProgress.Width = AutoTradePill.ActualWidth * _state.StartProgressPct / 100;
             AutoTradeProgress.Visibility = Visibility.Visible;
         }
         else
@@ -974,7 +986,7 @@ public sealed partial class MainWindow : Window
         AutoTradeHelpButton.BorderBrush = new SolidColorBrush(palette.Hairline);
         AutoTradeHelpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
         AutoTradePill.BorderBrush = new SolidColorBrush(palette.Hairline);
-        AutoTradeProgress.Foreground = new SolidColorBrush(palette.Primary);
+        AutoTradeProgress.Fill = new SolidColorBrush(palette.Primary) { Opacity = 0.22 };
         QuitButton.Foreground = new SolidColorBrush(palette.Danger);
         ThemeButton.Content = IsDark ? "浅色" : "深色";
 
