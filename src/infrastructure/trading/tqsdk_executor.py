@@ -1,5 +1,6 @@
 import asyncio
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -230,8 +231,12 @@ class TqSdkTradingExecutor(TradingExecutor):
         accounts: list[Account],
         auths: dict[str, tuple[str, str]],
         close_timeout: float = 10.0,
+        fill_timeout: float = 60.0,
     ):
         self._close_timeout = close_timeout
+        # 调仓等成交的上限：TargetPosTask 是追价下单，活跃时段通常几秒内成交；
+        # 超时即判失败而不是静默成功（非交易时段、行情断开都会落在这里）
+        self._fill_timeout = fill_timeout
         # 先建会话，避免调用方在会话未就绪时投递到已关闭的 loop
         self._sessions: dict[str, _AccountSession] = {
             account.id: self._start_session(account, auths.get(account.id, (None, None)))
@@ -293,28 +298,147 @@ class TqSdkTradingExecutor(TradingExecutor):
         future = asyncio.run_coroutine_threadsafe(asyncio.to_thread(fn), session.loop)
         return future.result(timeout)
 
-    def _get_task(self, session: _AccountSession, symbol: str) -> object:
-        """按品种取调仓任务；同一 (账户, 品种) 复用同一实例。"""
+    def _get_task(self, session: _AccountSession, symbol: str, order_symbol: str) -> object:
+        """取 (账户, 品种) 的调仓任务，按实际合约绑定；主力换月时重建。
+
+        必须用实际合约（SHFE.rb2701）而不是主连（KQ.m@SHFE.rb）构造 TargetPosTask：
+        持仓记在实际合约上，用主连构造会让任务内部读到的持仓恒为 0，每次调仓都
+        重复开仓，永远到不了目标。
+
+        主力换月后 underlying_symbol 变化，旧任务仍绑着旧合约，必须撤掉重绑，
+        否则新信号会继续下到已经不再主力（甚至临近交割）的合约上。
+        """
         from tqsdk import TargetPosTask
 
-        task = session._tasks.get(symbol)
-        if task is None:
-            # 多账户模式下 TargetPosTask 必须显式指定账户实例；该实例须与构造
-            # TqApi 时传入的同一对象，否则 TqMultiAccount._check_valid 校验失败
-            task = TargetPosTask(session.api, symbol, account=session.account_obj, price="ACTIVE")
-            session._tasks[symbol] = task
+        cached = session._tasks.get(symbol)
+        if cached is not None:
+            task, bound_symbol = cached
+            if bound_symbol != order_symbol:
+                task.cancel()
+                session._tasks.pop(symbol, None)
+            else:
+                return task
+
+        task = TargetPosTask(session.api, order_symbol, account=session.account_obj, price="ACTIVE")
+        session._tasks[symbol] = (task, order_symbol)
         return task
 
+    @staticmethod
+    def _tradable_symbol(api, symbol: str) -> str:
+        """把主力连续合约（KQ.m@SHFE.rb）换成可下单的实际合约（SHFE.rb2701）。
+
+        主连/指数合约（KQ.m@、KQ.i@）只提供行情：TqApi.insert_order 会把它拆成
+        exchange_id="KQ"，快期模拟与实盘都不受理——委托发出去后既无成交也无错单
+        回执，永远停在 ALIVE。行情对象上的 underlying_symbol 就是当前主力合约。
+
+        拿不到 underlying_symbol 时保持原样：由 tqsdk 自己报错，比静默改写下单
+        标的更安全。
+        """
+        if not symbol.startswith("KQ."):
+            return symbol
+        underlying = getattr(api.get_quote(symbol), "underlying_symbol", "") or ""
+        return underlying or symbol
+
     async def set_target_position(self, symbol: str, target_position: int, account_id: str = "") -> None:
+        """把账户在 symbol 上的持仓调到 target_position，并等到真正成交。
+
+        tqsdk 的 TargetPosTask 只在每次 wait_update 时推进一步（报单、追价、撤单
+        重下都在那一步里发生），单次 wait_update 并不代表下单成功。这里持续推进
+        直到持仓到位、委托报错或超时，任何一个非成功结局都抛异常，交由上层把
+        信号记为失败——否则界面会显示「交易执行成功」而账户里根本没有单子。
+        """
         if not account_id:
             raise ValueError("account_id 不能为空")
 
         def _set():
             session = self._sessions[account_id]
-            self._get_task(session, symbol).set_target_volume(target_position)
-            session.api.wait_update()
+            api = session.api
+            order_symbol = self._tradable_symbol(api, symbol)
+            # 记下调仓前已存在的委托号：拒单判定只看本次新产生的委托，
+            # 否则同一账户同一合约上的历史错单会让每次都调仓都误判失败
+            seen_orders = {
+                oid
+                for oid in api.get_order(account=session.account_obj)
+                if not oid.startswith("_")
+            }
+            task = self._get_task(session, symbol, order_symbol)
+            task.set_target_volume(target_position)
 
-        self._submit(account_id, _set)
+            deadline = time.time() + self._fill_timeout
+            try:
+                while True:
+                    api.wait_update(deadline=min(deadline, time.time() + 1))
+                    # 先看持仓：已到位就不必再管委托（目标为当前持仓时不会产生新单）
+                    if self._position_reached(api, order_symbol, target_position):
+                        return
+                    error = self._order_error(
+                        api, session.account_obj, order_symbol, seen_orders
+                    )
+                    if error:
+                        raise RuntimeError(error)
+                    if time.time() >= deadline:
+                        raise TimeoutError(
+                            f"{symbol}（{order_symbol}）调仓至 {target_position} 手未在 "
+                            f"{self._fill_timeout:.0f} 秒内完成"
+                            f"（实际持仓 {self._current_position(api, order_symbol)} 手）。"
+                            "可能是非交易时段、委托未成交或行情中断，请到快期确认后重试"
+                        )
+            except Exception:
+                # 判失败就必须撤掉自己挂的单：留着 ALIVE 委托的话，它可能在界面已显示
+                # 「执行失败」之后成交，造成数据库记录与账户持仓长期不一致
+                self._cancel_task(session, symbol, task, api)
+                raise
+
+        # _submit 同步等结果，放线程里避免阻塞后端事件循环
+        await asyncio.to_thread(self._submit, account_id, _set, self._fill_timeout + 30)
+
+    def _cancel_task(self, session: _AccountSession, symbol: str, task, api) -> None:
+        """撤掉调仓任务及其未成交委托；清理失败不能掩盖原始错误，故只吞自己的异常。"""
+        try:
+            task.cancel()
+            for _ in range(10):
+                if task.is_finished():
+                    break
+                api.wait_update(deadline=time.time() + 1)
+        except Exception:
+            # 撤单/任务收尾失败不改变「本次执行失败」的结论，交由上层记录原始原因
+            pass
+        finally:
+            session._tasks.pop(symbol, None)
+
+    @staticmethod
+    def _current_position(api, symbol: str) -> int:
+        return int(api.get_position(symbol).pos)
+
+    @classmethod
+    def _position_reached(cls, api, symbol: str, target_position: int) -> bool:
+        return cls._current_position(api, symbol) == target_position
+
+    @staticmethod
+    def _order_error(api, account_obj, symbol: str, seen_orders: set) -> str:
+        """返回本次调仓新产生的错单原因（无错单返回空串）。
+
+        错单（is_error）是交易所明确拒单，重试也不会成功，必须立刻失败；
+        ALIVE 的挂单不算错误，由上层超时兜底。
+
+        只认本次调仓新出现的委托（seen_orders 之外的）：同一账户同一合约上
+        历史错单会一直留在委托列表里，若一并扫描，之后每次调仓都会被旧错单
+        判成失败。
+        """
+        instrument = symbol.split(".", 1)[-1]
+        for order_id, order in api.get_order(account=account_obj).items():
+            if order_id.startswith("_") or order_id in seen_orders:
+                continue
+            if getattr(order, "instrument_id", "") != instrument:
+                continue
+            if not order.is_error:
+                continue
+            return (
+                f"交易所拒绝委托（{symbol} {getattr(order, 'direction', '')} "
+                f"{getattr(order, 'volume_orign', '')} 手）："
+                f"{order.last_msg or '未返回原因'}"
+            )
+        return ""
 
     def close(self) -> None:
         """关闭全部账户的 TqApi 会话。幂等；单个账户失败不影响其余账户。

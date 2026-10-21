@@ -118,21 +118,30 @@ class TradingEngine:
             LogLevel.INFO,
         )
 
-        if await self.trade_repo.exists(self.account_id, signal.id):
+        existing = await self.trade_repo.get(self.account_id, signal.id)
+        if existing is None:
+            await self.trade_repo.add(
+                TradeCommand(
+                    account_id=self.account_id,
+                    id=signal.id,
+                    symbol=signal.symbol,
+                    side=signal.side,
+                    price=signal.price,
+                    target_position=signal.target_position,
+                    received_at=signal.updated_at,
+                    status=TradeCommandStatus.PENDING,
+                )
+            )
+        elif existing.status == TradeCommandStatus.EXECUTED:
             self._log(f"已执行过: {signal.id}", LogLevel.WARNING)
             return
-
-        command = TradeCommand(
-            account_id=self.account_id,
-            id=signal.id,
-            symbol=signal.symbol,
-            side=signal.side,
-            price=signal.price,
-            target_position=signal.target_position,
-            received_at=signal.updated_at,
-            status=TradeCommandStatus.PENDING,
-        )
-        await self.trade_repo.add(command)
+        else:
+            # 上次失败的（超时、拒单、非交易时段）允许重试：服务器对同一根 K 线
+            # 不会重发信号，直接跳过等于永久丢弃这次调仓
+            await self.trade_repo.set_status(
+                self.account_id, signal.id, TradeCommandStatus.PENDING
+            )
+            self._log(f"重试上次失败的信号: {signal.id}", LogLevel.INFO)
 
         if not self.auto_trade:
             self._log("自动交易关闭", LogLevel.INFO)
