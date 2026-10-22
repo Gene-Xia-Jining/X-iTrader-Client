@@ -1,6 +1,17 @@
 import SwiftUI
 
-/// 仪表盘：模拟 / 实盘两张账户汇总卡片，左右顺序可拖动互换。
+/// 仪表盘卡片高度偏好键，用于测量卡片高度并适配占位框
+private struct DashboardCardHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 180
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        let next = nextValue()
+        if next > 0 {
+            value = next
+        }
+    }
+}
+
+/// 仪表盘：模拟 / 实盘两张账户汇总卡片，单列纵向排列，可拖动互换顺序并在拖动时展示占位框。
 struct DashboardView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var scheme
@@ -11,17 +22,32 @@ struct DashboardView: View {
     @State private var errorText = ""
     /// 请求代号：账户变化会立即重发，旧的返回结果不能覆盖新数据
     @State private var requestSeq = 0
-    /// 正在拖动的卡片与位移（松手时按位移方向决定是否换位）
+
+    /// 当前被拖拽的卡片
     @State private var dragCard: DashboardCard?
-    @State private var dragOffset: CGSize = .zero
+    /// 当前拖动手势的纵向位移
+    @State private var dragOffsetY: CGFloat = 0
+    /// 拖动是否越过互换阈值（动态让位与落点占位展示）
+    @State private var isSwappedInHover = false
+    /// 卡片实际渲染高度（默认 180）
+    @State private var cardHeight: CGFloat = 180
+
+    private let cardSpacing: CGFloat = 16
+    private var slotDistance: CGFloat { cardHeight + cardSpacing }
 
     var body: some View {
         PageContainer {
-            HStack(alignment: .top, spacing: 16) {
-                ForEach(order) { card in
-                    summaryCard(card)
+            VStack(spacing: cardSpacing) {
+                ForEach(Array(order.enumerated()), id: \.element.id) { index, card in
+                    cardSlot(card: card, index: index)
                 }
             }
+            .onPreferenceChange(DashboardCardHeightKey.self) { height in
+                if height > 50 && abs(cardHeight - height) > 1 && dragCard == nil {
+                    cardHeight = height
+                }
+            }
+
             if !errorText.isEmpty {
                 Text("账户数据读取失败: \(errorText)")
                     .font(AppTheme.dimFont)
@@ -36,11 +62,131 @@ struct DashboardView: View {
         }
     }
 
+    // MARK: - 卡片槽位与拖动占位
+
+    private func cardSlot(card: DashboardCard, index: Int) -> some View {
+        let isDragging = dragCard == card
+        return ZStack(alignment: .topLeading) {
+            // 底层：占位框（当该卡片被提起拖动时显现，指示目标落点）
+            if isDragging {
+                placeholderView
+                    .offset(y: placeholderOffset(forIndex: index))
+            }
+
+            // 上层：实际卡片
+            summaryCard(card, isDragging: isDragging)
+                .offset(y: cardOffset(forCard: card, index: index))
+                .zIndex(isDragging ? 10 : 1)
+                .contentShape(RoundedRectangle(cornerRadius: 18))
+                .gesture(cardDragGesture(for: card, index: index))
+                .onHover { hovering in
+                    if hovering && dragCard == nil {
+                        NSCursor.openHand.push()
+                    } else {
+                        NSCursor.pop()
+                    }
+                }
+        }
+    }
+
+    /// 拖动中展示的虚线占位框
+    private var placeholderView: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 18)
+                .strokeBorder(
+                    AppTheme.primary(scheme).opacity(0.45),
+                    style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])
+                )
+                .background(
+                    RoundedRectangle(cornerRadius: 18)
+                        .fill(AppTheme.primary(scheme).opacity(0.04))
+                )
+
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.up.and.down")
+                    .font(.system(size: 13, weight: .medium))
+                Text("放置于此处")
+                    .font(AppTheme.dimFont)
+            }
+            .foregroundColor(AppTheme.primary(scheme).opacity(0.65))
+        }
+        .frame(height: cardHeight)
+        .frame(maxWidth: .infinity)
+    }
+
+    /// 真实卡片的垂直位移
+    private func cardOffset(forCard card: DashboardCard, index: Int) -> CGFloat {
+        if dragCard == card {
+            return dragOffsetY
+        }
+        guard dragCard != nil else { return 0 }
+
+        // 未被拖动的卡片：在拖动越过阈值时顺滑让位
+        if isSwappedInHover {
+            return index == 1 ? -slotDistance : slotDistance
+        }
+        return 0
+    }
+
+    /// 占位框的垂直位移（指示松手后的落点位置）
+    private func placeholderOffset(forIndex index: Int) -> CGFloat {
+        guard isSwappedInHover else { return 0 }
+        return index == 0 ? slotDistance : -slotDistance
+    }
+
+    /// 卡片拖动手势处理
+    private func cardDragGesture(for card: DashboardCard, index: Int) -> some Gesture {
+        DragGesture(minimumDistance: 6)
+            .onChanged { value in
+                if dragCard == nil {
+                    dragCard = card
+                }
+                dragOffsetY = value.translation.height
+
+                let threshold: CGFloat = 60
+                let hysteresis: CGFloat = 35
+
+                if index == 0 {
+                    // 上方卡片向下拖动
+                    if !isSwappedInHover && dragOffsetY > threshold {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+                            isSwappedInHover = true
+                        }
+                    } else if isSwappedInHover && dragOffsetY < hysteresis {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+                            isSwappedInHover = false
+                        }
+                    }
+                } else {
+                    // 下方卡片向上拖动
+                    if !isSwappedInHover && dragOffsetY < -threshold {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+                            isSwappedInHover = true
+                        }
+                    } else if isSwappedInHover && dragOffsetY > -hysteresis {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+                            isSwappedInHover = false
+                        }
+                    }
+                }
+            }
+            .onEnded { _ in
+                let shouldSwap = isSwappedInHover
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+                    if shouldSwap, let other = order.first(where: { $0 != card }) {
+                        swap(card, other)
+                    }
+                    dragCard = nil
+                    dragOffsetY = 0
+                    isSwappedInHover = false
+                }
+            }
+    }
+
     // MARK: - 卡片
 
-    private func summaryCard(_ card: DashboardCard) -> some View {
+    private func summaryCard(_ card: DashboardCard, isDragging: Bool) -> some View {
         let summary = summaries[card] ?? DashboardSummary()
-        let dragging = dragCard == card
         return AppCard {
             VStack(alignment: .leading, spacing: 14) {
                 headerRow(card, summary)
@@ -51,38 +197,23 @@ struct DashboardView: View {
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(key: DashboardCardHeightKey.self, value: geo.size.height)
+                }
+            )
         }
         .overlay(
             RoundedRectangle(cornerRadius: 18)
-                .stroke(AppTheme.primary(scheme).opacity(dragging ? 1 : 0), lineWidth: 2)
+                .stroke(AppTheme.primary(scheme).opacity(isDragging ? 1 : 0), lineWidth: 2)
         )
-        .offset(x: dragging ? dragOffset.width : 0)
-        .zIndex(dragging ? 1 : 0)
-        .contentShape(RoundedRectangle(cornerRadius: 18))
-        .gesture(
-            DragGesture(minimumDistance: 10)
-                .onChanged { value in
-                    dragCard = card
-                    dragOffset = value.translation
-                }
-                .onEnded { value in
-                    let moved = abs(value.translation.width) > 80
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        if moved, let other = order.first(where: { $0 != card }) {
-                            swap(card, other)
-                        }
-                        dragCard = nil
-                        dragOffset = .zero
-                    }
-                }
+        .shadow(
+            color: Color.black.opacity(isDragging ? (scheme == .dark ? 0.45 : 0.12) : 0),
+            radius: isDragging ? 12 : 0,
+            x: 0,
+            y: isDragging ? 6 : 0
         )
-        .onHover { hovering in
-            if hovering {
-                NSCursor.openHand.push()
-            } else {
-                NSCursor.pop()
-            }
-        }
+        .scaleEffect(isDragging ? 1.01 : 1.0)
     }
 
     private func headerRow(_ card: DashboardCard, _ summary: DashboardSummary) -> some View {

@@ -273,6 +273,18 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 版本胶囊宽度变化时重算进度填充宽度：文案随阶段变化（如「取消 37%」）
+    /// 会让胶囊变宽，而填充是按胶囊实际宽度换算的百分比。
+    /// </summary>
+    private void OnVersionPillSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_state.UpdatePhase is UpdatePhase.Downloading && _state.UpdateProgress >= 0)
+        {
+            VersionProgressFill.Width = e.NewSize.Width * _state.UpdateProgress / 100;
+        }
+    }
+
     private void OnAutoTradeToggled(object sender, RoutedEventArgs e)
     {
         // 初始化/状态回填阶段抑制 Toggled 的副作用，避免把 UI 同步当成用户操作
@@ -894,16 +906,17 @@ public sealed partial class MainWindow : Window
         VersionBadge.Visibility = _state.UpdateBadgeVisible ? Visibility.Visible : Visibility.Collapsed;
         VersionBadge.Fill = new SolidColorBrush(palette.Danger);
 
-        // 下载中在胶囊底部显示进度条；总量未知（-1）时不显示
-        if (phase is UpdatePhase.Downloading && _state.UpdateProgress >= 0)
+        // 下载中整颗胶囊从左向右填充；总量未知（-1）时不填充，只显示文案。
+        // 不透明度恒为 0.55：版本胶囊的文字随阶段变色（不转白），走满转实色会让
+        // 末段文字糊在填充里
+        if (phase is UpdatePhase.Downloading && _state.UpdateProgress >= 0 && VersionButton.ActualWidth > 0)
         {
-            VersionProgress.Value = _state.UpdateProgress;
-            VersionProgress.Foreground = new SolidColorBrush(palette.Primary);
-            VersionProgress.Visibility = Visibility.Visible;
+            VersionProgressFill.Width = VersionButton.ActualWidth * _state.UpdateProgress / 100;
+            VersionProgressFill.Visibility = Visibility.Visible;
         }
         else
         {
-            VersionProgress.Visibility = Visibility.Collapsed;
+            VersionProgressFill.Visibility = Visibility.Collapsed;
         }
 
         ToolTipService.SetToolTip(VersionButton, tooltip);
@@ -1084,6 +1097,8 @@ public sealed partial class MainWindow : Window
         ApplyAutoTradeHelpStyle();
         AutoTradePill.BorderBrush = new SolidColorBrush(palette.Hairline);
         AutoTradeProgress.Fill = new SolidColorBrush(palette.Success);
+        // 版本胶囊的下载填充：与自动交易进度同为实色（半透明在 XAML 里固定为 0.55）
+        VersionProgressFill.Fill = new SolidColorBrush(palette.Primary);
         // 顶栏普通按钮：默认态透明底 + 发丝描边，悬停中的保持悬停配色（换主题不丢态）
         foreach (var button in new[] { ThemeButton, RefreshButton, QuitButton })
         {

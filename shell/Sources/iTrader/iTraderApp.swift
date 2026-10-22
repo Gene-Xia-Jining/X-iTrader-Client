@@ -375,7 +375,7 @@ struct RootView: View {
     }
 
     /// 版本胶囊：平时显示当前版本；点击即检查更新，发现新版本弹确认框。
-    /// 下载中在胶囊底部显示进度条，此时点击即取消下载。
+    /// 下载中胶囊本身随进度从左向右填充，此时点击即取消下载。
     private var versionPill: some View {
         Button { handleVersionPillClick() } label: {
             HStack(spacing: 6) {
@@ -391,14 +391,16 @@ struct RootView: View {
             }
             .padding(.horizontal, 14)
             .frame(minHeight: 36)
-            .background(versionPillHovering ? AppTheme.sidebarHover(scheme) : .clear)
+            // 进度直接填在胶囊底色上（整颗从左向右），文字仍在上层保持可读；
+            // 悬停底色后加，落在填充下层
+            .background { downloadProgressFill }
+            .background(versionPillHovering ? AppTheme.sidebarHover(scheme) : Color.clear)
             .overlay(
                 RoundedRectangle(cornerRadius: 18)
                     .stroke(versionPillHovering ? AppTheme.dim(scheme) : AppTheme.hairline(scheme), lineWidth: 1)
             )
-            // 进度条叠在胶囊底部，随外层 cornerRadius 一起被裁成圆角
-            .overlay(alignment: .bottom) { downloadProgressBar }
-            .cornerRadius(18)
+            // 裁剪到胶囊形状：否则填充的右边缘在半途会露出直角，与圆角胶囊打架
+            .clipShape(RoundedRectangle(cornerRadius: 18))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -407,19 +409,18 @@ struct RootView: View {
         .help(versionPillTooltip)
     }
 
-    /// 下载进度：胶囊底部一条按百分比延伸的细进度条；总量未知时不显示
+    /// 下载进度：整颗胶囊从左向右被填充，宽度即完成百分比（同自动交易开关的启动进度）。
+    /// 填充压低不透明度，让覆盖其上的版本号/百分比文字保持可读——版本胶囊的文字
+    /// 随阶段变色（不转白），走满也不转实色，否则末段文字会糊在填充里。
+    /// 总量未知（-1）时不填充，只显示文案。
     @ViewBuilder
-    private var downloadProgressBar: some View {
+    private var downloadProgressFill: some View {
         if case .downloading = appState.updatePhase, appState.updateProgress >= 0 {
             GeometryReader { geo in
                 Rectangle()
-                    .fill(AppTheme.primary(scheme))
-                    .frame(
-                        width: geo.size.width * CGFloat(appState.updateProgress) / 100,
-                        height: geo.size.height
-                    )
+                    .fill(AppTheme.primary(scheme).opacity(0.55))
+                    .frame(width: geo.size.width * CGFloat(appState.updateProgress) / 100)
             }
-            .frame(height: 3)
             .allowsHitTesting(false)
         }
     }

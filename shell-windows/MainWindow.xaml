@@ -18,21 +18,39 @@
                 <StackPanel Orientation="Horizontal" Spacing="10"
                             HorizontalAlignment="Left" VerticalAlignment="Center">
                     <!-- 版本胶囊：平时显示版本号；点击检查更新，发现新版本先确认。
-                         下载中胶囊底部显示进度条，此时点击即取消下载 -->
+                         下载中胶囊本身随进度从左向右填充，此时点击即取消下载。
+                         所以 Padding 放在内层 StackPanel、填充置于最底层 -->
                     <Button x:Name="VersionButton"
                             VerticalAlignment="Center"
                             MinHeight="36"
                             MinWidth="0"
-                            Padding="14,0"
+                            Padding="0"
                             BorderThickness="1"
                             CornerRadius="18"
                             Background="Transparent"
-                            Style="{StaticResource CapsuleButtonStyle}"
+                            HorizontalContentAlignment="Stretch"
+                            VerticalContentAlignment="Stretch"
+                            Style="{StaticResource VersionPillButtonStyle}"
                             Click="OnVersionClick"
                             PointerEntered="OnVersionPillPointerEntered"
-                            PointerExited="OnVersionPillPointerExited">
+                            PointerExited="OnVersionPillPointerExited"
+                            SizeChanged="OnVersionPillSizeChanged">
                         <Grid>
-                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <!-- 下载进度：整颗胶囊从左向右填充，宽度即完成百分比
+                                 （同「自动交易」胶囊的启动进度）。Border 的 CornerRadius
+                                 不裁剪子元素，所以套一层同圆角的 Border 做裁剪 -->
+                            <Border CornerRadius="18">
+                                <!-- 填充压低不透明度，让覆盖其上的版本号/百分比文字保持可读：
+                                     版本胶囊的文字随阶段变色（不转白），走满也不转实色 -->
+                                <Rectangle x:Name="VersionProgressFill"
+                                           HorizontalAlignment="Left"
+                                           VerticalAlignment="Stretch"
+                                           Opacity="0.55"
+                                           Visibility="Collapsed"
+                                           IsHitTestVisible="False" />
+                            </Border>
+                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
+                                        Margin="14,0">
                                 <TextBlock x:Name="VersionText" Text="-" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" />
                                 <Ellipse x:Name="VersionBadge"
                                          Width="7" Height="7"
@@ -40,13 +58,6 @@
                                          Margin="0,2,0,0"
                                          Visibility="Collapsed" />
                             </StackPanel>
-                            <ProgressBar x:Name="VersionProgress"
-                                         Height="3"
-                                         VerticalAlignment="Bottom"
-                                         Margin="0,0,0,1"
-                                         Minimum="0" Maximum="100"
-                                         Visibility="Collapsed"
-                                         IsHitTestVisible="False" />
                         </Grid>
                     </Button>
                     <!-- 服务器状态胶囊：整颗可点，弹出服务器信息（地址 / 连通性 / 探测方式） -->

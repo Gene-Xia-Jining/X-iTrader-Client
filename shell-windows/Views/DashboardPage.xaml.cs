@@ -13,7 +13,7 @@ using XTrader.Shell.Theme;
 namespace XTrader.Shell.Views;
 
 /// <summary>
-/// 仪表盘：模拟 / 实盘两张账户汇总卡片，左右顺序可拖动互换（对 mac 壳的 DashboardView）。
+/// 仪表盘：模拟 / 实盘两张账户汇总卡片，单列纵向排列，可拖动互换顺序（对 mac 壳的 DashboardView）。
 /// 汇总数据来自 trading.records 的当日资金快照，与「账户信息」tab 同一份来源。
 /// </summary>
 public sealed partial class DashboardPage : Page
@@ -191,6 +191,7 @@ public sealed partial class DashboardPage : Page
             _dragging = kind;
             args.Data.RequestedOperation = DataPackageOperation.Move;
             args.Data.SetText(kind);
+            card.Opacity = 0.5;
         };
         card.DragOver += (_, args) =>
         {
@@ -204,8 +205,10 @@ public sealed partial class DashboardPage : Page
         card.DragLeave += (_, _) => SetDropHighlight(kind, false);
         card.DropCompleted += (_, _) =>
         {
-            // 拖拽取消（Esc）不会走 Drop，这里兜底清掉状态
+            // 拖拽取消（Esc）不会走 Drop，这里兜底清掉状态并恢复不透明度
             _dragging = null;
+            SimCard.Opacity = 1.0;
+            LiveCard.Opacity = 1.0;
             foreach (var other in DashboardSummary.Kinds)
             {
                 SetDropHighlight(other, false);
@@ -217,6 +220,8 @@ public sealed partial class DashboardPage : Page
             SetDropHighlight(kind, false);
             var source = _dragging;
             _dragging = null;
+            SimCard.Opacity = 1.0;
+            LiveCard.Opacity = 1.0;
             if (source is null || source == kind)
             {
                 return;
@@ -292,10 +297,11 @@ public sealed partial class DashboardPage : Page
         ErrorText.Text = _errorText.Length > 0 ? $"账户数据读取失败: {_errorText}" : "";
         ErrorText.Visibility = _errorText.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
-        // 左右顺序来自 _order；两张卡片交换 Grid 列即可完成换位
-        for (var i = 0; i < _order.Count; i++)
+        // 上下顺序来自 _order
+        CardsContainer.Children.Clear();
+        foreach (var kind in _order)
         {
-            Grid.SetColumn(CardOf(_order[i]), i);
+            CardsContainer.Children.Add(CardOf(kind));
         }
 
         SimCard.Child = BuildCardBody(DashboardSummary.SimKind);

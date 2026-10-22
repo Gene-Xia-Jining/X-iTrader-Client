@@ -6,16 +6,11 @@
 
     <ScrollViewer>
         <StackPanel x:Name="Root" Spacing="16" Padding="24">
-            <Grid ColumnSpacing="16">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
-
-                <!-- 两张卡片的内容由代码构建：数据与主题变化时按账户快照整体重建 -->
+            <!-- 单列纵向卡片列表：模拟 / 实盘两张卡片上下排列，可拖动互换顺序 -->
+            <StackPanel x:Name="CardsContainer" Spacing="16">
                 <Border x:Name="SimCard" BorderThickness="1" CornerRadius="18" Padding="20" />
-                <Border x:Name="LiveCard" Grid.Column="1" BorderThickness="1" CornerRadius="18" Padding="20" />
-            </Grid>
+                <Border x:Name="LiveCard" BorderThickness="1" CornerRadius="18" Padding="20" />
+            </StackPanel>
 
             <TextBlock x:Name="ErrorText" FontSize="13" TextWrapping="Wrap" Visibility="Collapsed" />
         </StackPanel>
