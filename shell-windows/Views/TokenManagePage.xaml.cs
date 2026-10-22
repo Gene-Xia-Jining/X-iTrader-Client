@@ -444,7 +444,13 @@ public sealed partial class TokenManagePage : Page
         {
             XamlRoot = Root.XamlRoot,
             Title = title,
-            Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
+            Content = new TextBlock
+            {
+                Text = message,
+                TextWrapping = TextWrapping.Wrap,
+                LineHeight = 24,
+                LineStackingStrategy = LineStackingStrategy.MaxHeight,
+            },
             CloseButtonText = "好",
         };
         await dialog.ShowAsync();

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <UserControl
-    x:Class="XTrader.Shell.Views.AccountRecordsView"
+    x:Class="XTrader.Shell.Views.AccountInfoView"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
@@ -10,10 +10,19 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <!-- 交易记录模式下显示提示文案，历史成交模式下显示水平顺序排列的过滤器分组 -->
+            <!-- 账户信息模式下显示提示文案，历史成交模式下显示水平顺序排列的过滤器分组 -->
             <TextBlock x:Name="Hint" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,16,0" />
             <StackPanel x:Name="FiltersPanel" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center" Margin="0,0,16,0" Visibility="Collapsed" />
-            <Button x:Name="RefreshButton" Grid.Column="1" Content="刷新" Click="OnRefreshClick" HorizontalAlignment="Right" VerticalAlignment="Center" />
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <Button x:Name="OrderButton" Content="最新在前" Click="OnToggleOrderClick" Visibility="Collapsed"
+                        Style="{StaticResource PageButtonStyle}"
+                        PointerEntered="OnToolbarButtonPointerEntered"
+                        PointerExited="OnToolbarButtonPointerExited" />
+                <Button x:Name="RefreshButton" Content="刷新" Click="OnRefreshClick"
+                        Style="{StaticResource PageButtonStyle}"
+                        PointerEntered="OnToolbarButtonPointerEntered"
+                        PointerExited="OnToolbarButtonPointerExited" />
+            </StackPanel>
         </Grid>
 
         <Border x:Name="ErrorCard" BorderThickness="1" CornerRadius="18" Padding="20" Visibility="Collapsed">

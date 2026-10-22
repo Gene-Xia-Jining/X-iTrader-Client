@@ -6,18 +6,18 @@
 
     <ScrollViewer>
         <StackPanel x:Name="Root" Padding="24" Spacing="16">
-            <!-- 标题常驻：切到「交易记录」tab 也能看出这是实盘交易页 -->
+            <!-- 标题常驻：切到「账户信息」tab 也能看出这是实盘交易页 -->
             <StackPanel Spacing="4">
                 <TextBlock x:Name="PageTitle" Text="实盘交易" FontSize="22" FontWeight="SemiBold" />
                 <TextBlock x:Name="Subtitle"
                            Text="添加多个实盘账户，每个账户独立选择期货公司与品种，保存后即时生效。" />
             </StackPanel>
 
-            <!-- 三个 tab：快速开始（账户配置）/ 交易记录（资金、持仓与当日委托）/ 历史成交（成交记录明细，问号在胶囊内），选中态记在 ShellPrefs -->
+            <!-- 三个 tab：快速开始（账户配置）/ 账户信息（资金、持仓与当日委托）/ 历史成交（成交记录明细，问号在胶囊内），选中态记在 ShellPrefs -->
             <StackPanel Orientation="Horizontal" Spacing="10">
                 <Button x:Name="StartTab" Content="快速开始" Click="OnStartTabClick"
                         CornerRadius="17" MinHeight="34" Padding="20,0" />
-                <Button x:Name="RecordsTab" Content="交易记录" Click="OnRecordsTabClick"
+                <Button x:Name="RecordsTab" Content="账户信息" Click="OnRecordsTabClick"
                         CornerRadius="17" MinHeight="34" Padding="20,0" />
                 <Border x:Name="TradesTabCapsule" BorderThickness="1" CornerRadius="17"
                         MinHeight="34" Padding="18,0,10,0" VerticalAlignment="Center"
@@ -49,7 +49,7 @@
                 </StackPanel>
             </Border>
 
-            <!-- 「交易记录」tab：与模拟页同一份实现，只取实盘账户 -->
+            <!-- 「账户信息」tab：与模拟页同一份实现，只取实盘账户 -->
             <StackPanel x:Name="RecordsPanel" Spacing="16" Visibility="Collapsed" />
 
             <!-- 「历史成交」tab：与模拟页同一份实现，只取实盘账户 -->

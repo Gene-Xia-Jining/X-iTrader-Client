@@ -125,7 +125,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 enum AppRoute: String, CaseIterable, Identifiable {
     // 声明顺序即侧栏顺序
     // 服务器地址已并入顶栏服务器弹窗，「设置」页只保留代理配置；
-    // 交易记录已分别并入模拟 / 实盘交易页的「交易记录」tab，不再单列页面
+    // 交易记录已分别并入模拟 / 实盘交易页的「账户信息」tab，不再单列页面
     case dashboard, token, sim, live, log, settings
 
     var id: String { rawValue }
@@ -161,7 +161,6 @@ struct RootView: View {
     /// 服务器信息弹窗（点击顶栏服务器状态胶囊）
     @State private var showServerInfo = false
     @State private var showAutoTradeHelp = false
-    @State private var autoTradeHelpHovering = false
     @State private var autoTradeHovering = false
     /// 「发现新版本」确认框；非空即弹出
     @State private var updatePrompt: UpdatePrompt?
@@ -519,13 +518,7 @@ struct RootView: View {
             ? (active ? .clear : AppTheme.divider(scheme))
             : (active ? .clear : (autoTradeHovering ? AppTheme.dim(scheme) : AppTheme.hairline(scheme)))
 
-        return HStack(spacing: 8) {
-            helpButton(
-                text: autoTradeHelpText,
-                isPresented: $showAutoTradeHelp,
-                isHovering: $autoTradeHelpHovering
-            )
-
+        return HStack(spacing: 6) {
             Button { appState.toggleTrading(!active) } label: {
                 Text(startButtonTitle)
                     .font(AppTheme.bodyFont.weight(.semibold))
@@ -539,9 +532,15 @@ struct RootView: View {
             .disabled(disabled)
             .onHover { autoTradeHovering = $0 }
             .pointerCursor()
+
+            AppHelpButton(
+                text: autoTradeHelpText,
+                isPresented: $showAutoTradeHelp,
+                isOn: active || progressDone
+            )
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 22)
+        .padding(.leading, 18)
+        .padding(.trailing, 12)
         .frame(minHeight: 36)
         // 进度直接填在胶囊底色上（整颗从左向右），文字仍在上层保持可读
         .background {
@@ -584,39 +583,10 @@ struct RootView: View {
 
         关闭只停止接收信号与下单，已持有的仓位不会被自动平仓。运行中修改账户配置需先关闭再重新开启才生效。
         """
-
-    /// 20x20 圆形问号按钮，点击弹出说明（样式同设置页 helpButton）
-    private func helpButton(
-        text: String,
-        isPresented: Binding<Bool>,
-        isHovering: Binding<Bool>
-    ) -> some View {
-        Button { isPresented.wrappedValue = true } label: {
-            Text("?")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(AppTheme.primary(scheme))
-                .frame(width: 20, height: 20)
-                .background(isHovering.wrappedValue ? AppTheme.sidebarHover(scheme) : .clear)
-                .cornerRadius(10)
-                .overlay(Circle().stroke(AppTheme.hairline(scheme), lineWidth: 1))
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .pointerCursor()
-        .onHover { isHovering.wrappedValue = $0 }
-        .popover(isPresented: isPresented, arrowEdge: .bottom) {
-            // 不指定前景色，由 popover 自身外观决定（同设置页 helpButton）
-            Text(text)
-                .font(AppTheme.dimFont)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(width: 300, alignment: .leading)
-                .padding(10)
-        }
-    }
 }
 
 // MARK: - 侧边栏导航按钮（SidebarButton：高 36、胶囊、文字左对齐）
-/// 外观对齐页内分段胶囊（如模拟交易页的「快速开始 / 交易记录」）：
+/// 外观对齐页内分段胶囊（如模拟交易页的「快速开始 / 账户信息」）：
 /// 选中为实心主题蓝 + 白字半粗，未选中为透明底 + 发丝描边，
 /// 悬停时底色与描边各提一档（同 AppButton.secondary 的悬停约定）。
 private struct SidebarNavButton: View {

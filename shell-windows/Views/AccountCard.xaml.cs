@@ -431,7 +431,14 @@ public sealed partial class AccountCard : UserControl
         {
             XamlRoot = XamlRoot,
             Title = title,
-            Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
+            Content = new TextBlock
+            {
+                Text = message,
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true,
+                LineHeight = 24,
+                LineStackingStrategy = LineStackingStrategy.MaxHeight,
+            },
             CloseButtonText = "好",
         };
         await dialog.ShowAsync();

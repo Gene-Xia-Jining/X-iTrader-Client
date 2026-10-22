@@ -245,7 +245,7 @@ struct DashboardView: View {
         return String(format: "%+.2f", value)
     }
 
-    /// 盈亏染色：正红负绿（国内期货习惯，与交易记录 tab 一致）
+    /// 盈亏染色：正红负绿（国内期货习惯，与账户信息 tab 一致）
     private func profitColor(_ value: Double?) -> Color {
         guard let value, value != 0 else { return AppTheme.ink(scheme) }
         return value > 0 ? AppTheme.statusRed : AppTheme.statusGreen

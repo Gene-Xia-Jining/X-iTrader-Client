@@ -5,7 +5,7 @@ struct SimulationView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var scheme
 
-    /// 三个 tab：「快速开始」是原来的 7 步引导，「交易记录」是资金、持仓与当日委托，「历史成交」是成交记录
+    /// 三个 tab：「快速开始」是原来的 7 步引导，「账户信息」是资金、持仓与当日委托，「历史成交」是成交记录
     private enum SimTab: String, CaseIterable {
         case start
         case records
@@ -14,7 +14,7 @@ struct SimulationView: View {
         var title: String {
             switch self {
             case .start: return "快速开始"
-            case .records: return "交易记录"
+            case .records: return "账户信息"
             case .trades: return "历史成交"
             }
         }
@@ -101,13 +101,13 @@ struct SimulationView: View {
                 startGuide
                 faqCard
             } else if tab == .records {
-                AccountRecordsView(
+                AccountInfoView(
                     kind: .sim,
-                    mode: .records,
+                    mode: .info,
                     notConfiguredHint: "尚未配置模拟账户，请先在「快速开始」里保存账户"
                 )
             } else {
-                AccountRecordsView(
+                AccountInfoView(
                     kind: .sim,
                     mode: .trades,
                     notConfiguredHint: "尚未配置模拟账户，请先在「快速开始」里保存账户"
@@ -154,7 +154,7 @@ struct SimulationView: View {
         }
         .onChange(of: tab) { value in
             UserDefaults.standard.set(value.rawValue, forKey: Self.tabKey)
-            // 切到交易记录/历史成交时把品种弹层一并收起，避免遮罩留在记录列表上
+            // 切到账户信息/历史成交时把品种弹层一并收起，避免遮罩留在记录列表上
             showSymbolPicker = false
         }
     }
@@ -179,7 +179,7 @@ struct SimulationView: View {
 
     • 本地沉淀：快期账户通常仅保留当日实时成交推送，客户端将每笔成交自动持久化至本地 SQLite 数据库，跨交易日长期留存。
     • 盈亏计算：自动按先进先出原则匹配开平仓，统计单笔平仓盈亏与累计平仓收益。
-    • 多维追溯：支持今日、近3天、近7天及全部历史筛选，点击任意成交行可查看合约与订单详细信息。
+    • 多维追溯：支持今日、30天、一年及全部日期筛选，点击任意成交行可查看合约与订单详细信息。
     """
 
     // MARK: - 快速开始（7 步引导）
@@ -303,7 +303,7 @@ struct SimulationView: View {
         FaqItem(
             question: "出问题的时候去哪里看？",
             answer: "「系统日志」页有完整的运行日志，包含连接、信号、下单与错误信息；"
-            + "交易执行明细可以在本页「交易记录」tab 查看模拟账户，实盘账户在「实盘交易」页的「交易记录」tab 查看。"
+            + "交易执行明细可以在本页「账户信息」tab 查看模拟账户，实盘账户在「实盘交易」页的「账户信息」tab 查看。"
         ),
     ]
 
@@ -464,15 +464,16 @@ struct SimulationView: View {
             // 不指定前景色，由 popover 自身外观决定（同设置页 helpButton）；多行文案定宽换行
             Text(text)
                 .font(AppTheme.dimFont)
+                .lineSpacing(5)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(width: 300, alignment: .leading)
                 .padding(10)
         }
     }
 
-    // MARK: - 入口胶囊（文字按钮 + 可选右侧问号；步骤 1 与步骤 3 共用）
+    // MARK: - 入口胶囊（文字按钮 + 可选右侧问号；步骤 1、3、5、6 共用）
 
-    /// 胶囊整体是描边圆角按钮：点文字区域执行 action，点右侧问号弹出说明。
+    /// 胶囊整体是描边圆角按钮：点文字区域执行 action，点右侧问号弹出说明；悬停提亮。
     private func entryCapsule(
         _ title: String,
         titleColor: Color? = nil,
@@ -481,25 +482,56 @@ struct SimulationView: View {
         isHelpHovering: Binding<Bool>? = nil,
         action: @escaping () -> Void
     ) -> some View {
-        HStack(spacing: 6) {
-            Button(action: action) {
-                Text(title)
-                    .font(AppTheme.dimFont.weight(.semibold))
-                    .foregroundColor(titleColor ?? AppTheme.primary(scheme))
+        EntryCapsuleRow(
+            title: title,
+            titleColor: titleColor,
+            helpText: helpText,
+            isHelpPresented: isHelpPresented,
+            isHelpHovering: isHelpHovering,
+            scheme: scheme,
+            action: action,
+            helpButtonBuilder: { text, presented, hovering in
+                AnyView(helpButton(text, isPresented: presented, isHovering: hovering))
             }
-            .buttonStyle(.plain)
-            .pointerCursor()
-
-            if let helpText, let isHelpPresented, let isHelpHovering {
-                helpButton(helpText, isPresented: isHelpPresented, isHovering: isHelpHovering)
-            }
-        }
-        .padding(.leading, 14)
-        .padding(.trailing, helpText == nil ? 14 : 10)
-        .frame(minHeight: 30)
-        .overlay(
-            Capsule().stroke(AppTheme.hairline(scheme), lineWidth: 1)
         )
+    }
+
+    private struct EntryCapsuleRow: View {
+        let title: String
+        let titleColor: Color?
+        let helpText: String?
+        let isHelpPresented: Binding<Bool>?
+        let isHelpHovering: Binding<Bool>?
+        let scheme: ColorScheme
+        let action: () -> Void
+        let helpButtonBuilder: (String, Binding<Bool>, Binding<Bool>) -> AnyView
+
+        @State private var hovering = false
+
+        var body: some View {
+            HStack(spacing: 6) {
+                Button(action: action) {
+                    Text(title)
+                        .font(AppTheme.dimFont.weight(.semibold))
+                        .foregroundColor(titleColor ?? AppTheme.primary(scheme))
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+
+                if let helpText, let isHelpPresented, let isHelpHovering {
+                    helpButtonBuilder(helpText, isHelpPresented, isHelpHovering)
+                }
+            }
+            .padding(.leading, 14)
+            .padding(.trailing, helpText == nil ? 14 : 10)
+            .frame(minHeight: 30)
+            .background(hovering ? AppTheme.sidebarHover(scheme) : Color.clear)
+            .overlay(
+                Capsule().stroke(hovering ? AppTheme.dim(scheme) : AppTheme.hairline(scheme), lineWidth: 1)
+            )
+            .cornerRadius(15)
+            .onHover { hovering = $0 }
+        }
     }
 
     /// 步骤 3 入口胶囊：点文字打开账号弹窗，点右侧问号看说明。

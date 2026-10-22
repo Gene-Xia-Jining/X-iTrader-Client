@@ -199,7 +199,7 @@ public sealed partial class MainWindow : Window
     /// <summary>
     /// 按当前路由与悬停状态刷新导航项配色。
     ///
-    /// 外观对齐页内分段胶囊（如模拟交易页的「快速开始/交易记录」）：选中为实心主题蓝 + 白字半粗、
+    /// 外观对齐页内分段胶囊（如模拟交易页的「快速开始/账户信息」）：选中为实心主题蓝 + 白字半粗、
     /// 描边同色；未选中为透明底 + 发丝描边，悬停时底色与描边各提一档。
     /// </summary>
     private void ApplyNavItemState(string tag)
@@ -650,15 +650,55 @@ public sealed partial class MainWindow : Window
         SaveUrl();
     }
 
+    private bool _autoTradeHelpHovering;
+
     /// <summary>自动交易开关旁的问号：说明开关控制什么、启动检查项、关闭是否平仓。
     /// 文案与后端 _preflight_start_checks 的实际检查项逐条对应，改预检时同步这里。</summary>
-    private async void OnAutoTradeHelpClick(object sender, RoutedEventArgs e)
+    private async void OnAutoTradeHelpTapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
     {
+        e.Handled = true;
         await ShowHelpAsync("自动交易",
             "开启后客户端接收服务器推送的交易信号并自动下单。\n\n"
             + "开启前会先做启动检查：服务器连通、每个启用账户的品种与策略已选、账户凭据齐全（实盘还需期货公司、资金账号与交易密码）、"
             + "本地 Token 已领取、天勤账户握手通过。任一项不通过会列出全部问题并拒绝启动。\n\n"
             + "关闭只停止接收信号与下单，已持有的仓位不会被自动平仓。运行中修改账户配置需先关闭再重新开启才生效。");
+    }
+
+    private void OnAutoTradeHelpPointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        _autoTradeHelpHovering = true;
+        ApplyAutoTradeHelpStyle();
+    }
+
+    private void OnAutoTradeHelpPointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        _autoTradeHelpHovering = false;
+        ApplyAutoTradeHelpStyle();
+    }
+
+    private void ApplyAutoTradeHelpStyle()
+    {
+        var palette = ThemeTokens.For(IsDark);
+        // 胶囊「开」态或启动进度已走满（文字转白）时，问号也跟着转白，与文案保持一致
+        var isOn = _state?.EngineStatus.TradingActive == true
+            || (_state?.StartChecking == true && _state.StartProgressPct >= 100);
+        if (isOn)
+        {
+            AutoTradeHelpIcon.Foreground = new SolidColorBrush(Microsoft.UI.Colors.White);
+            AutoTradeHelpRing.BorderBrush = new SolidColorBrush(
+                _autoTradeHelpHovering ? Windows.UI.Color.FromArgb(204, 255, 255, 255) : Windows.UI.Color.FromArgb(115, 255, 255, 255));
+            AutoTradeHelpRing.Background = new SolidColorBrush(
+                _autoTradeHelpHovering ? Windows.UI.Color.FromArgb(64, 255, 255, 255) : Microsoft.UI.Colors.Transparent);
+        }
+        else
+        {
+            AutoTradeHelpIcon.Foreground = new SolidColorBrush(
+                _autoTradeHelpHovering ? palette.PrimaryHover : palette.Primary);
+            AutoTradeHelpRing.BorderBrush = new SolidColorBrush(
+                _autoTradeHelpHovering ? palette.Primary : palette.Hairline);
+            AutoTradeHelpRing.Background = new SolidColorBrush(
+                _autoTradeHelpHovering ? Windows.UI.Color.FromArgb((byte)(IsDark ? 55 : 30), palette.Primary.R, palette.Primary.G, palette.Primary.B) : Microsoft.UI.Colors.Transparent);
+        }
     }
 
     private async Task ShowHelpAsync(string title, string message)
@@ -672,6 +712,8 @@ public sealed partial class MainWindow : Window
                 Text = message,
                 TextWrapping = TextWrapping.Wrap,
                 IsTextSelectionEnabled = true,
+                LineHeight = 24,
+                LineStackingStrategy = LineStackingStrategy.MaxHeight,
             },
             CloseButtonText = "好",
         };
@@ -965,6 +1007,8 @@ public sealed partial class MainWindow : Window
         // 版本胶囊：平时显示后端版本，检查/下载/安装中或刚出结果时显示状态文案
         RefreshVersionPill();
 
+        ApplyAutoTradeHelpStyle();
+
         ShowStartBlockedIssuesIfNeeded();
     }
 
@@ -1037,9 +1081,7 @@ public sealed partial class MainWindow : Window
         // 切主题时指针可能正悬在版本胶囊上：hover 态一并复位，避免残留旧主题的底色
         VersionButton.BorderBrush = new SolidColorBrush(palette.Hairline);
         VersionButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
-        AutoTradeHelpButton.Foreground = new SolidColorBrush(palette.Primary);
-        AutoTradeHelpButton.BorderBrush = new SolidColorBrush(palette.Hairline);
-        AutoTradeHelpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        ApplyAutoTradeHelpStyle();
         AutoTradePill.BorderBrush = new SolidColorBrush(palette.Hairline);
         AutoTradeProgress.Fill = new SolidColorBrush(palette.Success);
         // 顶栏普通按钮：默认态透明底 + 发丝描边，悬停中的保持悬停配色（换主题不丢态）

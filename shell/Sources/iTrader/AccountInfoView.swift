@@ -131,17 +131,17 @@ struct TradeDetailModal: Identifiable {
 
 /// 历史时间筛选范围
 enum RecordDateRange: String, CaseIterable {
-    case today = "today"
-    case threeDays = "3d"
-    case sevenDays = "7d"
     case all = "all"
+    case oneYear = "1y"
+    case thirtyDays = "30d"
+    case today = "today"
 
     var title: String {
         switch self {
+        case .all: return "全部日期"
+        case .oneYear: return "1 年"
+        case .thirtyDays: return "30天"
         case .today: return "今日"
-        case .threeDays: return "近3天"
-        case .sevenDays: return "近7天"
-        case .all: return "全部"
         }
     }
 }
@@ -181,9 +181,9 @@ enum RecordKind: String, CaseIterable {
     var title: String { self == .sim ? "模拟交易" : "实盘交易" }
 }
 
-/// 显示模式：交易记录（资金、持仓、当日委托） / 历史成交（成交记录与时间范围筛选）
-enum AccountRecordsMode {
-    case records
+/// 显示模式：账户信息（资金、持仓、当日委托各独立成框） / 历史成交（成交记录与时间范围筛选）
+enum AccountInfoMode {
+    case info
     case trades
 }
 
@@ -199,13 +199,13 @@ private extension Dictionary where Key == String, Value == Any {
     }
 }
 
-// MARK: - 一类账户的交易记录
+// MARK: - 一类账户的账户信息
 
-/// 按账户类别取数并展示资金、持仓、当日委托与当日成交。
-/// 实盘交易页与模拟交易页的「交易记录」tab 共用这一份实现，只按 kind 区分账户类别。
-struct AccountRecordsView: View {
+/// 按账户类别取数并展示资金、持仓、当日委托与历史成交。
+/// 实盘交易页与模拟交易页的「账户信息」tab 共用这一份实现，只按 kind 区分账户类别。
+struct AccountInfoView: View {
     let kind: RecordKind
-    var mode: AccountRecordsMode = .records
+    var mode: AccountInfoMode = .info
     /// 尚未配置这类账户时的引导文案：两个入口指向不同的配置位置
     let notConfiguredHint: String
 
@@ -227,6 +227,40 @@ struct AccountRecordsView: View {
     @State private var filterVariety: String = ""
     /// 历史成交的策略过滤器（空串 = 全部策略）
     @State private var filterStrategy: String = ""
+    /// 历史成交排序：默认最新在前，按钮切到最新在后
+    @State private var newestFirst = true
+
+    /// 历史成交偏好持久化键（按账户类别区分，如 sim / live）
+    private var dateRangeKey: String { "trades.dateRange.\(kind.rawValue)" }
+    private var varietyKey: String { "trades.filterVariety.\(kind.rawValue)" }
+    private var strategyKey: String { "trades.filterStrategy.\(kind.rawValue)" }
+    private var newestFirstKey: String { "trades.newestFirst.\(kind.rawValue)" }
+
+    init(kind: RecordKind, mode: AccountInfoMode = .info, notConfiguredHint: String) {
+        self.kind = kind
+        self.mode = mode
+        self.notConfiguredHint = notConfiguredHint
+
+        if mode == .trades {
+            let savedRange = UserDefaults.standard.string(forKey: "trades.dateRange.\(kind.rawValue)")
+            let initialRange = RecordDateRange(rawValue: savedRange ?? "") ?? .all
+            self._selectedDateRange = State(initialValue: initialRange)
+
+            let initialVariety = UserDefaults.standard.string(forKey: "trades.filterVariety.\(kind.rawValue)") ?? ""
+            self._filterVariety = State(initialValue: initialVariety)
+
+            let initialStrategy = UserDefaults.standard.string(forKey: "trades.filterStrategy.\(kind.rawValue)") ?? ""
+            self._filterStrategy = State(initialValue: initialStrategy)
+
+            let savedOrder = UserDefaults.standard.object(forKey: "trades.newestFirst.\(kind.rawValue)") as? Bool
+            self._newestFirst = State(initialValue: savedOrder ?? true)
+        } else {
+            self._selectedDateRange = State(initialValue: .today)
+            self._filterVariety = State(initialValue: "")
+            self._filterStrategy = State(initialValue: "")
+            self._newestFirst = State(initialValue: true)
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -247,7 +281,7 @@ struct AccountRecordsView: View {
             }
 
             ForEach(records) { record in
-                accountCard(record)
+                accountCards(record)
             }
 
             if records.isEmpty && errorText.isEmpty && !loading && hasLoaded {
@@ -264,7 +298,9 @@ struct AccountRecordsView: View {
             tradeDetailSheet(modal)
         }
         .onAppear {
-            if let cached = appState.cachedRecords[kind.rawValue], !cached.isEmpty {
+            // 缓存只有当日快照；历史范围下不能拿它当初始数据，否则会先闪出当日记录
+            if selectedDateRange == .today,
+               let cached = appState.cachedRecords[kind.rawValue], !cached.isEmpty {
                 records = cached
                 hasLoaded = true
             }
@@ -288,9 +324,7 @@ struct AccountRecordsView: View {
             ) { key in
                 guard let range = RecordDateRange(rawValue: key), selectedDateRange != range else { return }
                 selectedDateRange = range
-                // 换时间范围后旧的筛选值可能已无对应记录，一并清掉回到「全部」
-                filterVariety = ""
-                filterStrategy = ""
+                UserDefaults.standard.set(range.rawValue, forKey: dateRangeKey)
                 load()
             }
 
@@ -302,6 +336,7 @@ struct AccountRecordsView: View {
                     selectedId: filterVariety
                 ) { v in
                     filterVariety = v
+                    UserDefaults.standard.set(v, forKey: varietyKey)
                 }
             }
 
@@ -313,6 +348,7 @@ struct AccountRecordsView: View {
                     selectedId: filterStrategy
                 ) { s in
                     filterStrategy = s
+                    UserDefaults.standard.set(s, forKey: strategyKey)
                 }
             }
 
@@ -324,7 +360,43 @@ struct AccountRecordsView: View {
                     .foregroundColor(AppTheme.dim(scheme))
             }
 
-            AppButton("刷新", variant: .secondary, disabled: loading) { load() }
+            // 页面底色就是 canvas，secondary 默认的 canvas 悬停底等于没反应，
+            // 复用 onChrome 那档更明显的 sidebarHover
+            AppButton(newestFirst ? "最新在前" : "最新在后", variant: .secondary, onChrome: true) {
+                newestFirst.toggle()
+                UserDefaults.standard.set(newestFirst, forKey: newestFirstKey)
+            }
+
+            AppButton("刷新", variant: .secondary, disabled: loading, onChrome: true) { load() }
+        }
+    }
+
+    /// 分段胶囊里的单个切片：选中态用 soft 底，未选中时悬停提亮一档
+    private struct FilterSlice: View {
+        let title: String
+        let isSelected: Bool
+        let scheme: ColorScheme
+        let action: () -> Void
+
+        @State private var hovering = false
+
+        var body: some View {
+            Button(action: action) {
+                Text(title)
+                    .font(AppTheme.dimFont.weight(isSelected ? .semibold : .regular))
+                    .foregroundColor(isSelected ? AppTheme.ink(scheme) : AppTheme.dim(scheme))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(
+                        isSelected
+                            ? AppTheme.soft(scheme)
+                            : (hovering ? AppTheme.sidebarHover(scheme) : Color.clear)
+                    )
+                    .cornerRadius(10)
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
+            .pointerCursor()
         }
     }
 
@@ -336,20 +408,13 @@ struct AccountRecordsView: View {
     ) -> some View {
         HStack(spacing: 4) {
             ForEach(items, id: \.id) { item in
-                let isSelected = (selectedId == item.id)
-                Button(action: {
+                FilterSlice(
+                    title: item.title,
+                    isSelected: selectedId == item.id,
+                    scheme: scheme
+                ) {
                     onSelect(item.id)
-                }) {
-                    Text(item.title)
-                        .font(AppTheme.dimFont.weight(isSelected ? .semibold : .regular))
-                        .foregroundColor(isSelected ? AppTheme.ink(scheme) : AppTheme.dim(scheme))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(isSelected ? AppTheme.soft(scheme) : Color.clear)
-                        .cornerRadius(10)
                 }
-                .buttonStyle(.plain)
-                .pointerCursor()
             }
         }
         .padding(2)
@@ -419,6 +484,19 @@ struct AccountRecordsView: View {
                 if selectedDateRange == .today {
                     appState.cachedRecords[kind.rawValue] = value
                 }
+                if mode == .trades {
+                    let trades = value.flatMap(\.trades)
+                    let varieties = availableVarieties(from: trades)
+                    if !varieties.isEmpty && !filterVariety.isEmpty && !varieties.contains(filterVariety) {
+                        filterVariety = ""
+                        UserDefaults.standard.set("", forKey: varietyKey)
+                    }
+                    let strategies = availableStrategies(from: trades)
+                    if !strategies.isEmpty && !filterStrategy.isEmpty && !strategies.contains(filterStrategy) {
+                        filterStrategy = ""
+                        UserDefaults.standard.set("", forKey: strategyKey)
+                    }
+                }
             case .failure(let error):
                 if records.isEmpty {
                     records = []
@@ -428,41 +506,79 @@ struct AccountRecordsView: View {
         }
     }
 
-    // ---- 账户卡片 ----
+    // ---- 账户卡片与分区（持仓与当日委托独立成框）----
 
-    private func accountCard(_ record: AccountRecords) -> some View {
-        AppCard {
-            VStack(alignment: .leading, spacing: 14) {
-                if mode != .trades {
-                    HStack(spacing: 8) {
-                        Text(record.label)
-                            .font(AppTheme.bodyFont.weight(.semibold))
-                            .foregroundColor(AppTheme.ink(scheme))
-                        Text(record.kind == "sim" ? "模拟" : "实盘")
-                            .font(AppTheme.dimFont)
-                            .foregroundColor(AppTheme.dim(scheme))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 2)
-                            .background(AppTheme.soft(scheme))
-                            .cornerRadius(9)
-                        Spacer()
-                    }
-                }
+    private func accountHeader(_ record: AccountRecords) -> some View {
+        HStack(spacing: 8) {
+            Text(record.label)
+                .font(AppTheme.bodyFont.weight(.semibold))
+                .foregroundColor(AppTheme.ink(scheme))
+            Text(record.kind == "sim" ? "模拟" : "实盘")
+                .font(AppTheme.dimFont)
+                .foregroundColor(AppTheme.dim(scheme))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(AppTheme.soft(scheme))
+                .cornerRadius(9)
+            Spacer()
+        }
+    }
 
-                if !record.error.isEmpty {
+    @ViewBuilder
+    private func accountCards(_ record: AccountRecords) -> some View {
+        if mode == .trades {
+            // 历史成交不再套一层卡片外框：表格自带底色与描边，直接铺在页面上
+            tradeTable(filterTrades(record.trades), accountLabel: record.label)
+        } else if !record.error.isEmpty {
+            AppCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    accountHeader(record)
                     Text("读取失败: \(record.error)")
                         .font(AppTheme.dimFont)
                         .foregroundColor(AppTheme.danger(scheme))
                         .fixedSize(horizontal: false, vertical: true)
-                } else if mode == .records {
-                    metricsRow(record.account)
-                    section("持仓") { positionTable(record.positions) }
-                    section("当日委托") { orderTable(record.orders) }
-                } else {
-                    tradeTable(filterTrades(record.trades), accountLabel: record.label)
                 }
+                .padding(20)
             }
-            .padding(20)
+        } else {
+            // 账户信息：资金、持仓、当日委托各独立成框
+            AppCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    accountHeader(record)
+                    metricsRow(record.account)
+                }
+                .padding(20)
+            }
+
+            AppCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    sectionTitle("持仓", record: record)
+                    positionTable(record.positions)
+                }
+                .padding(20)
+            }
+
+            AppCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    sectionTitle("当日委托", record: record)
+                    orderTable(record.orders)
+                }
+                .padding(20)
+            }
+        }
+    }
+
+    /// 分区标题：多账户时补一个账户名，避免几张没有归属的持仓/委托框混在一起
+    private func sectionTitle(_ title: String, record: AccountRecords) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(AppTheme.bodyFont.weight(.semibold))
+                .foregroundColor(AppTheme.ink(scheme))
+            if records.count > 1 {
+                Text(record.label)
+                    .font(AppTheme.dimFont)
+                    .foregroundColor(AppTheme.dim(scheme))
+            }
         }
     }
 
@@ -505,22 +621,11 @@ struct AccountRecordsView: View {
 
     // ---- 表格区 ----
 
-    private func section<Content: View>(
-        _ title: String,
-        @ViewBuilder table: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(AppTheme.dimFont.weight(.semibold))
-                .foregroundColor(AppTheme.dim(scheme))
-            table()
-        }
-    }
-
     private func positionTable(_ rows: [PositionRecord]) -> some View {
         recordTable(
             headers: ["合约", "方向", "手数", "开仓均价", "持仓均价", "浮动盈亏", "保证金"],
             widths: [nil, 40, 44, nil, nil, nil, nil],
+            maxHeight: 280,
             empty: "当前无持仓",
             isEmpty: rows.isEmpty
         ) {
@@ -547,12 +652,15 @@ struct AccountRecordsView: View {
         let canceledCount = rows.filter { $0.volumeLeft > 0 && $0.statusText == "已完" }.count
 
         let maxOrderSourceCount = rows.map { displaySource($0.source).count }.max() ?? 2
-        let orderSourceWidth: CGFloat = max(80, CGFloat(maxOrderSourceCount) * 9.5 + 24)
+        let orderSourceWidth: CGFloat = max(70, CGFloat(maxOrderSourceCount) * 8.5 + 16)
         let orderWidths: [CGFloat?] = [nil, nil, 36, 40, 40, 40, nil, nil, 60, orderSourceWidth]
+        let orderAlignments: [Alignment] = [.leading, .leading, .center, .center, .trailing, .trailing, .trailing, .trailing, .center, .leading]
 
         return recordTable(
             headers: ["委托时间", "合约", "买卖", "开平", "手数", "成交", "委托价", "成交价", "状态", "来源"],
             widths: orderWidths,
+            alignments: orderAlignments,
+            maxHeight: 360,
             empty: "无委托记录",
             isEmpty: rows.isEmpty
         ) {
@@ -571,11 +679,13 @@ struct AccountRecordsView: View {
                         .text(formatPrice(row.limitPrice)),
                         .text(formatPrice(row.tradePrice)),
                         .withTip(row.statusText, statusColor, row.lastMsg),
-                        sourceBadge(displaySource(row.source)),
+                        .text(displaySource(row.source)),
                     ],
-                    widths: orderWidths
+                    widths: orderWidths,
+                    alignments: orderAlignments
                 )
             }
+        } footer: {
             if !rows.isEmpty {
                 summaryRow(
                     content: "共 \(rows.count) 笔委托 · 报单 \(totalOrigin) 手 · 已成 \(filledCount) 笔"
@@ -585,16 +695,16 @@ struct AccountRecordsView: View {
         }
     }
 
-    /// 从合约代码提取品种名称与代码（如「纯碱 SA409」）
+    /// 从合约代码提取品种代码与名称（格式为「英文码｜中文」，如「SA｜纯碱」）
     private func displayVariety(_ symbol: String) -> String {
         let clean = symbol.components(separatedBy: ".").last ?? symbol
         let code = clean.uppercased()
         let letters = String(code.prefix { $0.isLetter })
-        guard !letters.isEmpty else { return symbol }
+        guard !letters.isEmpty else { return clean }
         if let name = appState.serverSymbolNames[letters], !name.isEmpty {
-            return "\(name) \(code)"
+            return "\(letters)｜\(name)"
         }
-        return code
+        return letters
     }
 
     /// 解析策略的编码别名（如 supertrend -> 1003）
@@ -654,24 +764,12 @@ struct AccountRecordsView: View {
         return "策略｜\(alias)"
     }
 
-    /// 从合约代码提取纯品种中文或代码名称（如「纯碱」），用于过滤器归类与胶囊展示
-    private func pureVariety(_ symbol: String) -> String {
-        let clean = symbol.components(separatedBy: ".").last ?? symbol
-        let code = clean.uppercased()
-        let letters = String(code.prefix { $0.isLetter })
-        guard !letters.isEmpty else { return symbol }
-        if let name = appState.serverSymbolNames[letters], !name.isEmpty {
-            return name
-        }
-        return letters.isEmpty ? code : letters
-    }
-
-    /// 从当前所有成交记录中提取可用且去重的品种列表
+    /// 从当前所有成交记录中提取可用且去重的品种列表（格式如「SA｜纯碱」）
     private func availableVarieties(from trades: [TradeRecord]) -> [String] {
         var set = Set<String>()
         var list: [String] = []
         for trade in trades {
-            let v = pureVariety(trade.symbol)
+            let v = displayVariety(trade.symbol)
             if !v.isEmpty && !set.contains(v) {
                 set.insert(v)
                 list.append(v)
@@ -694,13 +792,14 @@ struct AccountRecordsView: View {
         return list.sorted()
     }
 
-    /// 根据选中的品种与策略过滤成交记录
+    /// 根据选中的品种与策略过滤成交记录，并根据最新在前/在后排序
     private func filterTrades(_ trades: [TradeRecord]) -> [TradeRecord] {
-        trades.filter { trade in
-            let matchVariety = filterVariety.isEmpty || pureVariety(trade.symbol) == filterVariety
+        let filtered = trades.filter { trade in
+            let matchVariety = filterVariety.isEmpty || displayVariety(trade.symbol) == filterVariety
             let matchStrategy = filterStrategy.isEmpty || displaySource(trade.source) == filterStrategy
             return matchVariety && matchStrategy
         }
+        return newestFirst ? filtered : filtered.reversed()
     }
 
     /// 成交编号展示：显示成交编号后8位（宽度自适应），兜底显示行号
@@ -735,22 +834,23 @@ struct AccountRecordsView: View {
         let maxNoCount = rows.enumerated().map { displayTradeNo($0.element, fallbackIndex: $0.offset + 1).count }.max() ?? 2
         let noColWidth: CGFloat = max(42, CGFloat(maxNoCount) * 8.0 + 16)
 
-        // 动态计算品种列和来源列的自适应宽度，留足文本与徽章边距，避免出现截断省略号
+        // 动态计算品种列和来源列的自适应宽度，留足文本边距，避免出现截断省略号
         let maxVarietyCount = rows.map { displayVariety($0.symbol).count }.max() ?? 2
-        let varietyWidth: CGFloat = max(70, CGFloat(maxVarietyCount) * 8.5 + 16)
+        let varietyWidth: CGFloat = max(80, CGFloat(maxVarietyCount) * 8.5 + 16)
 
         let maxSourceCount = rows.map { displaySource($0.source).count }.max() ?? 2
-        let sourceWidth: CGFloat = max(80, CGFloat(maxSourceCount) * 9.5 + 24)
+        let sourceWidth: CGFloat = max(70, CGFloat(maxSourceCount) * 8.5 + 16)
 
-        let headers = ["编号", "日期", "时间", "品种", "来源", "买卖", "开平", "成交价", "手数", "平仓盈亏"]
-        let widths: [CGFloat?] = [noColWidth, 80, 92, varietyWidth, sourceWidth, 36, 40, 68, 40, 76]
-        let alignments: [Alignment] = [.center, .leading, .leading, .leading, .center, .center, .center, .trailing, .trailing, .trailing]
+        let headers = ["编号", "日期", "时间", "品种", "来源", "开平", "买卖", "成交价", "手数", "平仓盈亏"]
+        let widths: [CGFloat?] = [noColWidth, 80, 92, varietyWidth, sourceWidth, 40, 36, 68, 40, 76]
+        let alignments: [Alignment] = [.center, .leading, .leading, .leading, .leading, .center, .center, .trailing, .trailing, .trailing]
 
         return recordTable(
             headers: headers,
             widths: widths,
             alignments: alignments,
             trailingSpacer: true,
+            maxHeight: 460,
             empty: "无成交记录",
             isEmpty: rows.isEmpty
         ) {
@@ -781,9 +881,9 @@ struct AccountRecordsView: View {
                             .text(dateStr),
                             .text(clockStr),
                             .text(variety),
-                            sourceBadge(sourceDisplay),
-                            .colored(row.directionText, sideColor(row.directionText)),
+                            .text(sourceDisplay),
                             .text(row.offsetText),
+                            .colored(row.directionText, sideColor(row.directionText)),
                             .text(formatPrice(row.price)),
                             .text("\(row.volume)"),
                             profitCell,
@@ -797,6 +897,7 @@ struct AccountRecordsView: View {
                 .buttonStyle(TableRowButtonStyle(scheme: scheme))
                 .pointerCursor()
             }
+        } footer: {
             if !rows.isEmpty {
                 summaryRow(
                     content: "共 \(rows.count) 笔成交 · 累计 \(totalVol) 手（开仓 \(openVol) 手 / 平仓 \(closeVol) 手）",
@@ -909,9 +1010,34 @@ struct AccountRecordsView: View {
         widths: [CGFloat?],
         alignments: [Alignment]? = nil,
         trailingSpacer: Bool = false,
+        maxHeight: CGFloat? = 420,
         empty: String,
         isEmpty: Bool,
         @ViewBuilder rows: () -> Rows
+    ) -> some View {
+        recordTable(
+            headers: headers,
+            widths: widths,
+            alignments: alignments,
+            trailingSpacer: trailingSpacer,
+            maxHeight: maxHeight,
+            empty: empty,
+            isEmpty: isEmpty,
+            rows: rows,
+            footer: { EmptyView() }
+        )
+    }
+
+    private func recordTable<Rows: View, Footer: View>(
+        headers: [String],
+        widths: [CGFloat?],
+        alignments: [Alignment]? = nil,
+        trailingSpacer: Bool = false,
+        maxHeight: CGFloat? = 420,
+        empty: String,
+        isEmpty: Bool,
+        @ViewBuilder rows: () -> Rows,
+        @ViewBuilder footer: () -> Footer
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             tableRow(
@@ -930,7 +1056,17 @@ struct AccountRecordsView: View {
                     .padding(.vertical, 18)
             } else {
                 HairlineDivider()
-                rows()
+                if let maxHeight {
+                    ScrollView(.vertical, showsIndicators: true) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            rows()
+                        }
+                    }
+                    .frame(maxHeight: maxHeight)
+                } else {
+                    rows()
+                }
+                footer()
             }
         }
         .background(AppTheme.soft(scheme))

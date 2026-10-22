@@ -306,7 +306,7 @@ final class AppState: ObservableObject {
     }
 
     /// 清理已废弃的偏好键：交易记录页不再有模拟 / 实盘分段（模拟账户的记录已并入
-    /// 模拟交易页的「交易记录」tab），老版本留下的选择已无意义。
+    /// 模拟交易页的「账户信息」tab），老版本留下的选择已无意义。
     /// removeObject 对不存在的键是空操作，因此每次启动执行都不会有副作用。
     private static func purgeLegacyPreferences() {
         UserDefaults.standard.removeObject(forKey: "tradeRecords.kind")

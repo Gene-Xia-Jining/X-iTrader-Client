@@ -302,10 +302,10 @@ class SQLiteTradeHistoryRepository(TradeHistoryRepository):
         """按日期范围查询成交历史。
 
         date_range 选项：
-        - "today": 当日
-        - "3d": 近 3 天（含今日）
-        - "7d": 近 7 天（含今日）
-        - "all": 全部历史
+        - "all": 全部日期
+        - "1y": 一年
+        - "30d": 30天
+        - "today": 今日
         """
         now = datetime.now(_BEIJING)
         where_clause = "account_id = ?"
@@ -314,6 +314,14 @@ class SQLiteTradeHistoryRepository(TradeHistoryRepository):
         if date_range == "today":
             where_clause += " AND trade_date >= ?"
             params.append(now.strftime("%Y-%m-%d"))
+        elif date_range == "30d":
+            start_date = (now - timedelta(days=29)).strftime("%Y-%m-%d")
+            where_clause += " AND trade_date >= ?"
+            params.append(start_date)
+        elif date_range == "1y":
+            start_date = (now - timedelta(days=365)).strftime("%Y-%m-%d")
+            where_clause += " AND trade_date >= ?"
+            params.append(start_date)
         elif date_range == "3d":
             start_date = (now - timedelta(days=2)).strftime("%Y-%m-%d")
             where_clause += " AND trade_date >= ?"

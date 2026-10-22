@@ -31,7 +31,7 @@ public partial class App : Application
         }
 
         // 废弃偏好键：交易记录页不再有模拟 / 实盘分段（模拟账户的记录已并入
-        // 模拟交易页的「交易记录」tab），老版本留下的选择已无意义
+        // 模拟交易页的「账户信息」tab），老版本留下的选择已无意义
         ShellPrefs.Remove("tradeRecords.kind");
 
         State = new AppState(Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread());

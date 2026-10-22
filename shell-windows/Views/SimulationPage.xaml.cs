@@ -70,17 +70,18 @@ public sealed partial class SimulationPage : Page
     private string _symbolKey = "";
     private string _strategyKey = "";
 
-    // -------- 三个 tab：快速开始（原 7 步引导）/ 交易记录（资金、持仓与当日委托）/ 历史成交（成交记录明细）--------
+    // -------- 三个 tab：快速开始（原 7 步引导）/ 账户信息（资金、持仓与当日委托）/ 历史成交（成交记录明细）--------
 
     private const string TabPrefKey = "simulation.tab";
 
     private enum Tab { Start, Records, Trades }
 
     private Tab _tab = Tab.Start;
-    /// <summary>「交易记录」tab 的主体：懒建一次，切走再切回沿用它自己的数据</summary>
-    private AccountRecordsView? _recordsView;
+    private Tab? _hoveredTab;
+    /// <summary>「账户信息」tab 的主体：懒建一次，切走再切回沿用它自己的数据</summary>
+    private AccountInfoView? _recordsView;
     /// <summary>「历史成交」tab 的主体：懒建一次，切走再切回沿用它自己的数据</summary>
-    private AccountRecordsView? _tradesView;
+    private AccountInfoView? _tradesView;
 
     // -------- 常见问题（展开状态存 ShellPrefs；展开后只列问题，点问题弹窗看详细）--------
 
@@ -143,7 +144,7 @@ public sealed partial class SimulationPage : Page
         new(
             "出问题的时候去哪里看？",
             "「系统日志」页有完整的运行日志，包含连接、信号、下单与错误信息；"
-            + "交易执行明细可以在本页「交易记录」tab 查看模拟账户，实盘账户在「实盘交易」页的「交易记录」tab 查看。"),
+            + "交易执行明细可以在本页「账户信息」tab 查看模拟账户，实盘账户在「实盘交易」页的「账户信息」tab 查看。"),
     ];
 
     private bool _faqExpanded;
@@ -217,6 +218,18 @@ public sealed partial class SimulationPage : Page
         };
         // 构造时就按上次的 tab 定好两栏的可见性，避免首帧闪一下引导卡片
         ApplyTabStyles();
+
+        StartTab.PointerEntered += (_, _) => { _hoveredTab = Tab.Start; ApplyTabStyles(); };
+        StartTab.PointerExited += (_, _) => { if (_hoveredTab == Tab.Start) _hoveredTab = null; ApplyTabStyles(); };
+        RecordsTab.PointerEntered += (_, _) => { _hoveredTab = Tab.Records; ApplyTabStyles(); };
+        RecordsTab.PointerExited += (_, _) => { if (_hoveredTab == Tab.Records) _hoveredTab = null; ApplyTabStyles(); };
+        TradesTabCapsule.PointerEntered += (_, _) => { _hoveredTab = Tab.Trades; ApplyTabStyles(); };
+        TradesTabCapsule.PointerExited += (_, _) => { if (_hoveredTab == Tab.Trades) _hoveredTab = null; ApplyTabStyles(); };
+
+        SetupCapsuleHover(DownloadCapsule);
+        SetupCapsuleHover(AccountCapsule);
+        SetupCapsuleHover(TokenCapsule);
+        SetupCapsuleHover(SymbolCapsule);
 
         ServerBox.LostFocus += (_, _) => SaveServerIfChanged();
         ServerBox.KeyDown += (_, e) =>
@@ -773,12 +786,12 @@ public sealed partial class SimulationPage : Page
     {
         // 问号在胶囊内部：吃掉这次点击，否则会冒泡到胶囊再切一次 tab
         e.Handled = true;
-        await ShowHelpAsync(
+        await ShowInfoAsync(
             "历史成交",
             "数据包含本地 SQLite 历史沉淀成交记录。\n\n"
             + "• 本地沉淀：快期账户通常仅保留当日实时成交推送，客户端将每笔成交自动持久化至本地 SQLite 数据库，跨交易日长期留存。\n"
             + "• 盈亏计算：自动按先进先出原则匹配开平仓，统计单笔平仓盈亏与累计平仓收益。\n"
-            + "• 多维追溯：支持今日、近3天、近7天及全部历史筛选，点击任意成交行可查看合约与订单详细信息。");
+            + "• 多维追溯：支持今日、30天、一年及全部日期筛选，点击任意成交行可查看合约与订单详细信息。");
     }
 
     private void SwitchTab(Tab tab)
@@ -812,14 +825,14 @@ public sealed partial class SimulationPage : Page
         }
     }
 
-    /// <summary>「交易记录」tab 的主体在本页第一次切过去时创建</summary>
+    /// <summary>「账户信息」tab 的主体在本页第一次切过去时创建</summary>
     private void EnsureRecordsView()
     {
         if (_recordsView is not null)
         {
             return;
         }
-        _recordsView = new AccountRecordsView("sim", "尚未配置模拟账户，请先在「快速开始」里保存账户", AccountRecordsMode.Records);
+        _recordsView = new AccountInfoView("sim", "尚未配置模拟账户，请先在「快速开始」里保存账户", AccountInfoMode.Info);
         RecordsPanel.Children.Add(_recordsView);
         if (State is not null)
         {
@@ -834,7 +847,7 @@ public sealed partial class SimulationPage : Page
         {
             return;
         }
-        _tradesView = new AccountRecordsView("sim", "尚未配置模拟账户，请先在「快速开始」里保存账户", AccountRecordsMode.Trades);
+        _tradesView = new AccountInfoView("sim", "尚未配置模拟账户，请先在「快速开始」里保存账户", AccountInfoMode.Trades);
         TradesPanel.Children.Add(_tradesView);
         if (State is not null)
         {
@@ -844,13 +857,27 @@ public sealed partial class SimulationPage : Page
 
     private void ApplyTabStyles()
     {
-        _theme.StyleCapsuleTab(StartTab, _tab == Tab.Start);
-        _theme.StyleCapsuleTab(RecordsTab, _tab == Tab.Records);
-        _theme.StyleCapsuleTabContainer(TradesTabCapsule, TradesTab, TradesHelpRing, TradesHelpIcon, _tab == Tab.Trades);
+        _theme.StyleCapsuleTab(StartTab, _tab == Tab.Start, _hoveredTab == Tab.Start);
+        _theme.StyleCapsuleTab(RecordsTab, _tab == Tab.Records, _hoveredTab == Tab.Records);
+        _theme.StyleCapsuleTabContainer(TradesTabCapsule, TradesTab, TradesHelpRing, TradesHelpIcon, _tab == Tab.Trades, _hoveredTab == Tab.Trades);
         Card.Visibility = _tab == Tab.Start ? Visibility.Visible : Visibility.Collapsed;
         FaqCard.Visibility = _tab == Tab.Start ? Visibility.Visible : Visibility.Collapsed;
         RecordsPanel.Visibility = _tab == Tab.Records ? Visibility.Visible : Visibility.Collapsed;
         TradesPanel.Visibility = _tab == Tab.Trades ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void SetupCapsuleHover(Border capsule)
+    {
+        capsule.PointerEntered += (_, _) =>
+        {
+            capsule.Background = Brush(Palette.SidebarHover);
+            capsule.BorderBrush = Brush(Palette.Dim);
+        };
+        capsule.PointerExited += (_, _) =>
+        {
+            capsule.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            capsule.BorderBrush = Brush(Palette.Hairline);
+        };
     }
 
     private void ApplyPalette()
@@ -2044,7 +2071,14 @@ public sealed partial class SimulationPage : Page
         {
             XamlRoot = Root.XamlRoot,
             Title = title,
-            Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true },
+            Content = new TextBlock
+            {
+                Text = message,
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true,
+                LineHeight = 24,
+                LineStackingStrategy = LineStackingStrategy.MaxHeight,
+            },
             CloseButtonText = "好",
         };
         await dialog.ShowAsync();

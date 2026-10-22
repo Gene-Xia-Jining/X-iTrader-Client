@@ -493,7 +493,7 @@ class BackendService:
     async def trading_records(self, params: dict) -> dict:
         """查询账户当日交易数据：资金、持仓、委托、成交。
 
-        kind 用于「交易记录」页的模拟/实盘 tab；指定 account_id 时以它为准。
+        kind 用于「账户信息」页的模拟/实盘 tab；指定 account_id 时以它为准。
         同时可能有多个实盘账户，故返回 accounts 数组而不是单个账户。
         每个账户读各自的快期模拟/实盘账户（TqKq / TqAccount），与引擎的账户选择一致。
         支持 date_range 参数 ("today" | "3d" | "7d" | "all") 进行历史成交追溯。
@@ -501,7 +501,7 @@ class BackendService:
         kind = params.get("kind")
         account_id = (params.get("account_id") or "").strip()
         date_range = params.get("date_range") or "today"
-        if date_range not in ("today", "3d", "7d", "all"):
+        if date_range not in ("all", "1y", "30d", "today", "3d", "7d"):
             date_range = "today"
 
         if kind is not None and kind not in ("sim", "live"):

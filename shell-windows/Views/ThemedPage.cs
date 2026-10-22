@@ -87,12 +87,16 @@ public sealed class ThemedPage
 
     /// <summary>
     /// 页内分段 tab 的选中态：实心主题蓝 + 白字半粗，未选中透明底 + 发丝描边。
-    /// 模拟交易页与实盘交易页的「快速开始 / 交易记录」切换共用。
+    /// 模拟交易页与实盘交易页的「快速开始 / 账户信息」切换共用。
     /// </summary>
-    public void StyleCapsuleTab(Button tab, bool isOn)
+    public void StyleCapsuleTab(Button tab, bool isOn, bool isHovering = false)
     {
-        tab.Background = new SolidColorBrush(isOn ? Palette.Primary : Microsoft.UI.Colors.Transparent);
-        tab.BorderBrush = new SolidColorBrush(isOn ? Palette.Primary : Palette.Hairline);
+        tab.Background = new SolidColorBrush(isOn
+            ? Palette.Primary
+            : (isHovering ? Palette.SidebarHover : Microsoft.UI.Colors.Transparent));
+        tab.BorderBrush = new SolidColorBrush(isOn
+            ? Palette.Primary
+            : (isHovering ? Palette.Dim : Palette.Hairline));
         tab.BorderThickness = new Thickness(1);
         tab.Foreground = new SolidColorBrush(isOn ? Microsoft.UI.Colors.White : Palette.Ink);
         tab.FontWeight = isOn ? FontWeights.SemiBold : FontWeights.Normal;
@@ -102,10 +106,14 @@ public sealed class ThemedPage
     /// 带内嵌问号的胶囊 tab（「历史成交」用）：问号用 Border + TextBlock 而不是 Button，
     /// 避免 WinUI 默认按钮在悬停/按下时改成浅灰底，破坏选中态蓝色胶囊的整体观感。
     /// </summary>
-    public void StyleCapsuleTabContainer(Border capsule, Button tab, Border helpRing, TextBlock helpIcon, bool isOn)
+    public void StyleCapsuleTabContainer(Border capsule, Button tab, Border helpRing, TextBlock helpIcon, bool isOn, bool isHovering = false)
     {
-        capsule.Background = new SolidColorBrush(isOn ? Palette.Primary : Microsoft.UI.Colors.Transparent);
-        capsule.BorderBrush = new SolidColorBrush(isOn ? Palette.Primary : Palette.Hairline);
+        capsule.Background = new SolidColorBrush(isOn
+            ? Palette.Primary
+            : (isHovering ? Palette.SidebarHover : Microsoft.UI.Colors.Transparent));
+        capsule.BorderBrush = new SolidColorBrush(isOn
+            ? Palette.Primary
+            : (isHovering ? Palette.Dim : Palette.Hairline));
         tab.Foreground = new SolidColorBrush(isOn ? Microsoft.UI.Colors.White : Palette.Ink);
         tab.FontWeight = isOn ? FontWeights.SemiBold : FontWeights.Normal;
         helpIcon.Foreground = new SolidColorBrush(isOn ? Microsoft.UI.Colors.White : Palette.Primary);
@@ -124,4 +132,26 @@ public sealed class ThemedPage
 
     public static Windows.UI.Color Hex(uint value) => Windows.UI.Color.FromArgb(
         0xFF, (byte)((value >> 16) & 0xFF), (byte)((value >> 8) & 0xFF), (byte)(value & 0xFF));
+
+    /// <summary>
+    /// 通用提示/帮助弹窗（问号按钮或操作反馈共用），行距统一加大一档保证长文本呼吸感。
+    /// </summary>
+    public async System.Threading.Tasks.Task ShowInfoAsync(string title, string message)
+    {
+        var dialog = new ContentDialog
+        {
+            XamlRoot = _page.XamlRoot,
+            Title = title,
+            Content = new TextBlock
+            {
+                Text = message,
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true,
+                LineHeight = 24,
+                LineStackingStrategy = LineStackingStrategy.MaxHeight,
+            },
+            CloseButtonText = "好",
+        };
+        await dialog.ShowAsync();
+    }
 }

@@ -10,25 +10,25 @@ using XTrader.Shell.Theme;
 
 namespace XTrader.Shell.Views;
 
-/// <summary>显示模式：交易记录（资金、持仓、当日委托） / 历史成交（成交记录与时间范围筛选）</summary>
-public enum AccountRecordsMode
+/// <summary>显示模式：账户信息（资金、持仓、当日委托各独立成框） / 历史成交（成交记录与时间范围筛选）</summary>
+public enum AccountInfoMode
 {
-    Records,
+    Info,
     Trades,
 }
 
 /// <summary>
-/// 一类账户的交易记录（资金 / 持仓 / 当日委托与成交）。
+/// 一类账户的账户信息与历史成交。
 ///
-/// 按账户类别取数并渲染，实盘交易页与模拟交易页的「交易记录」tab
+/// 按账户类别取数并渲染，实盘交易页与模拟交易页的「账户信息」tab
 /// 共用这一份实现。宿主页负责在进入页面时 <see cref="Reload"/>、
 /// 主题或状态变化时 <see cref="Refresh"/>。
 /// </summary>
-public sealed partial class AccountRecordsView : UserControl
+public sealed partial class AccountInfoView : UserControl
 {
     private readonly string _kind;
     private readonly string _notConfiguredHint;
-    private readonly AccountRecordsMode _mode;
+    private readonly AccountInfoMode _mode;
 
     private AppState? _state;
     private bool _dark;
@@ -40,19 +40,43 @@ public sealed partial class AccountRecordsView : UserControl
     /// <summary>请求代号：只有最新一次请求的结果会被采用</summary>
     private int _requestSeq;
     private string _errorText = "";
+    /// <summary>历史成交的时间范围；交易记录模式固定按 today 取当日快照</summary>
     private string _selectedDateRange = "today";
     private string _filterVariety = "";
     private string _filterStrategy = "";
+    private bool _newestFirst = true;
     private IReadOnlyList<AccountRecords> _records = [];
     /// <summary>渲染签名：数据/主题/空态变化才重建账户卡片</summary>
     private string _renderKey = "";
+    /// <summary>当前悬停的工具栏按钮：重建着色时保持悬停态不丢</summary>
+    private readonly HashSet<Button> _hoveredToolbarButtons = [];
 
-    public AccountRecordsView(string kind, string notConfiguredHint, AccountRecordsMode mode = AccountRecordsMode.Records)
+    private string DateRangeKey => $"trades.dateRange.{_kind}";
+    private string VarietyKey => $"trades.filterVariety.{_kind}";
+    private string StrategyKey => $"trades.filterStrategy.{_kind}";
+    private string NewestFirstKey => $"trades.newestFirst.{_kind}";
+
+    public AccountInfoView(string kind, string notConfiguredHint, AccountInfoMode mode = AccountInfoMode.Info)
     {
         InitializeComponent();
         _kind = kind;
         _notConfiguredHint = notConfiguredHint;
         _mode = mode;
+
+        if (_mode == AccountInfoMode.Trades)
+        {
+            // 历史成交首次进入默认「全部日期」，之后沿用上次的选择
+            _selectedDateRange = "all";
+            var savedRange = ShellPrefs.Get(DateRangeKey);
+            if (!string.IsNullOrEmpty(savedRange) && (savedRange is "all" or "1y" or "30d" or "today"))
+            {
+                _selectedDateRange = savedRange;
+            }
+            _filterVariety = ShellPrefs.Get(VarietyKey) ?? "";
+            _filterStrategy = ShellPrefs.Get(StrategyKey) ?? "";
+            var savedOrder = ShellPrefs.Get(NewestFirstKey);
+            _newestFirst = savedOrder != "0";
+        }
     }
 
     /// <summary>按当前主题重新着色并刷新提示文案（卡片按渲染签名决定是否重建）。</summary>
@@ -73,11 +97,14 @@ public sealed partial class AccountRecordsView : UserControl
         _dark = dark;
         if (_records.Count == 0 && _state != null)
         {
-            var cached = _state.GetCachedRecords(_kind);
-            if (cached.Count > 0)
+            if (_selectedDateRange == "today")
             {
-                _records = cached;
-                _hasLoaded = true;
+                var cached = _state.GetCachedRecords(_kind);
+                if (cached.Count > 0)
+                {
+                    _records = cached;
+                    _hasLoaded = true;
+                }
             }
         }
         // 先切主题再上色：RequestedTheme 会重算模板资源，后设颜色才不会被覆盖
@@ -88,10 +115,14 @@ public sealed partial class AccountRecordsView : UserControl
         ErrorCard.BorderBrush = Brush(palette.Hairline);
         ErrorText.Foreground = Brush(palette.Danger);
         RefreshButton.Foreground = Brush(palette.Primary);
-        RefreshButton.BorderBrush = Brush(palette.Hairline);
-        RefreshButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
-        FiltersPanel.Visibility = _mode == AccountRecordsMode.Trades ? Visibility.Visible : Visibility.Collapsed;
-        Hint.Visibility = _mode == AccountRecordsMode.Trades ? Visibility.Collapsed : Visibility.Visible;
+        OrderButton.Foreground = Brush(palette.Primary);
+        // 悬停底/描边由 ApplyToolbarButtonState 统一处理，深浅色切换后重算一次
+        ApplyToolbarButtonState(RefreshButton);
+        ApplyToolbarButtonState(OrderButton);
+        OrderButton.Content = _newestFirst ? "最新在前" : "最新在后";
+        OrderButton.Visibility = _mode == AccountInfoMode.Trades ? Visibility.Visible : Visibility.Collapsed;
+        FiltersPanel.Visibility = _mode == AccountInfoMode.Trades ? Visibility.Visible : Visibility.Collapsed;
+        Hint.Visibility = _mode == AccountInfoMode.Trades ? Visibility.Collapsed : Visibility.Visible;
         Hint.Text = HintText();
         // 签名里已含深浅色，配色变化时卡片会自动重建
         RenderRecords();
@@ -115,6 +146,45 @@ public sealed partial class AccountRecordsView : UserControl
     private SolidColorBrush Brush(Windows.UI.Color color) => new(color);
 
     private void OnRefreshClick(object sender, RoutedEventArgs e) => _ = LoadAsync(force: true);
+
+    /// <summary>工具栏按钮悬停：与顶栏按钮同一套反馈（SidebarHover 底色 + 描边提亮）</summary>
+    private void OnToolbarButtonPointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (sender is Button button)
+        {
+            _hoveredToolbarButtons.Add(button);
+            ApplyToolbarButtonState(button);
+        }
+    }
+
+    private void OnToolbarButtonPointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (sender is Button button)
+        {
+            _hoveredToolbarButtons.Remove(button);
+            ApplyToolbarButtonState(button);
+        }
+    }
+
+    private void ApplyToolbarButtonState(Button button)
+    {
+        var palette = Palette;
+        var hovering = _hoveredToolbarButtons.Contains(button);
+        button.Background = hovering
+            ? new SolidColorBrush(palette.SidebarHover)
+            : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        button.BorderBrush = hovering
+            ? new SolidColorBrush(palette.Dim)
+            : new SolidColorBrush(palette.Hairline);
+    }
+
+    private void OnToggleOrderClick(object sender, RoutedEventArgs e)
+    {
+        _newestFirst = !_newestFirst;
+        ShellPrefs.Set(NewestFirstKey, _newestFirst ? "1" : "0");
+        OrderButton.Content = _newestFirst ? "最新在前" : "最新在后";
+        RenderRecords();
+    }
 
     /// <summary>
     /// 取本类账户的数据。再次刷新时即便上一个请求还在跑也要重新发起
@@ -144,7 +214,7 @@ public sealed partial class AccountRecordsView : UserControl
         RefreshButton.IsEnabled = false;
         try
         {
-            var dateRange = _mode == AccountRecordsMode.Trades ? _selectedDateRange : "today";
+            var dateRange = _mode == AccountInfoMode.Trades ? _selectedDateRange : "today";
             var resp = await _state.CallAsync("trading.records", new JsonObject
             {
                 ["kind"] = _kind,
@@ -199,7 +269,7 @@ public sealed partial class AccountRecordsView : UserControl
         {
             return _records.Count == 0 ? "正在读取账户数据…" : "正在刷新账户数据…";
         }
-        if (_mode == AccountRecordsMode.Trades)
+        if (_mode == AccountInfoMode.Trades)
         {
             return "";
         }
@@ -224,7 +294,8 @@ public sealed partial class AccountRecordsView : UserControl
             _errorText,
             _selectedDateRange,
             _filterVariety,
-            _filterStrategy);
+            _filterStrategy,
+            _newestFirst);
         if (key == _renderKey)
         {
             return;
@@ -234,7 +305,7 @@ public sealed partial class AccountRecordsView : UserControl
         ErrorCard.Visibility = _errorText.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         ErrorText.Text = _errorText;
 
-        if (_mode == AccountRecordsMode.Trades)
+        if (_mode == AccountInfoMode.Trades)
         {
             FiltersPanel.Visibility = Visibility.Visible;
             Hint.Visibility = Visibility.Collapsed;
@@ -251,7 +322,10 @@ public sealed partial class AccountRecordsView : UserControl
         AccountPanel.Children.Clear();
         foreach (var record in _records)
         {
-            AccountPanel.Children.Add(BuildAccountCard(record));
+            foreach (var element in BuildAccountCards(record))
+            {
+                AccountPanel.Children.Add(element);
+            }
         }
         if (_records.Count == 0 && _errorText.Length == 0 && !_loading && _hasLoaded)
         {
@@ -285,27 +359,30 @@ public sealed partial class AccountRecordsView : UserControl
         return BuildCard(label);
     }
 
-    private Border BuildAccountCard(AccountRecords record)
+    /// <summary>渲染一个账户：账户信息模式下资金、持仓、当日委托各成一张卡片。</summary>
+    private List<UIElement> BuildAccountCards(AccountRecords record)
     {
-        var body = new StackPanel { Spacing = 14 };
-
-        if (_mode != AccountRecordsMode.Trades)
+        // 历史成交不再套一层卡片外框：表格自带底色与描边，直接铺在页面上
+        if (_mode == AccountInfoMode.Trades)
         {
-            var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-            head.Children.Add(new TextBlock
-            {
-                Text = record.Label,
-                FontSize = 15,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = Brush(Palette.Ink),
-                VerticalAlignment = VerticalAlignment.Center,
-            });
-            head.Children.Add(NewBadge(record.Kind == "sim" ? "模拟" : "实盘"));
-            body.Children.Add(head);
+            return [BuildTradeTable(FilterTrades(record.Trades), record.Label)];
         }
+
+        var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        head.Children.Add(new TextBlock
+        {
+            Text = record.Label,
+            FontSize = 15,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = Brush(Palette.Ink),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        head.Children.Add(NewBadge(record.Kind == "sim" ? "模拟" : "实盘"));
 
         if (record.Error.Length > 0)
         {
+            var body = new StackPanel { Spacing = 14 };
+            body.Children.Add(head);
             body.Children.Add(new TextBlock
             {
                 Text = $"读取失败: {record.Error}",
@@ -313,18 +390,19 @@ public sealed partial class AccountRecordsView : UserControl
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brush(Palette.Danger),
             });
+            return [BuildCard(body)];
         }
-        else if (_mode == AccountRecordsMode.Records)
-        {
-            body.Children.Add(BuildMetrics(record.Account));
-            body.Children.Add(BuildSection("持仓", BuildPositionTable(record.Positions)));
-            body.Children.Add(BuildSection("当日委托", BuildOrderTable(record.Orders)));
-        }
-        else
-        {
-            body.Children.Add(BuildTradeTable(FilterTrades(record.Trades), record.Label));
-        }
-        return BuildCard(body);
+
+        var metrics = new StackPanel { Spacing = 14 };
+        metrics.Children.Add(head);
+        metrics.Children.Add(BuildMetrics(record.Account));
+
+        return
+        [
+            BuildCard(metrics),
+            BuildCard(BuildSection("持仓", record.Label, BuildPositionTable(record.Positions))),
+            BuildCard(BuildSection("当日委托", record.Label, BuildOrderTable(record.Orders))),
+        ];
     }
 
     private Border NewBadge(string text) => new()
@@ -382,16 +460,31 @@ public sealed partial class AccountRecordsView : UserControl
         return grid;
     }
 
-    private StackPanel BuildSection(string title, UIElement table)
+    /// <summary>独立卡片内的分区标题（持仓 / 当日委托）；多账户时补账户名，避免分不清归属。</summary>
+    private StackPanel BuildSection(string title, string label, UIElement table)
     {
-        var section = new StackPanel { Spacing = 8 };
-        section.Children.Add(new TextBlock
+        var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        head.Children.Add(new TextBlock
         {
             Text = title,
-            FontSize = 13,
+            FontSize = 15,
             FontWeight = FontWeights.SemiBold,
-            Foreground = Brush(Palette.Dim),
+            Foreground = Brush(Palette.Ink),
+            VerticalAlignment = VerticalAlignment.Center,
         });
+        if (_records.Count > 1)
+        {
+            head.Children.Add(new TextBlock
+            {
+                Text = label,
+                FontSize = 13,
+                Foreground = Brush(Palette.Dim),
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+        }
+
+        var section = new StackPanel { Spacing = 12 };
+        section.Children.Add(head);
         section.Children.Add(table);
         return section;
     }
@@ -409,6 +502,7 @@ public sealed partial class AccountRecordsView : UserControl
     /// <summary>
     /// 等宽列 + 表头 + 数据行的简易表格。列宽由 ColumnSpec 给出，null 表示按权重均分，
     /// 这样长文本（合约、时间）能自适应，短字段（买卖、手数）保持固定宽度对齐。
+    /// 支持表头置顶固定、数据行内部滚动（超过 maxHeight 时自动滚动）、汇总栏置底固定。
     /// </summary>
     private Border BuildTable(
         IReadOnlyList<ColumnSpec> columns,
@@ -416,7 +510,8 @@ public sealed partial class AccountRecordsView : UserControl
         string empty,
         string? summary = null,
         (string Text, Windows.UI.Color? Color)? summaryHighlight = null,
-        Action<int>? onRowClick = null)
+        Action<int>? onRowClick = null,
+        double maxHeight = 420)
     {
         var body = new StackPanel();
         body.Children.Add(BuildTableRow(columns.Select(c => new TableCell(c.Header, null)).ToList(), columns, header: true));
@@ -434,10 +529,16 @@ public sealed partial class AccountRecordsView : UserControl
         }
         else
         {
+            body.Children.Add(new Rectangle { Height = 1, Fill = Brush(Palette.Divider), Margin = new Thickness(12, 0, 12, 0) });
+
+            var rowsPanel = new StackPanel();
             for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
             {
+                if (rowIndex > 0)
+                {
+                    rowsPanel.Children.Add(new Rectangle { Height = 1, Fill = Brush(Palette.Divider), Margin = new Thickness(12, 0, 12, 0) });
+                }
                 var row = rows[rowIndex];
-                body.Children.Add(new Rectangle { Height = 1, Fill = Brush(Palette.Divider), Margin = new Thickness(12, 0, 12, 0) });
                 var rowGrid = BuildTableRow(row, columns, header: false);
                 if (onRowClick is not null)
                 {
@@ -447,8 +548,17 @@ public sealed partial class AccountRecordsView : UserControl
                     rowGrid.PointerExited += (s, e) => rowGrid.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
                     rowGrid.Tapped += (s, e) => onRowClick(capturedIndex);
                 }
-                body.Children.Add(rowGrid);
+                rowsPanel.Children.Add(rowGrid);
             }
+
+            var scrollViewer = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                MaxHeight = maxHeight,
+                Content = rowsPanel,
+            };
+            body.Children.Add(scrollViewer);
 
             if (!string.IsNullOrEmpty(summary))
             {
@@ -592,13 +702,13 @@ public sealed partial class AccountRecordsView : UserControl
             new(FormatSigned(row.FloatProfit), ProfitColor(row.FloatProfit)),
             new(FormatMoney(row.Margin), null),
         }).ToList();
-        return BuildTable(columns, cells, "当前无持仓");
+        return BuildTable(columns, cells, "当前无持仓", maxHeight: 280);
     }
 
     private Border BuildOrderTable(IReadOnlyList<OrderRecord> rows)
     {
         var maxOrderSourceLen = rows.Select(r => DisplaySource(r.Source).Length).DefaultIfEmpty(2).Max();
-        var orderSourceWidth = Math.Max(80, maxOrderSourceLen * 9.5 + 24);
+        var orderSourceWidth = Math.Max(70, maxOrderSourceLen * 8.5 + 16);
 
         var columns = new[]
         {
@@ -620,7 +730,7 @@ public sealed partial class AccountRecordsView : UserControl
                 new(FormatPrice(row.LimitPrice), null),
                 new(FormatPrice(row.TradePrice), null),
                 new(row.StatusText, statusColor, ToolTip: isAbnormal ? row.LastMsg : null),
-                NewSourceBadge(DisplaySource(row.Source)),
+                new(DisplaySource(row.Source), null),
             };
         }).ToList();
 
@@ -631,7 +741,7 @@ public sealed partial class AccountRecordsView : UserControl
             ? $"共 {rows.Count} 笔委托 · 报单 {totalOrigin} 手 · 已成 {filledCount} 笔" + (canceledCount > 0 ? $" · 已撤/废单 {canceledCount} 笔" : "")
             : null;
 
-        return BuildTable(columns, cells, "无委托记录", summary: summary);
+        return BuildTable(columns, cells, "无委托记录", summary: summary, maxHeight: 360);
     }
 
     private string DisplayVariety(string symbol)
@@ -639,12 +749,12 @@ public sealed partial class AccountRecordsView : UserControl
         var clean = symbol.Split('.').LastOrDefault() ?? symbol;
         var code = clean.ToUpperInvariant();
         var letters = new string(code.TakeWhile(char.IsLetter).ToArray());
-        if (letters.Length == 0) return symbol;
+        if (letters.Length == 0) return clean;
         if (_state?.ServerSymbolNames.TryGetValue(letters, out var name) == true && !string.IsNullOrEmpty(name))
         {
-            return $"{name} {code}";
+            return $"{letters}｜{name}";
         }
-        return code;
+        return letters;
     }
 
     private string StrategyAlias(string key)
@@ -706,22 +816,8 @@ public sealed partial class AccountRecordsView : UserControl
         return $"策略｜{StrategyAlias(trimmed)}";
     }
 
-    /// <summary>纯品种名（中文名优先生效），用于过滤器归类与胶囊文案</summary>
-    private string PureVariety(string symbol)
-    {
-        var clean = symbol.Split('.').LastOrDefault() ?? symbol;
-        var code = clean.ToUpperInvariant();
-        var letters = new string(code.TakeWhile(char.IsLetter).ToArray());
-        if (letters.Length == 0) return symbol;
-        if (_state?.ServerSymbolNames.TryGetValue(letters, out var name) == true && !string.IsNullOrEmpty(name))
-        {
-            return name;
-        }
-        return letters;
-    }
-
     private List<string> AvailableVarieties(IReadOnlyList<TradeRecord> trades) =>
-        trades.Select(t => PureVariety(t.Symbol))
+        trades.Select(t => DisplayVariety(t.Symbol))
             .Where(v => v.Length > 0)
             .Distinct()
             .OrderBy(v => v, StringComparer.CurrentCulture)
@@ -734,13 +830,20 @@ public sealed partial class AccountRecordsView : UserControl
             .OrderBy(s => s, StringComparer.CurrentCulture)
             .ToList();
 
-    private IReadOnlyList<TradeRecord> FilterTrades(IReadOnlyList<TradeRecord> trades) =>
-        trades.Where(t =>
+    private IReadOnlyList<TradeRecord> FilterTrades(IReadOnlyList<TradeRecord> trades)
+    {
+        var filtered = trades.Where(t =>
         {
-            var matchVariety = _filterVariety.Length == 0 || PureVariety(t.Symbol) == _filterVariety;
+            var matchVariety = _filterVariety.Length == 0 || DisplayVariety(t.Symbol) == _filterVariety;
             var matchStrategy = _filterStrategy.Length == 0 || DisplaySource(t.Source) == _filterStrategy;
             return matchVariety && matchStrategy;
         }).ToList();
+        if (!_newestFirst)
+        {
+            filtered.Reverse();
+        }
+        return filtered;
+    }
 
     /// <summary>历史成交顶部工具栏：日期、品种、策略各过滤器分组呈水平顺序排列</summary>
     private void RenderTradeFilters(IReadOnlyList<TradeRecord> trades)
@@ -750,17 +853,16 @@ public sealed partial class AccountRecordsView : UserControl
         // 1. 日期过滤器分组
         var dateOptions = new (string Key, string Label)[]
         {
+            ("all", "全部日期"),
+            ("1y", "1 年"),
+            ("30d", "30天"),
             ("today", "今日"),
-            ("3d", "近3天"),
-            ("7d", "近7天"),
-            ("all", "全部"),
         };
         FiltersPanel.Children.Add(BuildSegmentGroup(dateOptions, _selectedDateRange, key =>
         {
             if (_selectedDateRange == key) return;
             _selectedDateRange = key;
-            _filterVariety = "";
-            _filterStrategy = "";
+            ShellPrefs.Set(DateRangeKey, key);
             _ = LoadAsync(force: true);
         }));
 
@@ -768,12 +870,18 @@ public sealed partial class AccountRecordsView : UserControl
         var varieties = AvailableVarieties(trades);
         if (varieties.Count > 0)
         {
+            if (!string.IsNullOrEmpty(_filterVariety) && !varieties.Contains(_filterVariety))
+            {
+                _filterVariety = "";
+                ShellPrefs.Set(VarietyKey, "");
+            }
             var varietyOptions = new List<(string Key, string Label)> { ("", "全部品种") };
             varietyOptions.AddRange(varieties.Select(v => (v, v)));
             FiltersPanel.Children.Add(BuildSegmentGroup(varietyOptions, _filterVariety, key =>
             {
                 if (_filterVariety == key) return;
                 _filterVariety = key;
+                ShellPrefs.Set(VarietyKey, key);
                 RenderRecords();
             }));
         }
@@ -782,16 +890,31 @@ public sealed partial class AccountRecordsView : UserControl
         var strategies = AvailableStrategies(trades);
         if (strategies.Count > 0)
         {
+            if (!string.IsNullOrEmpty(_filterStrategy) && !strategies.Contains(_filterStrategy))
+            {
+                _filterStrategy = "";
+                ShellPrefs.Set(StrategyKey, "");
+            }
             var strategyOptions = new List<(string Key, string Label)> { ("", "全部策略") };
             strategyOptions.AddRange(strategies.Select(s => (s, s)));
             FiltersPanel.Children.Add(BuildSegmentGroup(strategyOptions, _filterStrategy, key =>
             {
                 if (_filterStrategy == key) return;
                 _filterStrategy = key;
+                ShellPrefs.Set(StrategyKey, key);
                 RenderRecords();
             }));
         }
     }
+
+    /// <summary>
+    /// 取分段切片样式。样式定义在 App.xaml；查不到时返回 null 让 Button 退回默认样式，
+    /// 而不是在界面构建时抛异常。
+    /// </summary>
+    private static Style? SegmentSliceStyle() =>
+        Application.Current?.Resources.TryGetValue("SegmentSliceButtonStyle", out var style) == true
+            ? style as Style
+            : null;
 
     /// <summary>通用分段选择胶囊组（与日期筛选器风格一致：外层深色底边框，内层切片单选）</summary>
     private Border BuildSegmentGroup(
@@ -808,17 +931,24 @@ public sealed partial class AccountRecordsView : UserControl
         foreach (var (key, label) in items)
         {
             var isSelected = selectedKey == key;
+            // 用退化模板：默认 Button 模板的 PointerOver 灰底会盖掉这里设的悬停色
             var btn = new Button
             {
+                Style = SegmentSliceStyle(),
                 Content = label,
                 FontSize = 13,
                 Padding = new Thickness(10, 4, 10, 4),
                 CornerRadius = new CornerRadius(10),
-                BorderThickness = new Thickness(0),
                 Background = isSelected ? Brush(Palette.Soft) : new SolidColorBrush(Microsoft.UI.Colors.Transparent),
                 Foreground = isSelected ? Brush(Palette.Ink) : Brush(Palette.Dim),
                 FontWeight = isSelected ? FontWeights.SemiBold : FontWeights.Normal,
             };
+            // 未选中的切片悬停提亮一档（选中态本身已有底色，不再叠加）
+            if (!isSelected)
+            {
+                btn.PointerEntered += (_, _) => btn.Background = Brush(Palette.SidebarHover);
+                btn.PointerExited += (_, _) => btn.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            }
             btn.Click += (_, _) => onSelect(key);
             panel.Children.Add(btn);
         }
@@ -851,10 +981,10 @@ public sealed partial class AccountRecordsView : UserControl
         var noColWidth = Math.Max(42, maxNoLen * 8.0 + 16);
 
         var maxVarietyLen = rows.Select(r => DisplayVariety(r.Symbol).Length).DefaultIfEmpty(2).Max();
-        var varietyWidth = Math.Max(70, maxVarietyLen * 8.5 + 16);
+        var varietyWidth = Math.Max(80, maxVarietyLen * 8.5 + 16);
 
         var maxSourceLen = rows.Select(r => DisplaySource(r.Source).Length).DefaultIfEmpty(2).Max();
-        var sourceWidth = Math.Max(80, maxSourceLen * 9.5 + 24);
+        var sourceWidth = Math.Max(70, maxSourceLen * 8.5 + 16);
 
         var columns = new[]
         {
@@ -862,9 +992,9 @@ public sealed partial class AccountRecordsView : UserControl
             Left("日期", 80),
             Left("时间", 92),
             Left("品种", varietyWidth),
-            Center("来源", sourceWidth),
-            Center("买卖", 36),
+            Left("来源", sourceWidth),
             Center("开平", 40),
+            Center("买卖", 36),
             Right("成交价", 68),
             Right("手数", 40),
             Right("平仓盈亏", 76),
@@ -895,9 +1025,9 @@ public sealed partial class AccountRecordsView : UserControl
                 new(dateStr, null),
                 new(clockStr, null),
                 new(variety, null),
-                NewSourceBadge(sourceDisplay),
-                new(row.DirectionText, SideColor(row.DirectionText)),
+                new(sourceDisplay, null),
                 new(row.OffsetText, null),
+                new(row.DirectionText, SideColor(row.DirectionText)),
                 new(FormatPrice(row.Price), null),
                 new(row.Volume.ToString(CultureInfo.InvariantCulture), null),
                 profitCell,
@@ -924,7 +1054,7 @@ public sealed partial class AccountRecordsView : UserControl
             {
                 _ = ShowTradeDetailDialogAsync(rows[index], accountLabel);
             }
-        });
+        }, maxHeight: 460);
     }
 
     private async Task ShowTradeDetailDialogAsync(TradeRecord trade, string accountLabel)

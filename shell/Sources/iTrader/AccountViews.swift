@@ -14,7 +14,7 @@ struct AccountView: View {
     /// 新建未保存卡片的 id（前端生成，对应 Qt live-{uuid4.hex[:8]}，保存时传给后端）
     @State private var draftIDs: [String] = []
 
-    /// 三个 tab：「快速开始」是原来的账户配置，「交易记录」是资金、持仓与当日委托，「历史成交」是成交记录
+    /// 三个 tab：「快速开始」是原来的账户配置，「账户信息」是资金、持仓与当日委托，「历史成交」是成交记录
     private enum LiveTab: String, CaseIterable {
         case start
         case records
@@ -23,7 +23,7 @@ struct AccountView: View {
         var title: String {
             switch self {
             case .start: return "快速开始"
-            case .records: return "交易记录"
+            case .records: return "账户信息"
             case .trades: return "历史成交"
             }
         }
@@ -41,7 +41,7 @@ struct AccountView: View {
 
     • 本地沉淀：快期账户通常仅保留当日实时成交推送，客户端将每笔成交自动持久化至本地 SQLite 数据库，跨交易日长期留存。
     • 盈亏计算：自动按先进先出原则匹配开平仓，统计单笔平仓盈亏与累计平仓收益。
-    • 多维追溯：支持今日、近3天、近7天及全部历史筛选，点击任意成交行可查看合约与订单详细信息。
+    • 多维追溯：支持今日、30天、一年及全部日期筛选，点击任意成交行可查看合约与订单详细信息。
     """
 
     private var savedAccounts: [AccountInfo] {
@@ -87,13 +87,13 @@ struct AccountView: View {
                     .padding(20)
                 }
             } else if tab == .records {
-                AccountRecordsView(
+                AccountInfoView(
                     kind: .live,
-                    mode: .records,
+                    mode: .info,
                     notConfiguredHint: "尚未配置实盘账户，请先在「快速开始」里添加账户"
                 )
             } else {
-                AccountRecordsView(
+                AccountInfoView(
                     kind: .live,
                     mode: .trades,
                     notConfiguredHint: "尚未配置实盘账户，请先在「快速开始」里添加账户"

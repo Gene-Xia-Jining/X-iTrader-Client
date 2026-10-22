@@ -87,8 +87,82 @@
             </Style>
 
             <!--
+              页面级次要按钮（历史成交的「最新在前 / 刷新」）：外观对齐 mac 壳的
+              AppButton(.secondary) —— 高 36、胶囊圆角 18、透明底 + 发丝描边。
+              模板同样退化成纯 Border + ContentPresenter，悬停色由页面代码按
+              Palette.SidebarHover / Dim 设置（默认模板的 PointerOver 会盖掉它）。
+            -->
+            <Style x:Key="PageButtonStyle" TargetType="Button">
+                <Setter Property="MinHeight" Value="36" />
+                <Setter Property="Padding" Value="22,0" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="18" />
+                <Setter Property="FontSize" Value="15" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="{TemplateBinding CornerRadius}"
+                                    Padding="{TemplateBinding Padding}">
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal" />
+                                        <VisualState x:Name="PointerOver" />
+                                        <VisualState x:Name="Pressed" />
+                                        <VisualState x:Name="Disabled">
+                                            <Storyboard>
+                                                <DoubleAnimation Storyboard.TargetName="PageButtonPresenter"
+                                                                 Storyboard.TargetProperty="Opacity"
+                                                                 To="0.4" Duration="0" />
+                                            </Storyboard>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                                <ContentPresenter x:Name="PageButtonPresenter"
+                                                  Content="{TemplateBinding Content}"
+                                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                  Foreground="{TemplateBinding Foreground}"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center" />
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!--
+              分段胶囊里的单个切片（日期 / 品种 / 策略）：默认 Button 模板的
+              PointerOver 灰底会盖掉代码按 Palette 设的悬停色，这里同样退化成
+              纯 Border + ContentPresenter，圆角与内边距由代码逐项给出。
+            -->
+            <Style x:Key="SegmentSliceButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="{TemplateBinding CornerRadius}"
+                                    Padding="{TemplateBinding Padding}">
+                                <ContentPresenter Content="{TemplateBinding Content}"
+                                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center" />
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!--
               侧栏导航项：Button 退化成纯 Border + 文字，选中/悬停底色与描边由代码
-              按 Palette 设置（外观对齐页内分段胶囊，如「快速开始/交易记录」）。
+              按 Palette 设置（外观对齐页内分段胶囊，如「快速开始/账户信息」）。
               保留 Button 是为了键盘焦点与 Space/Enter 激活，原生按钮模板会叠
               PointerOver/Pressed 灰底，盖掉主题色。
             -->

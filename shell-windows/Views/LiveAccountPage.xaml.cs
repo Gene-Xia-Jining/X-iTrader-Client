@@ -47,10 +47,11 @@ public sealed partial class LiveAccountPage : Page
     private enum Tab { Start, Records, Trades }
 
     private Tab _tab = Tab.Start;
+    private Tab? _hoveredTab;
     /// <summary>「交易记录」tab 的主体：懒建一次，切走再切回沿用它自己的数据</summary>
-    private AccountRecordsView? _recordsView;
+    private AccountInfoView? _recordsView;
     /// <summary>「历史成交」tab 的主体：懒建一次，切走再切回沿用它自己的数据</summary>
-    private AccountRecordsView? _tradesView;
+    private AccountInfoView? _tradesView;
 
     public LiveAccountPage()
     {
@@ -64,6 +65,13 @@ public sealed partial class LiveAccountPage : Page
         };
         // 构造时就按上次的 tab 定好两栏的可见性，避免首帧闪一下配置卡片
         ApplyTabStyles();
+
+        StartTab.PointerEntered += (_, _) => { _hoveredTab = Tab.Start; ApplyTabStyles(); };
+        StartTab.PointerExited += (_, _) => { if (_hoveredTab == Tab.Start) _hoveredTab = null; ApplyTabStyles(); };
+        RecordsTab.PointerEntered += (_, _) => { _hoveredTab = Tab.Records; ApplyTabStyles(); };
+        RecordsTab.PointerExited += (_, _) => { if (_hoveredTab == Tab.Records) _hoveredTab = null; ApplyTabStyles(); };
+        TradesTabCapsule.PointerEntered += (_, _) => { _hoveredTab = Tab.Trades; ApplyTabStyles(); };
+        TradesTabCapsule.PointerExited += (_, _) => { if (_hoveredTab == Tab.Trades) _hoveredTab = null; ApplyTabStyles(); };
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -149,7 +157,7 @@ public sealed partial class LiveAccountPage : Page
             "数据包含本地 SQLite 历史沉淀成交记录。\n\n"
             + "• 本地沉淀：快期账户通常仅保留当日实时成交推送，客户端将每笔成交自动持久化至本地 SQLite 数据库，跨交易日长期留存。\n"
             + "• 盈亏计算：自动按先进先出原则匹配开平仓，统计单笔平仓盈亏与累计平仓收益。\n"
-            + "• 多维追溯：支持今日、近3天、近7天及全部历史筛选，点击任意成交行可查看合约与订单详细信息。");
+            + "• 多维追溯：支持今日、30天、一年及全部日期筛选，点击任意成交行可查看合约与订单详细信息。");
     }
 
     private void SwitchTab(Tab tab)
@@ -185,7 +193,7 @@ public sealed partial class LiveAccountPage : Page
         {
             return;
         }
-        _recordsView = new AccountRecordsView("live", "尚未配置实盘账户，请先在「快速开始」里添加账户", AccountRecordsMode.Records);
+        _recordsView = new AccountInfoView("live", "尚未配置实盘账户，请先在「快速开始」里添加账户", AccountInfoMode.Info);
         RecordsPanel.Children.Add(_recordsView);
         if (State is not null)
         {
@@ -200,7 +208,7 @@ public sealed partial class LiveAccountPage : Page
         {
             return;
         }
-        _tradesView = new AccountRecordsView("live", "尚未配置实盘账户，请先在「快速开始」里添加账户", AccountRecordsMode.Trades);
+        _tradesView = new AccountInfoView("live", "尚未配置实盘账户，请先在「快速开始」里添加账户", AccountInfoMode.Trades);
         TradesPanel.Children.Add(_tradesView);
         if (State is not null)
         {
@@ -210,9 +218,9 @@ public sealed partial class LiveAccountPage : Page
 
     private void ApplyTabStyles()
     {
-        _theme.StyleCapsuleTab(StartTab, _tab == Tab.Start);
-        _theme.StyleCapsuleTab(RecordsTab, _tab == Tab.Records);
-        _theme.StyleCapsuleTabContainer(TradesTabCapsule, TradesTab, TradesHelpRing, TradesHelpIcon, _tab == Tab.Trades);
+        _theme.StyleCapsuleTab(StartTab, _tab == Tab.Start, _hoveredTab == Tab.Start);
+        _theme.StyleCapsuleTab(RecordsTab, _tab == Tab.Records, _hoveredTab == Tab.Records);
+        _theme.StyleCapsuleTabContainer(TradesTabCapsule, TradesTab, TradesHelpRing, TradesHelpIcon, _tab == Tab.Trades, _hoveredTab == Tab.Trades);
         Card.Visibility = _tab == Tab.Start ? Visibility.Visible : Visibility.Collapsed;
         RecordsPanel.Visibility = _tab == Tab.Records ? Visibility.Visible : Visibility.Collapsed;
         TradesPanel.Visibility = _tab == Tab.Trades ? Visibility.Visible : Visibility.Collapsed;

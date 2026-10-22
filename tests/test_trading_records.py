@@ -185,14 +185,21 @@ class TradingRecordsTest(unittest.TestCase):
         self.assertEqual(len(three_day_trades), 2)
         self.assertEqual([t["trade_id"] for t in three_day_trades], ["t1", "t2"])
 
-        # 3. 查 all（包括10天前的）
+        # 3. 查 30d 与 1y（包括10天前的）
+        thirty_day_trades = repo.query_trades("l1", date_range="30d")
+        self.assertEqual(len(thirty_day_trades), 3)
+
+        one_year_trades = repo.query_trades("l1", date_range="1y")
+        self.assertEqual(len(one_year_trades), 3)
+
+        # 4. 查 all（包括全部历史）
         all_trades = repo.query_trades("l1", date_range="all")
         self.assertEqual(len(all_trades), 3)
 
-        # 4. 通过 trading_records 接口带 date_range 查询
-        resp = self.run_records({"account_id": "l1", "date_range": "3d"})
+        # 5. 通过 trading_records 接口带 date_range 查询
+        resp = self.run_records({"account_id": "l1", "date_range": "30d"})
         acc_rec = resp["accounts"][0]
-        self.assertEqual(len(acc_rec["trades"]), 2)
+        self.assertEqual(len(acc_rec["trades"]), 3)
 
     def test_calc_trade_realized_profit_and_source(self):
         """测试平仓盈亏计算与来源标注。"""

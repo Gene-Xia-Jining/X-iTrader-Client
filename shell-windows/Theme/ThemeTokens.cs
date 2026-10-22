@@ -19,6 +19,7 @@ public sealed class Palette
     public required Color Ink { get; init; }
     public required Color Dim { get; init; }
     public required Color Primary { get; init; }
+    public required Color PrimaryHover { get; init; }
     public required Color Danger { get; init; }
     public required Color Success { get; init; }
     public required Color InputBg { get; init; }
@@ -49,6 +50,7 @@ internal static class ThemeTokens
         Ink = Hex(0x1D1D1F),
         Dim = Hex(0x7A7A7A),
         Primary = Hex(0x0066CC),
+        PrimaryHover = Hex(0x0071E3),
         Danger = Hex(0xE3342F),
         Success = Hex(0x34C759),
         InputBg = Hex(0xFFFFFF),
@@ -69,6 +71,7 @@ internal static class ThemeTokens
         Ink = Microsoft.UI.Colors.White,
         Dim = Hex(0x86868B),
         Primary = Hex(0x2997FF),
+        PrimaryHover = Hex(0x4AA3FF),
         Danger = Hex(0xFF453A),
         Success = Hex(0x30D158),
         InputBg = Hex(0x2A2A2C),

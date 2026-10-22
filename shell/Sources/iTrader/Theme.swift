@@ -109,15 +109,37 @@ struct AppHelpButton: View {
     @State private var isHovering = false
     @Environment(\.colorScheme) private var scheme
 
+    private var fgColor: Color {
+        if isOn {
+            return .white
+        }
+        return isHovering ? AppTheme.primaryHover(scheme) : AppTheme.primary(scheme)
+    }
+
+    private var bgColor: Color {
+        if !isHovering { return .clear }
+        if isOn {
+            return Color.white.opacity(0.25)
+        }
+        return AppTheme.primary(scheme).opacity(scheme == .dark ? 0.22 : 0.12)
+    }
+
+    private var borderColor: Color {
+        if isOn {
+            return Color.white.opacity(isHovering ? 0.8 : 0.45)
+        }
+        return isHovering ? AppTheme.primary(scheme) : AppTheme.hairline(scheme)
+    }
+
     var body: some View {
         Button { isPresented = true } label: {
             Text("?")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(isOn ? .white : AppTheme.primary(scheme))
+                .foregroundColor(fgColor)
                 .frame(width: 18, height: 18)
-                .background(isHovering ? (isOn ? Color.white.opacity(0.2) : AppTheme.sidebarHover(scheme)) : .clear)
+                .background(bgColor)
                 .cornerRadius(9)
-                .overlay(Circle().stroke(isOn ? Color.white.opacity(0.45) : AppTheme.hairline(scheme), lineWidth: 1))
+                .overlay(Circle().stroke(borderColor, lineWidth: 1))
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -126,6 +148,7 @@ struct AppHelpButton: View {
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             Text(text)
                 .font(AppTheme.dimFont)
+                .lineSpacing(5)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(width: 320, alignment: .leading)
                 .padding(12)
@@ -134,15 +157,13 @@ struct AppHelpButton: View {
 }
 
 /// 页内分段 tab（等高胶囊，选中态实心，与侧栏选中态同风格）。
-/// 模拟交易页与实盘交易页的「快速开始 / 交易记录 / 历史成交」切换共用这一套外观。
+/// 模拟交易页与实盘交易页的「快速开始 / 账户信息 / 历史成交」切换共用这一套外观。
 struct CapsuleTabBar<Tab: Hashable, Trailing: View>: View {
     let tabs: [Tab]
     let title: (Tab) -> String
     @Binding var selection: Tab
     let hasTrailing: (Tab) -> Bool
     let trailingView: (Tab) -> Trailing
-
-    @Environment(\.colorScheme) private var scheme
 
     init(
         tabs: [Tab],
@@ -161,43 +182,68 @@ struct CapsuleTabBar<Tab: Hashable, Trailing: View>: View {
     var body: some View {
         HStack(spacing: 10) {
             ForEach(tabs, id: \.self) { item in
-                tabCapsule(item)
+                CapsuleTabItem(
+                    title: title(item),
+                    isOn: selection == item,
+                    hasTrailing: hasTrailing(item),
+                    trailingView: { trailingView(item) },
+                    onSelect: { selection = item }
+                )
             }
             Spacer()
         }
     }
+}
 
-    private func tabCapsule(_ item: Tab) -> some View {
-        let isOn = selection == item
-        let trailing = hasTrailing(item)
-        return HStack(spacing: 6) {
-            Button {
-                selection = item
-            } label: {
-                Text(title(item))
-                    .font(AppTheme.bodyFont.weight(isOn ? .semibold : .regular))
-                    .foregroundColor(isOn ? .white : AppTheme.ink(scheme))
-            }
-            .buttonStyle(.plain)
-            .pointerCursor()
+private struct CapsuleTabItem<Trailing: View>: View {
+    let title: String
+    let isOn: Bool
+    let hasTrailing: Bool
+    let trailingView: () -> Trailing
+    let onSelect: () -> Void
 
-            if trailing {
-                trailingView(item)
+    @Environment(\.colorScheme) private var scheme
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(AppTheme.bodyFont.weight(isOn ? .semibold : .regular))
+                .foregroundColor(isOn ? .white : AppTheme.ink(scheme))
+
+            if hasTrailing {
+                trailingView()
             }
         }
         .padding(.leading, 20)
-        .padding(.trailing, trailing ? 12 : 20)
+        .padding(.trailing, hasTrailing ? 12 : 20)
         .frame(minHeight: 34)
-        .background(isOn ? AppTheme.primary(scheme) : Color.clear)
+        .background(bgColor)
         .overlay(
             RoundedRectangle(cornerRadius: 17)
-                .stroke(isOn ? AppTheme.primary(scheme) : AppTheme.hairline(scheme), lineWidth: 1)
+                .stroke(borderColor, lineWidth: 1)
         )
         .cornerRadius(17)
         .contentShape(RoundedRectangle(cornerRadius: 17))
+        .onHover { hovering = $0 }
+        .pointerCursor()
         .onTapGesture {
-            selection = item
+            onSelect()
         }
+    }
+
+    private var bgColor: Color {
+        if isOn {
+            return hovering ? AppTheme.primaryHover(scheme) : AppTheme.primary(scheme)
+        }
+        return hovering ? AppTheme.sidebarHover(scheme) : Color.clear
+    }
+
+    private var borderColor: Color {
+        if isOn {
+            return AppTheme.primary(scheme)
+        }
+        return hovering ? AppTheme.dim(scheme) : AppTheme.hairline(scheme)
     }
 }
 

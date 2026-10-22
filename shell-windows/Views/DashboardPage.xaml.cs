@@ -14,7 +14,7 @@ namespace XTrader.Shell.Views;
 
 /// <summary>
 /// 仪表盘：模拟 / 实盘两张账户汇总卡片，左右顺序可拖动互换（对 mac 壳的 DashboardView）。
-/// 汇总数据来自 trading.records 的当日资金快照，与「交易记录」tab 同一份来源。
+/// 汇总数据来自 trading.records 的当日资金快照，与「账户信息」tab 同一份来源。
 /// </summary>
 public sealed partial class DashboardPage : Page
 {
