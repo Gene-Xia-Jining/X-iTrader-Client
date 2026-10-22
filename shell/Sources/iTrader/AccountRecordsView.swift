@@ -223,18 +223,23 @@ struct AccountRecordsView: View {
     @State private var selectedDateRange: RecordDateRange = .today
     /// 点击查看明细的成交
     @State private var selectedTradeModal: TradeDetailModal? = nil
+    /// 历史成交的品种过滤器（空串 = 全部品种）
+    @State private var filterVariety: String = ""
+    /// 历史成交的策略过滤器（空串 = 全部策略）
+    @State private var filterStrategy: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 12) {
-                Text(loading ? "正在读取账户数据…" : hintText)
-                    .font(AppTheme.dimFont)
-                    .foregroundColor(AppTheme.dim(scheme))
-                Spacer()
-                if mode == .trades {
-                    dateRangeCapsules
+            if mode == .trades {
+                tradesToolBar
+            } else {
+                HStack(spacing: 12) {
+                    Text(loading ? "正在读取账户数据…" : hintText)
+                        .font(AppTheme.dimFont)
+                        .foregroundColor(AppTheme.dim(scheme))
+                    Spacer()
+                    AppButton("刷新", variant: .secondary, disabled: loading) { load() }
                 }
-                AppButton("刷新", variant: .secondary, disabled: loading) { load() }
             }
 
             if !errorText.isEmpty {
@@ -273,23 +278,78 @@ struct AccountRecordsView: View {
         }
     }
 
-    private var dateRangeCapsules: some View {
+    /// 历史成交工具栏：日期、品种、策略各过滤器分组呈水平顺序排列
+    private var tradesToolBar: some View {
+        HStack(spacing: 10) {
+            // 1. 日期过滤器分组
+            filterSegmentGroup(
+                items: RecordDateRange.allCases.map { ($0.rawValue, $0.title) },
+                selectedId: selectedDateRange.rawValue
+            ) { key in
+                guard let range = RecordDateRange(rawValue: key), selectedDateRange != range else { return }
+                selectedDateRange = range
+                // 换时间范围后旧的筛选值可能已无对应记录，一并清掉回到「全部」
+                filterVariety = ""
+                filterStrategy = ""
+                load()
+            }
+
+            // 2. 品种过滤器分组（若当前有成交记录则展示）
+            let varieties = availableVarieties(from: allTrades)
+            if !varieties.isEmpty {
+                filterSegmentGroup(
+                    items: [("", "全部品种")] + varieties.map { ($0, $0) },
+                    selectedId: filterVariety
+                ) { v in
+                    filterVariety = v
+                }
+            }
+
+            // 3. 策略过滤器分组（若当前有成交记录则展示）
+            let strategies = availableStrategies(from: allTrades)
+            if !strategies.isEmpty {
+                filterSegmentGroup(
+                    items: [("", "全部策略")] + strategies.map { ($0, $0) },
+                    selectedId: filterStrategy
+                ) { s in
+                    filterStrategy = s
+                }
+            }
+
+            Spacer()
+
+            if loading {
+                Text(records.isEmpty ? "正在读取…" : "正在刷新…")
+                    .font(AppTheme.dimFont)
+                    .foregroundColor(AppTheme.dim(scheme))
+            }
+
+            AppButton("刷新", variant: .secondary, disabled: loading) { load() }
+        }
+    }
+
+    /// 通用分段选择胶囊组（与日期筛选器风格一致：外层深色底边框，内层切片单选）
+    private func filterSegmentGroup(
+        items: [(id: String, title: String)],
+        selectedId: String,
+        onSelect: @escaping (String) -> Void
+    ) -> some View {
         HStack(spacing: 4) {
-            ForEach(RecordDateRange.allCases, id: \.self) { range in
+            ForEach(items, id: \.id) { item in
+                let isSelected = (selectedId == item.id)
                 Button(action: {
-                    guard selectedDateRange != range else { return }
-                    selectedDateRange = range
-                    load()
+                    onSelect(item.id)
                 }) {
-                    Text(range.title)
-                        .font(AppTheme.dimFont.weight(selectedDateRange == range ? .semibold : .regular))
-                        .foregroundColor(selectedDateRange == range ? AppTheme.ink(scheme) : AppTheme.dim(scheme))
+                    Text(item.title)
+                        .font(AppTheme.dimFont.weight(isSelected ? .semibold : .regular))
+                        .foregroundColor(isSelected ? AppTheme.ink(scheme) : AppTheme.dim(scheme))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
-                        .background(selectedDateRange == range ? AppTheme.soft(scheme) : Color.clear)
+                        .background(isSelected ? AppTheme.soft(scheme) : Color.clear)
                         .cornerRadius(10)
                 }
                 .buttonStyle(.plain)
+                .pointerCursor()
             }
         }
         .padding(2)
@@ -301,6 +361,11 @@ struct AccountRecordsView: View {
         )
     }
 
+
+    /// 当前所有账户的成交合并（过滤器选项从这里汇总，避免各账户列表不一致）
+    private var allTrades: [TradeRecord] {
+        records.flatMap(\.trades)
+    }
 
     private var hintText: String {
         let count = appState.accounts.filter { $0.kind == kind.rawValue }.count
@@ -394,7 +459,7 @@ struct AccountRecordsView: View {
                     section("持仓") { positionTable(record.positions) }
                     section("当日委托") { orderTable(record.orders) }
                 } else {
-                    tradeTable(record.trades, accountLabel: record.label)
+                    tradeTable(filterTrades(record.trades), accountLabel: record.label)
                 }
             }
             .padding(20)
@@ -589,6 +654,64 @@ struct AccountRecordsView: View {
         return "策略｜\(alias)"
     }
 
+    /// 从合约代码提取纯品种中文或代码名称（如「纯碱」），用于过滤器归类与胶囊展示
+    private func pureVariety(_ symbol: String) -> String {
+        let clean = symbol.components(separatedBy: ".").last ?? symbol
+        let code = clean.uppercased()
+        let letters = String(code.prefix { $0.isLetter })
+        guard !letters.isEmpty else { return symbol }
+        if let name = appState.serverSymbolNames[letters], !name.isEmpty {
+            return name
+        }
+        return letters.isEmpty ? code : letters
+    }
+
+    /// 从当前所有成交记录中提取可用且去重的品种列表
+    private func availableVarieties(from trades: [TradeRecord]) -> [String] {
+        var set = Set<String>()
+        var list: [String] = []
+        for trade in trades {
+            let v = pureVariety(trade.symbol)
+            if !v.isEmpty && !set.contains(v) {
+                set.insert(v)
+                list.append(v)
+            }
+        }
+        return list.sorted()
+    }
+
+    /// 从当前所有成交记录中提取可用且去重的策略列表
+    private func availableStrategies(from trades: [TradeRecord]) -> [String] {
+        var set = Set<String>()
+        var list: [String] = []
+        for trade in trades {
+            let s = displaySource(trade.source)
+            if !s.isEmpty && !set.contains(s) {
+                set.insert(s)
+                list.append(s)
+            }
+        }
+        return list.sorted()
+    }
+
+    /// 根据选中的品种与策略过滤成交记录
+    private func filterTrades(_ trades: [TradeRecord]) -> [TradeRecord] {
+        trades.filter { trade in
+            let matchVariety = filterVariety.isEmpty || pureVariety(trade.symbol) == filterVariety
+            let matchStrategy = filterStrategy.isEmpty || displaySource(trade.source) == filterStrategy
+            return matchVariety && matchStrategy
+        }
+    }
+
+    /// 成交编号展示：显示成交编号后8位（宽度自适应），兜底显示行号
+    private func displayTradeNo(_ trade: TradeRecord, fallbackIndex: Int) -> String {
+        let trimmed = trade.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed.count > 8 ? String(trimmed.suffix(8)) : trimmed
+        }
+        return "\(fallbackIndex)"
+    }
+
     /// 解析成交时间为日期和精确到毫秒的时间
     private func parseTradeTime(_ raw: String) -> (date: String, clock: String) {
         let parts = raw.split(separator: " ")
@@ -608,6 +731,10 @@ struct AccountRecordsView: View {
         let hasCloseProfit = !closeProfits.isEmpty
         let totalRealized = closeProfits.reduce(0, +)
 
+        // 编号列宽度自适应：根据成交编号后8位实际长度动态计算
+        let maxNoCount = rows.enumerated().map { displayTradeNo($0.element, fallbackIndex: $0.offset + 1).count }.max() ?? 2
+        let noColWidth: CGFloat = max(42, CGFloat(maxNoCount) * 8.0 + 16)
+
         // 动态计算品种列和来源列的自适应宽度，留足文本与徽章边距，避免出现截断省略号
         let maxVarietyCount = rows.map { displayVariety($0.symbol).count }.max() ?? 2
         let varietyWidth: CGFloat = max(70, CGFloat(maxVarietyCount) * 8.5 + 16)
@@ -616,7 +743,7 @@ struct AccountRecordsView: View {
         let sourceWidth: CGFloat = max(80, CGFloat(maxSourceCount) * 9.5 + 24)
 
         let headers = ["编号", "日期", "时间", "品种", "来源", "买卖", "开平", "成交价", "手数", "平仓盈亏"]
-        let widths: [CGFloat?] = [36, 80, 92, varietyWidth, sourceWidth, 36, 40, 68, 40, 76]
+        let widths: [CGFloat?] = [noColWidth, 80, 92, varietyWidth, sourceWidth, 36, 40, 68, 40, 76]
         let alignments: [Alignment] = [.center, .leading, .leading, .leading, .center, .center, .center, .trailing, .trailing, .trailing]
 
         return recordTable(
@@ -643,13 +770,14 @@ struct AccountRecordsView: View {
                 let clockStr = timeInfo.clock
                 let variety = displayVariety(row.symbol)
                 let sourceDisplay = displaySource(row.source)
+                let tradeNo = displayTradeNo(row, fallbackIndex: index + 1)
 
                 Button {
                     selectedTradeModal = TradeDetailModal(trade: row, accountLabel: accountLabel)
                 } label: {
                     tableRow(
                         cells: [
-                            .text("\(index + 1)"),
+                            .text(tradeNo),
                             .text(dateStr),
                             .text(clockStr),
                             .text(variety),

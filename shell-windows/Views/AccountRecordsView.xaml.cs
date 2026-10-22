@@ -41,6 +41,8 @@ public sealed partial class AccountRecordsView : UserControl
     private int _requestSeq;
     private string _errorText = "";
     private string _selectedDateRange = "today";
+    private string _filterVariety = "";
+    private string _filterStrategy = "";
     private IReadOnlyList<AccountRecords> _records = [];
     /// <summary>渲染签名：数据/主题/空态变化才重建账户卡片</summary>
     private string _renderKey = "";
@@ -88,49 +90,11 @@ public sealed partial class AccountRecordsView : UserControl
         RefreshButton.Foreground = Brush(palette.Primary);
         RefreshButton.BorderBrush = Brush(palette.Hairline);
         RefreshButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
-        DateRangePanel.Visibility = _mode == AccountRecordsMode.Trades ? Visibility.Visible : Visibility.Collapsed;
-        if (_mode == AccountRecordsMode.Trades)
-        {
-            RenderDateRangeButtons();
-        }
+        FiltersPanel.Visibility = _mode == AccountRecordsMode.Trades ? Visibility.Visible : Visibility.Collapsed;
+        Hint.Visibility = _mode == AccountRecordsMode.Trades ? Visibility.Collapsed : Visibility.Visible;
         Hint.Text = HintText();
         // 签名里已含深浅色，配色变化时卡片会自动重建
         RenderRecords();
-    }
-
-    private void RenderDateRangeButtons()
-    {
-        DateRangePanel.Children.Clear();
-        var options = new (string Key, string Label)[]
-        {
-            ("today", "今日"),
-            ("3d", "近3天"),
-            ("7d", "近7天"),
-            ("all", "全部"),
-        };
-        foreach (var (key, label) in options)
-        {
-            var isSelected = _selectedDateRange == key;
-            var btn = new Button
-            {
-                Content = label,
-                FontSize = 13,
-                Padding = new Thickness(10, 4, 10, 4),
-                CornerRadius = new CornerRadius(10),
-                BorderThickness = new Thickness(0),
-                Background = isSelected ? Brush(Palette.Soft) : new SolidColorBrush(Microsoft.UI.Colors.Transparent),
-                Foreground = isSelected ? Brush(Palette.Ink) : Brush(Palette.Dim),
-                FontWeight = isSelected ? FontWeights.SemiBold : FontWeights.Normal,
-            };
-            btn.Click += (_, _) =>
-            {
-                if (_selectedDateRange == key) return;
-                _selectedDateRange = key;
-                RenderDateRangeButtons();
-                _ = LoadAsync(force: true);
-            };
-            DateRangePanel.Children.Add(btn);
-        }
     }
 
     private void OnRecordsUpdated(string kind, IReadOnlyList<AccountRecords> list)
@@ -257,7 +221,10 @@ public sealed partial class AccountRecordsView : UserControl
                 + string.Join(",", r.Orders.Select(o => $"{o.Id}{o.VolumeLeft}{o.StatusText}"))
                 + string.Join(",", r.Trades.Select(t => $"{t.Id}{t.Price}{t.Volume}"))),
             _dark,
-            _errorText);
+            _errorText,
+            _selectedDateRange,
+            _filterVariety,
+            _filterStrategy);
         if (key == _renderKey)
         {
             return;
@@ -266,6 +233,20 @@ public sealed partial class AccountRecordsView : UserControl
 
         ErrorCard.Visibility = _errorText.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         ErrorText.Text = _errorText;
+
+        if (_mode == AccountRecordsMode.Trades)
+        {
+            FiltersPanel.Visibility = Visibility.Visible;
+            Hint.Visibility = Visibility.Collapsed;
+            List<TradeRecord> allTrades = _records.SelectMany(r => r.Trades).ToList();
+            RenderTradeFilters(allTrades);
+        }
+        else
+        {
+            FiltersPanel.Visibility = Visibility.Collapsed;
+            Hint.Visibility = Visibility.Visible;
+            Hint.Text = HintText();
+        }
 
         AccountPanel.Children.Clear();
         foreach (var record in _records)
@@ -341,7 +322,7 @@ public sealed partial class AccountRecordsView : UserControl
         }
         else
         {
-            body.Children.Add(BuildTradeTable(record.Trades, record.Label));
+            body.Children.Add(BuildTradeTable(FilterTrades(record.Trades), record.Label));
         }
         return BuildCard(body);
     }
@@ -725,8 +706,150 @@ public sealed partial class AccountRecordsView : UserControl
         return $"策略｜{StrategyAlias(trimmed)}";
     }
 
+    /// <summary>纯品种名（中文名优先生效），用于过滤器归类与胶囊文案</summary>
+    private string PureVariety(string symbol)
+    {
+        var clean = symbol.Split('.').LastOrDefault() ?? symbol;
+        var code = clean.ToUpperInvariant();
+        var letters = new string(code.TakeWhile(char.IsLetter).ToArray());
+        if (letters.Length == 0) return symbol;
+        if (_state?.ServerSymbolNames.TryGetValue(letters, out var name) == true && !string.IsNullOrEmpty(name))
+        {
+            return name;
+        }
+        return letters;
+    }
+
+    private List<string> AvailableVarieties(IReadOnlyList<TradeRecord> trades) =>
+        trades.Select(t => PureVariety(t.Symbol))
+            .Where(v => v.Length > 0)
+            .Distinct()
+            .OrderBy(v => v, StringComparer.CurrentCulture)
+            .ToList();
+
+    private List<string> AvailableStrategies(IReadOnlyList<TradeRecord> trades) =>
+        trades.Select(t => DisplaySource(t.Source))
+            .Where(s => s.Length > 0)
+            .Distinct()
+            .OrderBy(s => s, StringComparer.CurrentCulture)
+            .ToList();
+
+    private IReadOnlyList<TradeRecord> FilterTrades(IReadOnlyList<TradeRecord> trades) =>
+        trades.Where(t =>
+        {
+            var matchVariety = _filterVariety.Length == 0 || PureVariety(t.Symbol) == _filterVariety;
+            var matchStrategy = _filterStrategy.Length == 0 || DisplaySource(t.Source) == _filterStrategy;
+            return matchVariety && matchStrategy;
+        }).ToList();
+
+    /// <summary>历史成交顶部工具栏：日期、品种、策略各过滤器分组呈水平顺序排列</summary>
+    private void RenderTradeFilters(IReadOnlyList<TradeRecord> trades)
+    {
+        FiltersPanel.Children.Clear();
+
+        // 1. 日期过滤器分组
+        var dateOptions = new (string Key, string Label)[]
+        {
+            ("today", "今日"),
+            ("3d", "近3天"),
+            ("7d", "近7天"),
+            ("all", "全部"),
+        };
+        FiltersPanel.Children.Add(BuildSegmentGroup(dateOptions, _selectedDateRange, key =>
+        {
+            if (_selectedDateRange == key) return;
+            _selectedDateRange = key;
+            _filterVariety = "";
+            _filterStrategy = "";
+            _ = LoadAsync(force: true);
+        }));
+
+        // 2. 品种过滤器分组（若当前有成交记录则展示）
+        var varieties = AvailableVarieties(trades);
+        if (varieties.Count > 0)
+        {
+            var varietyOptions = new List<(string Key, string Label)> { ("", "全部品种") };
+            varietyOptions.AddRange(varieties.Select(v => (v, v)));
+            FiltersPanel.Children.Add(BuildSegmentGroup(varietyOptions, _filterVariety, key =>
+            {
+                if (_filterVariety == key) return;
+                _filterVariety = key;
+                RenderRecords();
+            }));
+        }
+
+        // 3. 策略过滤器分组（若当前有成交记录则展示）
+        var strategies = AvailableStrategies(trades);
+        if (strategies.Count > 0)
+        {
+            var strategyOptions = new List<(string Key, string Label)> { ("", "全部策略") };
+            strategyOptions.AddRange(strategies.Select(s => (s, s)));
+            FiltersPanel.Children.Add(BuildSegmentGroup(strategyOptions, _filterStrategy, key =>
+            {
+                if (_filterStrategy == key) return;
+                _filterStrategy = key;
+                RenderRecords();
+            }));
+        }
+    }
+
+    /// <summary>通用分段选择胶囊组（与日期筛选器风格一致：外层深色底边框，内层切片单选）</summary>
+    private Border BuildSegmentGroup(
+        IReadOnlyList<(string Key, string Label)> items,
+        string selectedKey,
+        Action<string> onSelect)
+    {
+        var panel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 4,
+        };
+
+        foreach (var (key, label) in items)
+        {
+            var isSelected = selectedKey == key;
+            var btn = new Button
+            {
+                Content = label,
+                FontSize = 13,
+                Padding = new Thickness(10, 4, 10, 4),
+                CornerRadius = new CornerRadius(10),
+                BorderThickness = new Thickness(0),
+                Background = isSelected ? Brush(Palette.Soft) : new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+                Foreground = isSelected ? Brush(Palette.Ink) : Brush(Palette.Dim),
+                FontWeight = isSelected ? FontWeights.SemiBold : FontWeights.Normal,
+            };
+            btn.Click += (_, _) => onSelect(key);
+            panel.Children.Add(btn);
+        }
+
+        return new Border
+        {
+            Background = Brush(Palette.Chrome),
+            BorderBrush = Brush(Palette.Hairline),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(2),
+            Child = panel,
+        };
+    }
+
+    /// <summary>成交编号展示：显示编号后 8 位，缺失时用行号兜底</summary>
+    private static string DisplayTradeNo(TradeRecord trade, int fallbackIndex)
+    {
+        var trimmed = trade.Id?.Trim() ?? "";
+        if (trimmed.Length > 0)
+        {
+            return trimmed.Length > 8 ? trimmed[^8..] : trimmed;
+        }
+        return fallbackIndex.ToString(CultureInfo.InvariantCulture);
+    }
+
     private Border BuildTradeTable(IReadOnlyList<TradeRecord> rows, string accountLabel)
     {
+        var maxNoLen = rows.Select((r, i) => DisplayTradeNo(r, i + 1).Length).DefaultIfEmpty(2).Max();
+        var noColWidth = Math.Max(42, maxNoLen * 8.0 + 16);
+
         var maxVarietyLen = rows.Select(r => DisplayVariety(r.Symbol).Length).DefaultIfEmpty(2).Max();
         var varietyWidth = Math.Max(70, maxVarietyLen * 8.5 + 16);
 
@@ -735,7 +858,7 @@ public sealed partial class AccountRecordsView : UserControl
 
         var columns = new[]
         {
-            Center("编号", 36),
+            Center("编号", noColWidth),
             Left("日期", 80),
             Left("时间", 92),
             Left("品种", varietyWidth),
@@ -768,7 +891,7 @@ public sealed partial class AccountRecordsView : UserControl
 
             return new List<TableCell>
             {
-                new((index + 1).ToString(CultureInfo.InvariantCulture), null),
+                new(DisplayTradeNo(row, index + 1), null),
                 new(dateStr, null),
                 new(clockStr, null),
                 new(variety, null),

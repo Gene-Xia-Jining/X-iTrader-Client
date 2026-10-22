@@ -21,9 +21,14 @@
                             <Button x:Name="TradesTab" Content="历史成交" Click="OnTradesTabClick"
                                     BorderThickness="0" Background="Transparent" Padding="0"
                                     CornerRadius="0" FontSize="14" />
-                            <Button x:Name="TradesHelpButton" Content="?" Click="OnTradesHelpClick"
-                                    CornerRadius="9" Width="18" Height="18" Padding="0" MinWidth="18" MinHeight="18"
-                                    VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold" />
+                            <!-- 问号用 Border + TextBlock：Button 悬停会改浅灰底，破坏胶囊整体观感 -->
+                            <Border x:Name="TradesHelpRing" Width="18" Height="18" CornerRadius="9"
+                                    BorderThickness="1" VerticalAlignment="Center" Background="Transparent"
+                                    Tapped="OnTradesHelpTapped">
+                                <TextBlock x:Name="TradesHelpIcon" Text="?" FontSize="11" FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           IsHitTestVisible="False" />
+                            </Border>
                         </StackPanel>
                     </Border>
                 </StackPanel>

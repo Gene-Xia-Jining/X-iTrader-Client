@@ -1502,59 +1502,6 @@ enum ActiveAlert: Identifiable {
     }
 }
 
-// MARK: - 流式布局（胶囊自然跟随：按内容宽度从左到右排，放不下换行）
-
-/// 简单流式布局，代替按列的网格：子视图保持自然宽度依次排列，超出可用宽度时换行。
-struct FlowLayout: Layout {
-    /// 水平与垂直间距共用一个值
-    var spacing: CGFloat = 10
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = computeRows(proposal: proposal, subviews: subviews)
-        let height = rows.isEmpty ? 0
-            : rows.reduce(0) { $0 + $1.height } + CGFloat(rows.count - 1) * spacing
-        return CGSize(width: rows.map(\.width).max() ?? 0, height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var y = bounds.minY
-        for row in computeRows(proposal: proposal, subviews: subviews) {
-            var x = bounds.minX
-            for index in row.indices {
-                let size = subviews[index].sizeThatFits(.unspecified)
-                subviews[index].place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: .unspecified)
-                x += size.width + spacing
-            }
-            y += row.height + spacing
-        }
-    }
-
-    private struct Row {
-        var indices: [Int] = []
-        var width: CGFloat = 0
-        var height: CGFloat = 0
-    }
-
-    private func computeRows(proposal: ProposedViewSize, subviews: Subviews) -> [Row] {
-        let maxWidth = proposal.width ?? .infinity
-        var rows: [Row] = []
-        var current = Row()
-        for (index, view) in subviews.enumerated() {
-            let size = view.sizeThatFits(.unspecified)
-            let gap = current.indices.isEmpty ? 0 : spacing
-            if current.width > 0, current.width + gap + size.width > maxWidth {
-                rows.append(current)
-                current = Row()
-            }
-            current.indices.append(index)
-            current.width += (current.indices.count == 1 ? 0 : spacing) + size.width
-            current.height = max(current.height, size.height)
-        }
-        if !current.indices.isEmpty { rows.append(current) }
-        return rows
-    }
-}
-
 // MARK: - 单选 radio 行
 
 struct RadioRow: View {

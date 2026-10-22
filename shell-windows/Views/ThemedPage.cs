@@ -99,17 +99,18 @@ public sealed class ThemedPage
     }
 
     /// <summary>
-    /// 带内嵌问号按钮的胶囊 tab 容器（用于「历史成交」等带说明的 tab）
+    /// 带内嵌问号的胶囊 tab（「历史成交」用）：问号用 Border + TextBlock 而不是 Button，
+    /// 避免 WinUI 默认按钮在悬停/按下时改成浅灰底，破坏选中态蓝色胶囊的整体观感。
     /// </summary>
-    public void StyleCapsuleTabContainer(Border capsule, Button tab, Button helpButton, bool isOn)
+    public void StyleCapsuleTabContainer(Border capsule, Button tab, Border helpRing, TextBlock helpIcon, bool isOn)
     {
         capsule.Background = new SolidColorBrush(isOn ? Palette.Primary : Microsoft.UI.Colors.Transparent);
         capsule.BorderBrush = new SolidColorBrush(isOn ? Palette.Primary : Palette.Hairline);
         tab.Foreground = new SolidColorBrush(isOn ? Microsoft.UI.Colors.White : Palette.Ink);
         tab.FontWeight = isOn ? FontWeights.SemiBold : FontWeights.Normal;
-        helpButton.Foreground = new SolidColorBrush(isOn ? Microsoft.UI.Colors.White : Palette.Primary);
-        helpButton.BorderBrush = new SolidColorBrush(isOn ? Windows.UI.Color.FromArgb(115, 255, 255, 255) : Palette.Hairline);
-        helpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        helpIcon.Foreground = new SolidColorBrush(isOn ? Microsoft.UI.Colors.White : Palette.Primary);
+        helpRing.BorderBrush = new SolidColorBrush(
+            isOn ? Windows.UI.Color.FromArgb(115, 255, 255, 255) : Palette.Hairline);
     }
 
     /// <summary>日志/等宽文本的配色（对应 Swift 的 logColors）。</summary>

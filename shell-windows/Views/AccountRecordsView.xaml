@@ -9,11 +9,11 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
+            <!-- 交易记录模式下显示提示文案，历史成交模式下显示水平顺序排列的过滤器分组 -->
             <TextBlock x:Name="Hint" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,16,0" />
-            <StackPanel x:Name="DateRangePanel" Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" Margin="0,0,12,0" />
-            <Button x:Name="RefreshButton" Grid.Column="2" Content="刷新" Click="OnRefreshClick" HorizontalAlignment="Right" />
+            <StackPanel x:Name="FiltersPanel" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center" Margin="0,0,16,0" Visibility="Collapsed" />
+            <Button x:Name="RefreshButton" Grid.Column="1" Content="刷新" Click="OnRefreshClick" HorizontalAlignment="Right" VerticalAlignment="Center" />
         </Grid>
 
         <Border x:Name="ErrorCard" BorderThickness="1" CornerRadius="18" Padding="20" Visibility="Collapsed">

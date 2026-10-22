@@ -140,8 +140,10 @@ public sealed partial class LiveAccountPage : Page
 
     private void OnTradesTabCapsuleTapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e) => SwitchTab(Tab.Trades);
 
-    private async void OnTradesHelpClick(object sender, RoutedEventArgs e)
+    private async void OnTradesHelpTapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
     {
+        // 问号在胶囊内部：吃掉这次点击，否则会冒泡到胶囊再切一次 tab
+        e.Handled = true;
         await _theme.ShowInfoAsync(
             "历史成交",
             "数据包含本地 SQLite 历史沉淀成交记录。\n\n"
@@ -210,7 +212,7 @@ public sealed partial class LiveAccountPage : Page
     {
         _theme.StyleCapsuleTab(StartTab, _tab == Tab.Start);
         _theme.StyleCapsuleTab(RecordsTab, _tab == Tab.Records);
-        _theme.StyleCapsuleTabContainer(TradesTabCapsule, TradesTab, TradesHelpButton, _tab == Tab.Trades);
+        _theme.StyleCapsuleTabContainer(TradesTabCapsule, TradesTab, TradesHelpRing, TradesHelpIcon, _tab == Tab.Trades);
         Card.Visibility = _tab == Tab.Start ? Visibility.Visible : Visibility.Collapsed;
         RecordsPanel.Visibility = _tab == Tab.Records ? Visibility.Visible : Visibility.Collapsed;
         TradesPanel.Visibility = _tab == Tab.Trades ? Visibility.Visible : Visibility.Collapsed;
