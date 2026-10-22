@@ -66,6 +66,10 @@ public sealed partial class AccountInfoView : UserControl
         "当前持仓在建立仓位时的实际成交均价。若同一合约多次开仓，按各笔成交手数加权平均计算，不会随每日结算价变动。";
     private const string PositionPriceHelp =
         "当前持仓用于每日结算与盯市的基准成本价。当日新开仓等于开仓均价；跨交易日的历史持仓在每日结算后调整为上一交易日的结算价。";
+    private const string CloseProfitHelp =
+        "本交易日内已平仓合约实现的累计盈亏金额（平仓价与持仓成本价之差）。当日未进行平仓操作时为 0.00。";
+    private const string CommissionHelp =
+        "本交易日内因开仓、平仓等交易产生的累计手续费支出。隔夜历史持仓产生的手续费已在以往结算中扣减并计入昨日权益；若当日无新成交则为 0.00。";
 
     public AccountInfoView(string kind, string notConfiguredHint, AccountInfoMode mode = AccountInfoMode.Info)
     {
@@ -379,21 +383,26 @@ public sealed partial class AccountInfoView : UserControl
             return [BuildTradeTable(FilterTrades(record.Trades), record.Label)];
         }
 
-        var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        head.Children.Add(new TextBlock
+        // 单账户时省略标题（页面本身已区分模拟/实盘），多账户时只留账户名用于区分归属
+        UIElement? head = null;
+        if (_records.Count > 1)
         {
-            Text = record.Label,
-            FontSize = 15,
-            FontWeight = FontWeights.SemiBold,
-            Foreground = Brush(Palette.Ink),
-            VerticalAlignment = VerticalAlignment.Center,
-        });
-        head.Children.Add(NewBadge(record.Kind == "sim" ? "模拟" : "实盘"));
+            head = new TextBlock
+            {
+                Text = record.Label,
+                FontSize = 15,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = Brush(Palette.Ink),
+            };
+        }
 
         if (record.Error.Length > 0)
         {
             var body = new StackPanel { Spacing = 14 };
-            body.Children.Add(head);
+            if (head is not null)
+            {
+                body.Children.Add(head);
+            }
             body.Children.Add(new TextBlock
             {
                 Text = $"读取失败: {record.Error}",
@@ -405,7 +414,10 @@ public sealed partial class AccountInfoView : UserControl
         }
 
         var metrics = new StackPanel { Spacing = 14 };
-        metrics.Children.Add(head);
+        if (head is not null)
+        {
+            metrics.Children.Add(head);
+        }
         metrics.Children.Add(BuildMetrics(record.Account));
 
         return
@@ -415,15 +427,6 @@ public sealed partial class AccountInfoView : UserControl
             BuildCard(BuildSection("当日委托", record.Label, BuildOrderTable(record.Orders))),
         ];
     }
-
-    private Border NewBadge(string text) => new()
-    {
-        Background = Brush(Palette.Soft),
-        CornerRadius = new CornerRadius(9),
-        Padding = new Thickness(8, 2, 8, 2),
-        VerticalAlignment = VerticalAlignment.Center,
-        Child = new TextBlock { Text = text, FontSize = 13, Foreground = Brush(Palette.Dim) },
-    };
 
     /// <summary>
     /// 资金指标：直接铺在账户卡片上（不套内层底色面板），5 列排两行以减少占用高度。
@@ -440,8 +443,8 @@ public sealed partial class AccountInfoView : UserControl
         panel.Children.Add(MetricRow(
             ("浮动盈亏", FormatSigned(account.FloatProfit), ProfitColor(account.FloatProfit), FloatProfitHelp),
             ("持仓盈亏", FormatSigned(account.PositionProfit), ProfitColor(account.PositionProfit), PositionProfitHelp),
-            ("平仓盈亏", FormatSigned(account.CloseProfit), ProfitColor(account.CloseProfit), null),
-            ("手续费", FormatMoney(account.Commission), null, null),
+            ("平仓盈亏", FormatSigned(account.CloseProfit), ProfitColor(account.CloseProfit), CloseProfitHelp),
+            ("手续费", FormatMoney(account.Commission), null, CommissionHelp),
             // 占位保持两行列宽一致：第二行只有 4 项，缺的这格不能把上面的列挤宽
             ("", "", null, null)));
         return panel;

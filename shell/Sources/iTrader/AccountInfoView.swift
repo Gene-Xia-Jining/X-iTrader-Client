@@ -241,6 +241,8 @@ struct AccountInfoView: View {
     private let riskRatioHelp = "保证金占用占账户总权益的比例（计算公式：保证金 ÷ 账户权益 × 100%）。风险度越高代表仓位与杠杆越重；当风险度达到或超过 100% 时，可用资金将为负，可能面临追加保证金或被强行平仓的风险。"
     private let openPriceHelp = "当前持仓在建立仓位时的实际成交均价。若同一合约多次开仓，按各笔成交手数加权平均计算，不会随每日结算价变动。"
     private let positionPriceHelp = "当前持仓用于每日结算与盯市的基准成本价。当日新开仓等于开仓均价；跨交易日的历史持仓在每日结算后调整为上一交易日的结算价。"
+    private let closeProfitHelp = "本交易日内已平仓合约实现的累计盈亏金额（平仓价与持仓成本价之差）。当日未进行平仓操作时为 0.00。"
+    private let commissionHelp = "本交易日内因开仓、平仓等交易产生的累计手续费支出。隔夜历史持仓产生的手续费已在以往结算中扣减并计入昨日权益；若当日无新成交则为 0.00。"
 
     init(kind: RecordKind, mode: AccountInfoMode = .info, notConfiguredHint: String) {
         self.kind = kind
@@ -514,20 +516,12 @@ struct AccountInfoView: View {
 
     // ---- 账户卡片与分区（持仓与当日委托独立成框）----
 
+    /// 账户标题：单账户时省略（页面本身已区分模拟/实盘），多账户时只留账户名用于区分归属
     private func accountHeader(_ record: AccountRecords) -> some View {
-        HStack(spacing: 8) {
-            Text(record.label)
-                .font(AppTheme.bodyFont.weight(.semibold))
-                .foregroundColor(AppTheme.ink(scheme))
-            Text(record.kind == "sim" ? "模拟" : "实盘")
-                .font(AppTheme.dimFont)
-                .foregroundColor(AppTheme.dim(scheme))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
-                .background(AppTheme.soft(scheme))
-                .cornerRadius(9)
-            Spacer()
-        }
+        Text(record.label)
+            .font(AppTheme.bodyFont.weight(.semibold))
+            .foregroundColor(AppTheme.ink(scheme))
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -538,7 +532,9 @@ struct AccountInfoView: View {
         } else if !record.error.isEmpty {
             AppCard {
                 VStack(alignment: .leading, spacing: 14) {
-                    accountHeader(record)
+                    if records.count > 1 {
+                        accountHeader(record)
+                    }
                     Text("读取失败: \(record.error)")
                         .font(AppTheme.dimFont)
                         .foregroundColor(AppTheme.danger(scheme))
@@ -550,7 +546,9 @@ struct AccountInfoView: View {
             // 账户信息：资金、持仓、当日委托各独立成框
             AppCard {
                 VStack(alignment: .leading, spacing: 14) {
-                    accountHeader(record)
+                    if records.count > 1 {
+                        accountHeader(record)
+                    }
                     metricsRow(record.account)
                 }
                 .padding(20)
@@ -603,8 +601,8 @@ struct AccountInfoView: View {
             HStack(alignment: .top, spacing: 0) {
                 metric("浮动盈亏", formatSigned(account.floatProfit), profitColor(account.floatProfit), help: floatProfitHelp)
                 metric("持仓盈亏", formatSigned(account.positionProfit), profitColor(account.positionProfit), help: positionProfitHelp)
-                metric("平仓盈亏", formatSigned(account.closeProfit), profitColor(account.closeProfit))
-                metric("手续费", formatMoney(account.commission), nil)
+                metric("平仓盈亏", formatSigned(account.closeProfit), profitColor(account.closeProfit), help: closeProfitHelp)
+                metric("手续费", formatMoney(account.commission), nil, help: commissionHelp)
                 // 占位保持两行列宽一致：第二行只有 4 项，缺的这格不能把上面的列挤宽
                 Color.clear.frame(maxWidth: .infinity)
             }
