@@ -156,6 +156,51 @@ struct AppHelpButton: View {
     }
 }
 
+/// 指标与表头右侧的小问号帮助按钮（14x14 圆形，悬停高亮，点击弹出说明 popover）
+struct MetricHelpButton: View {
+    let title: String
+    let message: String
+    @State private var isPresented = false
+    @State private var isHovering = false
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Button {
+            isPresented = true
+        } label: {
+            Text("?")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(isHovering ? AppTheme.primaryHover(scheme) : AppTheme.dim(scheme))
+                .frame(width: 14, height: 14)
+                .background(isHovering ? AppTheme.primary(scheme).opacity(scheme == .dark ? 0.25 : 0.12) : Color.clear)
+                .clipShape(Circle())
+                .overlay(
+                    Circle()
+                        .stroke(isHovering ? AppTheme.primary(scheme) : AppTheme.dim(scheme).opacity(0.4), lineWidth: 1)
+                )
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .onHover { isHovering = $0 }
+        .help("点击查看「\(title)」说明")
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(AppTheme.bodyFont.weight(.semibold))
+                    .foregroundColor(AppTheme.ink(scheme))
+                Text(message)
+                    .font(AppTheme.dimFont)
+                    .foregroundColor(AppTheme.dim(scheme))
+                    .lineSpacing(4)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(width: 280, alignment: .leading)
+            .padding(12)
+        }
+    }
+}
+
 /// 页内分段 tab（等高胶囊，选中态实心，与侧栏选中态同风格）。
 /// 模拟交易页与实盘交易页的「快速开始 / 账户信息 / 历史成交」切换共用这一套外观。
 struct CapsuleTabBar<Tab: Hashable, Trailing: View>: View {

@@ -56,6 +56,17 @@ public sealed partial class AccountInfoView : UserControl
     private string StrategyKey => $"trades.filterStrategy.{_kind}";
     private string NewestFirstKey => $"trades.newestFirst.{_kind}";
 
+    private const string FloatProfitHelp =
+        "按当前市场最新价与开仓均价计算的未实现盈亏。反映当前所有未平仓持仓以最新市价全部平仓时预估的累计盈亏金额。";
+    private const string PositionProfitHelp =
+        "按当前最新价与持仓成本（历史持仓按上一交易日结算价、当日开仓按开仓均价）计算的盯市盈亏。用于反映当日持仓所产生的盈亏变动及每日结算。";
+    private const string RiskRatioHelp =
+        "保证金占用占账户总权益的比例（计算公式：保证金 ÷ 账户权益 × 100%）。风险度越高代表仓位与杠杆越重；当风险度达到或超过 100% 时，可用资金将为负，可能面临追加保证金或被强行平仓的风险。";
+    private const string OpenPriceHelp =
+        "当前持仓在建立仓位时的实际成交均价。若同一合约多次开仓，按各笔成交手数加权平均计算，不会随每日结算价变动。";
+    private const string PositionPriceHelp =
+        "当前持仓用于每日结算与盯市的基准成本价。当日新开仓等于开仓均价；跨交易日的历史持仓在每日结算后调整为上一交易日的结算价。";
+
     public AccountInfoView(string kind, string notConfiguredHint, AccountInfoMode mode = AccountInfoMode.Info)
     {
         InitializeComponent();
@@ -418,17 +429,17 @@ public sealed partial class AccountInfoView : UserControl
     {
         var panel = new StackPanel { Spacing = 10 };
         panel.Children.Add(MetricRow(
-            ("账户权益", FormatMoney(account.Balance), null),
-            ("可用资金", FormatMoney(account.Available), null),
-            ("保证金", FormatMoney(account.Margin), null)));
+            ("账户权益", FormatMoney(account.Balance), null, null),
+            ("可用资金", FormatMoney(account.Available), null, null),
+            ("保证金", FormatMoney(account.Margin), null, null)));
         panel.Children.Add(MetricRow(
-            ("浮动盈亏", FormatSigned(account.FloatProfit), ProfitColor(account.FloatProfit)),
-            ("持仓盈亏", FormatSigned(account.PositionProfit), ProfitColor(account.PositionProfit)),
-            ("平仓盈亏", FormatSigned(account.CloseProfit), ProfitColor(account.CloseProfit))));
+            ("浮动盈亏", FormatSigned(account.FloatProfit), ProfitColor(account.FloatProfit), FloatProfitHelp),
+            ("持仓盈亏", FormatSigned(account.PositionProfit), ProfitColor(account.PositionProfit), PositionProfitHelp),
+            ("平仓盈亏", FormatSigned(account.CloseProfit), ProfitColor(account.CloseProfit), null)));
         panel.Children.Add(MetricRow(
-            ("手续费", FormatMoney(account.Commission), null),
-            ("风险度", FormatPercent(account.RiskRatio), null),
-            ("昨日权益", FormatMoney(account.PreBalance), null)));
+            ("手续费", FormatMoney(account.Commission), null, null),
+            ("风险度", FormatPercent(account.RiskRatio), null, RiskRatioHelp),
+            ("昨日权益", FormatMoney(account.PreBalance), null, null)));
         return new Border
         {
             Background = Brush(Palette.Soft),
@@ -438,15 +449,23 @@ public sealed partial class AccountInfoView : UserControl
         };
     }
 
-    private Grid MetricRow(params (string Title, string Value, Windows.UI.Color? Color)[] items)
+    private Grid MetricRow(params (string Title, string Value, Windows.UI.Color? Color, string? Help)[] items)
     {
         var grid = new Grid { ColumnSpacing = 0 };
         for (var i = 0; i < items.Length; i++)
         {
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            var (title, value, color) = items[i];
+            var (title, value, color, help) = items[i];
             var cell = new StackPanel { Spacing = 3 };
-            cell.Children.Add(new TextBlock { Text = title, FontSize = 13, Foreground = Brush(Palette.Dim) });
+
+            var headPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3 };
+            headPanel.Children.Add(new TextBlock { Text = title, FontSize = 13, Foreground = Brush(Palette.Dim), VerticalAlignment = VerticalAlignment.Center });
+            if (!string.IsNullOrEmpty(help))
+            {
+                headPanel.Children.Add(CreateHelpButton(title, help));
+            }
+            cell.Children.Add(headPanel);
+
             cell.Children.Add(new TextBlock
             {
                 Text = value,
@@ -458,6 +477,74 @@ public sealed partial class AccountInfoView : UserControl
             grid.Children.Add(cell);
         }
         return grid;
+    }
+
+    private async Task ShowInfoAsync(string title, string message)
+    {
+        if (XamlRoot is null) return;
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = title,
+            Content = new TextBlock
+            {
+                Text = message,
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true,
+                LineHeight = 24,
+                LineStackingStrategy = LineStackingStrategy.MaxHeight,
+            },
+            CloseButtonText = "好",
+        };
+        await dialog.ShowAsync();
+    }
+
+    private Button CreateHelpButton(string title, string helpText)
+    {
+        var ring = new Border
+        {
+            Width = 14,
+            Height = 14,
+            CornerRadius = new CornerRadius(7),
+            BorderThickness = new Thickness(1),
+            BorderBrush = Brush(Palette.Hairline),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = new TextBlock
+            {
+                Text = "?",
+                FontSize = 10,
+                FontWeight = FontWeights.Bold,
+                Foreground = Brush(Palette.Dim),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, -1, 0, 0),
+            },
+        };
+
+        var button = new Button
+        {
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(0),
+            Margin = new Thickness(3, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Content = ring,
+        };
+        ToolTipService.SetToolTip(button, $"点击查看「{title}」说明");
+        button.PointerEntered += (s, e) =>
+        {
+            ring.BorderBrush = Brush(Palette.Primary);
+            ring.Background = Brush(Palette.SidebarHover);
+            if (ring.Child is TextBlock tb) tb.Foreground = Brush(Palette.Primary);
+        };
+        button.PointerExited += (s, e) =>
+        {
+            ring.BorderBrush = Brush(Palette.Hairline);
+            ring.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            if (ring.Child is TextBlock tb) tb.Foreground = Brush(Palette.Dim);
+        };
+        button.Click += async (_, _) => await ShowInfoAsync(title, helpText);
+        return button;
     }
 
     /// <summary>独立卡片内的分区标题（持仓 / 当日委托）；多账户时补账户名，避免分不清归属。</summary>
@@ -491,13 +578,16 @@ public sealed partial class AccountInfoView : UserControl
 
     // -------- 表格 --------
 
-    private sealed record ColumnSpec(string Header, double? Width, HorizontalAlignment Align);
+    private sealed record ColumnSpec(string Header, double? Width, HorizontalAlignment Align, string? Help = null);
 
-    private static ColumnSpec Left(string header, double? width = null) =>
-        new(header, width, HorizontalAlignment.Left);
+    private static ColumnSpec Left(string header, double? width = null, string? help = null) =>
+        new(header, width, HorizontalAlignment.Left, help);
 
-    private static ColumnSpec Right(string header, double? width = null) =>
-        new(header, width, HorizontalAlignment.Right);
+    private static ColumnSpec Center(string header, double? width = null, string? help = null) =>
+        new(header, width, HorizontalAlignment.Center, help);
+
+    private static ColumnSpec Right(string header, double? width = null, string? help = null) =>
+        new(header, width, HorizontalAlignment.Right, help);
 
     /// <summary>
     /// 等宽列 + 表头 + 数据行的简易表格。列宽由 ColumnSpec 给出，null 表示按权重均分，
@@ -616,7 +706,26 @@ public sealed partial class AccountInfoView : UserControl
             var cell = cells.Count > i ? cells[i] : new TableCell("", null);
 
             UIElement element;
-            if (cell.IsCapsule)
+            if (header && !string.IsNullOrEmpty(spec.Help))
+            {
+                var headerPanel = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 3,
+                    HorizontalAlignment = spec.Align,
+                };
+                headerPanel.Children.Add(new TextBlock
+                {
+                    Text = cell.Text,
+                    FontSize = 13,
+                    FontWeight = FontWeights.SemiBold,
+                    Foreground = Brush(cell.Color ?? Palette.Dim),
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+                headerPanel.Children.Add(CreateHelpButton(cell.Text, spec.Help));
+                element = headerPanel;
+            }
+            else if (cell.IsCapsule)
             {
                 element = new Border
                 {
@@ -687,13 +796,20 @@ public sealed partial class AccountInfoView : UserControl
 
     private Border BuildPositionTable(IReadOnlyList<PositionRecord> rows)
     {
+        var maxVarietyLen = rows.Select(r => DisplayVariety(r.Symbol).Length).DefaultIfEmpty(2).Max();
+        var varietyWidth = Math.Max(80, maxVarietyLen * 8.5 + 16);
+
         var columns = new[]
         {
-            Left("合约"), Left("方向", 40), Right("手数", 44), Right("开仓均价"),
-            Right("持仓均价"), Right("浮动盈亏"), Right("保证金"),
+            Left("品种", varietyWidth), Left("合约"), Center("方向", 40), Right("手数", 44),
+            Right("开仓均价", help: OpenPriceHelp),
+            Right("持仓均价", help: PositionPriceHelp),
+            Right("浮动盈亏", help: FloatProfitHelp),
+            Right("保证金"),
         };
         var cells = rows.Select(row => new List<TableCell>
         {
+            new(DisplayVariety(row.Symbol), null),
             new(row.Symbol, null),
             new(row.Direction, row.Direction == "多" ? Palette.Danger : Palette.Success),
             new(row.Volume.ToString(CultureInfo.InvariantCulture), null),

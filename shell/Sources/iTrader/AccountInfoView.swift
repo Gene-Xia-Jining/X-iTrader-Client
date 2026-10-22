@@ -236,6 +236,12 @@ struct AccountInfoView: View {
     private var strategyKey: String { "trades.filterStrategy.\(kind.rawValue)" }
     private var newestFirstKey: String { "trades.newestFirst.\(kind.rawValue)" }
 
+    private let floatProfitHelp = "按当前市场最新价与开仓均价计算的未实现盈亏。反映当前所有未平仓持仓以最新市价全部平仓时预估的累计盈亏金额。"
+    private let positionProfitHelp = "按当前最新价与持仓成本（历史持仓按上一交易日结算价、当日开仓按开仓均价）计算的盯市盈亏。用于反映当日持仓所产生的盈亏变动及每日结算。"
+    private let riskRatioHelp = "保证金占用占账户总权益的比例（计算公式：保证金 ÷ 账户权益 × 100%）。风险度越高代表仓位与杠杆越重；当风险度达到或超过 100% 时，可用资金将为负，可能面临追加保证金或被强行平仓的风险。"
+    private let openPriceHelp = "当前持仓在建立仓位时的实际成交均价。若同一合约多次开仓，按各笔成交手数加权平均计算，不会随每日结算价变动。"
+    private let positionPriceHelp = "当前持仓用于每日结算与盯市的基准成本价。当日新开仓等于开仓均价；跨交易日的历史持仓在每日结算后调整为上一交易日的结算价。"
+
     init(kind: RecordKind, mode: AccountInfoMode = .info, notConfiguredHint: String) {
         self.kind = kind
         self.mode = mode
@@ -592,13 +598,13 @@ struct AccountInfoView: View {
                 metric("保证金", formatMoney(account.margin), nil)
             }
             HStack(spacing: 0) {
-                metric("浮动盈亏", formatSigned(account.floatProfit), profitColor(account.floatProfit))
-                metric("持仓盈亏", formatSigned(account.positionProfit), profitColor(account.positionProfit))
+                metric("浮动盈亏", formatSigned(account.floatProfit), profitColor(account.floatProfit), help: floatProfitHelp)
+                metric("持仓盈亏", formatSigned(account.positionProfit), profitColor(account.positionProfit), help: positionProfitHelp)
                 metric("平仓盈亏", formatSigned(account.closeProfit), profitColor(account.closeProfit))
             }
             HStack(spacing: 0) {
                 metric("手续费", formatMoney(account.commission), nil)
-                metric("风险度", formatPercent(account.riskRatio), nil)
+                metric("风险度", formatPercent(account.riskRatio), nil, help: riskRatioHelp)
                 metric("昨日权益", formatMoney(account.preBalance), nil)
             }
         }
@@ -607,11 +613,16 @@ struct AccountInfoView: View {
         .cornerRadius(11)
     }
 
-    private func metric(_ title: String, _ value: String, _ color: Color?) -> some View {
+    private func metric(_ title: String, _ value: String, _ color: Color?, help: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(AppTheme.dimFont)
-                .foregroundColor(AppTheme.dim(scheme))
+            HStack(spacing: 4) {
+                Text(title)
+                    .font(AppTheme.dimFont)
+                    .foregroundColor(AppTheme.dim(scheme))
+                if let help {
+                    MetricHelpButton(title: title, message: help)
+                }
+            }
             Text(value)
                 .font(AppTheme.bodyFont.weight(.medium))
                 .foregroundColor(color ?? AppTheme.ink(scheme))
@@ -622,9 +633,20 @@ struct AccountInfoView: View {
     // ---- 表格区 ----
 
     private func positionTable(_ rows: [PositionRecord]) -> some View {
-        recordTable(
-            headers: ["合约", "方向", "手数", "开仓均价", "持仓均价", "浮动盈亏", "保证金"],
-            widths: [nil, 40, 44, nil, nil, nil, nil],
+        let maxVarietyCount = rows.map { displayVariety($0.symbol).count }.max() ?? 2
+        let varietyWidth: CGFloat = max(80, CGFloat(maxVarietyCount) * 8.5 + 16)
+        let widths: [CGFloat?] = [varietyWidth, nil, 40, 44, nil, nil, nil, nil]
+        let alignments: [Alignment] = [.leading, .leading, .center, .trailing, .trailing, .trailing, .trailing, .trailing]
+
+        return recordTable(
+            headers: ["品种", "合约", "方向", "手数", "开仓均价", "持仓均价", "浮动盈亏", "保证金"],
+            headerHelps: [
+                "开仓均价": openPriceHelp,
+                "持仓均价": positionPriceHelp,
+                "浮动盈亏": floatProfitHelp,
+            ],
+            widths: widths,
+            alignments: alignments,
             maxHeight: 280,
             empty: "当前无持仓",
             isEmpty: rows.isEmpty
@@ -632,6 +654,7 @@ struct AccountInfoView: View {
             ForEach(rows) { row in
                 tableRow(
                     cells: [
+                        .text(displayVariety(row.symbol)),
                         .text(row.symbol),
                         .colored(row.direction, row.direction == "多" ? AppTheme.statusRed : AppTheme.statusGreen),
                         .text("\(row.volume)"),
@@ -640,7 +663,8 @@ struct AccountInfoView: View {
                         .colored(formatSigned(row.floatProfit), profitColor(row.floatProfit) ?? AppTheme.ink(scheme)),
                         .text(formatMoney(row.margin)),
                     ],
-                    widths: [nil, 40, 44, nil, nil, nil, nil]
+                    widths: widths,
+                    alignments: alignments
                 )
             }
         }
@@ -1003,10 +1027,12 @@ struct AccountInfoView: View {
         case badge(String, Color, Color)
         case capsule(String)
         case withTip(String, Color, String)
+        case headerWithHelp(String, String)
     }
 
     private func recordTable<Rows: View>(
         headers: [String],
+        headerHelps: [String: String] = [:],
         widths: [CGFloat?],
         alignments: [Alignment]? = nil,
         trailingSpacer: Bool = false,
@@ -1017,6 +1043,7 @@ struct AccountInfoView: View {
     ) -> some View {
         recordTable(
             headers: headers,
+            headerHelps: headerHelps,
             widths: widths,
             alignments: alignments,
             trailingSpacer: trailingSpacer,
@@ -1030,6 +1057,7 @@ struct AccountInfoView: View {
 
     private func recordTable<Rows: View, Footer: View>(
         headers: [String],
+        headerHelps: [String: String] = [:],
         widths: [CGFloat?],
         alignments: [Alignment]? = nil,
         trailingSpacer: Bool = false,
@@ -1041,7 +1069,12 @@ struct AccountInfoView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             tableRow(
-                cells: headers.map { .colored($0, AppTheme.dim(scheme)) },
+                cells: headers.map { header in
+                    if let help = headerHelps[header] {
+                        return .headerWithHelp(header, help)
+                    }
+                    return .colored(header, AppTheme.dim(scheme))
+                },
                 widths: widths,
                 alignments: alignments,
                 font: AppTheme.dimFont.weight(.semibold),
@@ -1150,6 +1183,12 @@ struct AccountInfoView: View {
                     }
                 }
                 .help(tip.isEmpty ? text : tip)
+            case .headerWithHelp(let title, let help):
+                HStack(spacing: 3) {
+                    Text(title)
+                        .foregroundColor(AppTheme.dim(scheme))
+                    MetricHelpButton(title: title, message: help)
+                }
             }
         }
         .font(font)
