@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
+using XTrader.Shell.Core;
 using XTrader.Shell.State;
 using XTrader.Shell.Theme;
 
@@ -706,7 +707,7 @@ public sealed partial class AccountInfoView : UserControl
             });
             var cell = cells.Count > i ? cells[i] : new TableCell("", null);
 
-            UIElement element;
+            FrameworkElement element;
             if (header && !string.IsNullOrEmpty(spec.Help))
             {
                 var headerPanel = new StackPanel
