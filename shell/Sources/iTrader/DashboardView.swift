@@ -193,6 +193,8 @@ struct DashboardView: View {
                 balanceBlock(summary)
                 HairlineDivider()
                 metricsRow(summary)
+                HairlineDivider()
+                positionsSection(summary)
                 statusRow(card, summary)
             }
             .padding(20)
@@ -272,6 +274,191 @@ struct DashboardView: View {
                 .minimumScaleFactor(0.6)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - 持仓表格
+
+    private let floatProfitHelp = "按当前市场最新价与开仓均价计算的未实现盈亏。反映当前所有未平仓持仓以最新市价全部平仓时预估的累计盈亏金额。"
+    private let positionPriceHelp = "当前持仓用于每日结算与盯市的基准成本价。当日新开仓等于开仓均价；跨交易日的历史持仓在每日结算后调整为上一交易日的结算价。"
+    private let openPriceHelp = "当前持仓在建立仓位时的实际成交均价。若同一合约多次开仓，按各笔成交手数加权平均计算，不会随每日结算价变动。"
+
+    private func positionsSection(_ summary: DashboardSummary) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text("当前持仓")
+                    .font(AppTheme.dimFont.weight(.medium))
+                    .foregroundColor(AppTheme.dim(scheme))
+                if !summary.positions.isEmpty {
+                    Text("\(summary.positions.count)")
+                        .font(AppTheme.dimFont)
+                        .foregroundColor(AppTheme.dim(scheme))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(AppTheme.soft(scheme))
+                        .cornerRadius(6)
+                }
+                Spacer(minLength: 0)
+            }
+            positionTable(summary.positions)
+        }
+    }
+
+    private func positionTable(_ rows: [PositionRecord]) -> some View {
+        let maxVarietyCount = rows.map { displayVariety($0.symbol).count }.max() ?? 2
+        let varietyWidth: CGFloat = max(80, CGFloat(maxVarietyCount) * 8.5 + 16)
+        let widths: [CGFloat?] = [varietyWidth, nil, 40, 44, nil, nil, nil, nil]
+        let alignments: [Alignment] = [.leading, .leading, .center, .trailing, .trailing, .trailing, .trailing, .trailing]
+
+        return recordTable(
+            headers: ["品种", "合约", "方向", "手数", "开仓均价", "持仓均价", "浮动盈亏", "保证金"],
+            headerHelps: [
+                "开仓均价": openPriceHelp,
+                "持仓均价": positionPriceHelp,
+                "浮动盈亏": floatProfitHelp,
+            ],
+            widths: widths,
+            alignments: alignments,
+            maxHeight: 220,
+            empty: "当前无持仓",
+            isEmpty: rows.isEmpty
+        ) {
+            ForEach(rows) { row in
+                tableRow(
+                    cells: [
+                        .text(displayVariety(row.symbol)),
+                        .text(row.symbol),
+                        .colored(row.direction, row.direction == "多" ? AppTheme.statusRed : AppTheme.statusGreen),
+                        .text("\(row.volume)"),
+                        .text(formatPrice(row.openPrice)),
+                        .text(formatPrice(row.positionPrice)),
+                        .colored(signed(row.floatProfit), profitColor(row.floatProfit)),
+                        .text(money(row.margin)),
+                    ],
+                    widths: widths,
+                    alignments: alignments
+                )
+            }
+        }
+    }
+
+    private enum TableCell {
+        case text(String)
+        case colored(String, Color)
+        case headerWithHelp(String, String)
+    }
+
+    private func recordTable<Rows: View>(
+        headers: [String],
+        headerHelps: [String: String] = [:],
+        widths: [CGFloat?],
+        alignments: [Alignment]? = nil,
+        maxHeight: CGFloat? = 220,
+        empty: String,
+        isEmpty: Bool,
+        @ViewBuilder rows: () -> Rows
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            tableRow(
+                cells: headers.map { header in
+                    if let help = headerHelps[header] {
+                        return .headerWithHelp(header, help)
+                    }
+                    return .colored(header, AppTheme.dim(scheme))
+                },
+                widths: widths,
+                alignments: alignments,
+                font: AppTheme.dimFont.weight(.semibold)
+            )
+            .padding(.vertical, 7)
+
+            if isEmpty {
+                Text(empty)
+                    .font(AppTheme.dimFont)
+                    .foregroundColor(AppTheme.dim(scheme))
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 14)
+            } else {
+                HairlineDivider()
+                if let maxHeight {
+                    ScrollView(.vertical, showsIndicators: true) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            rows()
+                        }
+                    }
+                    .frame(maxHeight: maxHeight)
+                } else {
+                    rows()
+                }
+            }
+        }
+        .background(AppTheme.chrome(scheme))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(AppTheme.hairline(scheme), lineWidth: 1)
+        )
+    }
+
+    private func tableRow(
+        cells: [TableCell],
+        widths: [CGFloat?],
+        alignments: [Alignment]? = nil,
+        font: Font = AppTheme.dimFont
+    ) -> some View {
+        HStack(spacing: 8) {
+            ForEach(Array(cells.enumerated()), id: \.offset) { index, cell in
+                let align: Alignment = {
+                    if let alignments, index < alignments.count {
+                        return alignments[index]
+                    }
+                    return index == 0 ? .leading : .trailing
+                }()
+                let colWidth = index < widths.count ? widths[index] : nil
+                cellView(cell, font: font)
+                    .frame(width: colWidth, alignment: align)
+                    .frame(maxWidth: colWidth == nil ? .infinity : nil, alignment: align)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    private func cellView(_ cell: TableCell, font: Font) -> some View {
+        Group {
+            switch cell {
+            case .text(let text):
+                Text(text).foregroundColor(AppTheme.ink(scheme))
+            case .colored(let text, let color):
+                Text(text).foregroundColor(color)
+            case .headerWithHelp(let title, let help):
+                HStack(spacing: 3) {
+                    Text(title)
+                        .foregroundColor(AppTheme.dim(scheme))
+                    MetricHelpButton(title: title, message: help)
+                }
+            }
+        }
+        .font(font)
+        .lineLimit(1)
+        .truncationMode(.middle)
+    }
+
+    private func formatPrice(_ value: Double?) -> String {
+        guard let value else { return "—" }
+        return value.truncatingRemainder(dividingBy: 1) == 0
+            ? String(format: "%.0f", value)
+            : String(format: "%.2f", value)
+    }
+
+    private func displayVariety(_ symbol: String) -> String {
+        let clean = symbol.components(separatedBy: ".").last ?? symbol
+        let code = clean.uppercased()
+        let letters = String(code.prefix { $0.isLetter })
+        guard !letters.isEmpty else { return clean }
+        if let name = appState.serverSymbolNames[letters], !name.isEmpty {
+            return "\(letters)｜\(name)"
+        }
+        return letters
     }
 
     private func statusRow(_ card: DashboardCard, _ summary: DashboardSummary) -> some View {
@@ -419,6 +606,11 @@ struct DashboardSummary {
 
     private var okRecords: [AccountRecords] {
         records.filter { $0.error.isEmpty }
+    }
+
+    /// 全部成功账户的持仓列表
+    var positions: [PositionRecord] {
+        okRecords.flatMap(\.positions)
     }
 
     /// 合计；所有账户该字段都未就绪（或没有账户）时返回 nil，显示为「—」

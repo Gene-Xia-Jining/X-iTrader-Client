@@ -321,6 +321,12 @@ public sealed partial class DashboardPage : Page
             Fill = Brush(Palette.Divider),
         });
         body.Children.Add(BuildMetrics(summary));
+        body.Children.Add(new Microsoft.UI.Xaml.Shapes.Rectangle
+        {
+            Height = 1,
+            Fill = Brush(Palette.Divider),
+        });
+        body.Children.Add(BuildPositionsSection(summary));
         body.Children.Add(BuildStatus(kind, summary));
         return body;
     }
@@ -460,6 +466,298 @@ public sealed partial class DashboardPage : Page
             TextWrapping = TextWrapping.Wrap,
             Foreground = Brush(failed.Count > 0 ? Palette.Danger : Palette.Dim),
         };
+    }
+
+    // -------- 持仓表格 --------
+
+    private const string FloatProfitHelp = "按当前市场最新价与开仓均价计算的未实现盈亏。反映当前所有未平仓持仓以最新市价全部平仓时预估的累计盈亏金额。";
+    private const string PositionPriceHelp = "当前持仓用于每日结算与盯市的基准成本价。当日新开仓等于开仓均价；跨交易日的历史持仓在每日结算后调整为上一交易日的结算价。";
+    private const string OpenPriceHelp = "当前持仓在建立仓位时的实际成交均价。若同一合约多次开仓，按各笔成交手数加权平均计算，不会随每日结算价变动。";
+
+    private UIElement BuildPositionsSection(DashboardSummary summary)
+    {
+        var section = new StackPanel { Spacing = 8 };
+        var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        head.Children.Add(new TextBlock
+        {
+            Text = "当前持仓",
+            FontSize = 13,
+            FontWeight = FontWeights.Medium,
+            Foreground = Brush(Palette.Dim),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+
+        var positions = summary.Records.Where(r => string.IsNullOrEmpty(r.Error)).SelectMany(r => r.Positions).ToList();
+        if (positions.Count > 0)
+        {
+            head.Children.Add(new Border
+            {
+                Background = Brush(Palette.Soft),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(6, 1, 6, 1),
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = new TextBlock
+                {
+                    Text = positions.Count.ToString(CultureInfo.InvariantCulture),
+                    FontSize = 12,
+                    Foreground = Brush(Palette.Dim),
+                },
+            });
+        }
+        section.Children.Add(head);
+        section.Children.Add(BuildPositionTable(positions));
+        return section;
+    }
+
+    private Border BuildPositionTable(IReadOnlyList<PositionRecord> rows)
+    {
+        var maxVarietyLen = rows.Select(r => DisplayVariety(r.Symbol).Length).DefaultIfEmpty(2).Max();
+        var varietyWidth = Math.Max(80, maxVarietyLen * 8.5 + 16);
+
+        var columns = new[]
+        {
+            Left("品种", varietyWidth), Left("合约"), Center("方向", 40), Right("手数", 44),
+            Right("开仓均价", help: OpenPriceHelp),
+            Right("持仓均价", help: PositionPriceHelp),
+            Right("浮动盈亏", help: FloatProfitHelp),
+            Right("保证金"),
+        };
+        var cells = rows.Select(row => new List<TableCell>
+        {
+            new(DisplayVariety(row.Symbol), null),
+            new(row.Symbol, null),
+            new(row.Direction, row.Direction == "多" ? Palette.Danger : Palette.Success),
+            new(row.Volume.ToString(CultureInfo.InvariantCulture), null),
+            new(FormatPrice(row.OpenPrice), null),
+            new(FormatPrice(row.PositionPrice), null),
+            new(FormatSigned(row.FloatProfit), ProfitColor(row.FloatProfit)),
+            new(FormatMoney(row.Margin), null),
+        }).ToList();
+        return BuildTable(columns, cells, "当前无持仓", maxHeight: 220);
+    }
+
+    private sealed record ColumnSpec(string Header, double? Width, HorizontalAlignment Align, string? Help = null);
+    private sealed record TableCell(string Text, Windows.UI.Color? Color = null);
+
+    private static ColumnSpec Left(string header, double? width = null, string? help = null) =>
+        new(header, width, HorizontalAlignment.Left, help);
+
+    private static ColumnSpec Center(string header, double? width = null, string? help = null) =>
+        new(header, width, HorizontalAlignment.Center, help);
+
+    private static ColumnSpec Right(string header, double? width = null, string? help = null) =>
+        new(header, width, HorizontalAlignment.Right, help);
+
+    private Border BuildTable(
+        IReadOnlyList<ColumnSpec> columns,
+        IReadOnlyList<IReadOnlyList<TableCell>> rows,
+        string empty,
+        double maxHeight = 220)
+    {
+        var body = new StackPanel();
+        body.Children.Add(BuildTableRow(columns.Select(c => new TableCell(c.Header, null)).ToList(), columns, header: true));
+
+        if (rows.Count == 0)
+        {
+            body.Children.Add(new TextBlock
+            {
+                Text = empty,
+                FontSize = 13,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Foreground = Brush(Palette.Dim),
+                Margin = new Thickness(0, 14, 0, 14),
+            });
+        }
+        else
+        {
+            body.Children.Add(new Microsoft.UI.Xaml.Shapes.Rectangle
+            {
+                Height = 1,
+                Fill = Brush(Palette.Divider),
+                Margin = new Thickness(12, 0, 12, 0)
+            });
+
+            var rowsPanel = new StackPanel();
+            for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
+            {
+                if (rowIndex > 0)
+                {
+                    rowsPanel.Children.Add(new Microsoft.UI.Xaml.Shapes.Rectangle
+                    {
+                        Height = 1,
+                        Fill = Brush(Palette.Divider),
+                        Margin = new Thickness(12, 0, 12, 0)
+                    });
+                }
+                var row = rows[rowIndex];
+                rowsPanel.Children.Add(BuildTableRow(row, columns, header: false));
+            }
+
+            var scrollViewer = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                MaxHeight = maxHeight,
+                Content = rowsPanel,
+            };
+            body.Children.Add(scrollViewer);
+        }
+
+        return new Border
+        {
+            Background = Brush(Palette.Chrome),
+            BorderThickness = new Thickness(1),
+            BorderBrush = Brush(Palette.Hairline),
+            CornerRadius = new CornerRadius(12),
+            Child = body,
+        };
+    }
+
+    private Grid BuildTableRow(IReadOnlyList<TableCell> cells, IReadOnlyList<ColumnSpec> columns, bool header)
+    {
+        var grid = new Grid
+        {
+            ColumnSpacing = 8,
+            Padding = new Thickness(12, header ? 7 : 6, 12, header ? 7 : 6),
+        };
+        for (var i = 0; i < columns.Count; i++)
+        {
+            var col = columns[i];
+            grid.ColumnDefinitions.Add(col.Width is { } w
+                ? new ColumnDefinition { Width = new GridLength(w) }
+                : new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        }
+
+        for (var i = 0; i < cells.Count && i < columns.Count; i++)
+        {
+            var cell = cells[i];
+            var spec = columns[i];
+
+            if (header && !string.IsNullOrEmpty(spec.Help))
+            {
+                var headerPanel = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    HorizontalAlignment = spec.Align,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                headerPanel.Children.Add(new TextBlock
+                {
+                    Text = cell.Text,
+                    FontSize = 13,
+                    FontWeight = FontWeights.SemiBold,
+                    Foreground = Brush(Palette.Dim),
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+                headerPanel.Children.Add(CreateHelpButton(cell.Text, spec.Help));
+                Grid.SetColumn(headerPanel, i);
+                grid.Children.Add(headerPanel);
+                continue;
+            }
+
+            var tb = new TextBlock
+            {
+                Text = cell.Text,
+                FontSize = 13,
+                FontWeight = header ? FontWeights.SemiBold : FontWeights.Normal,
+                Foreground = header
+                    ? Brush(Palette.Dim)
+                    : cell.Color is { } c ? Brush(c) : Brush(Palette.Ink),
+                HorizontalAlignment = spec.Align,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            };
+            Grid.SetColumn(tb, i);
+            grid.Children.Add(tb);
+        }
+        return grid;
+    }
+
+    private Button CreateHelpButton(string title, string helpText)
+    {
+        var ring = new Border
+        {
+            Width = 14,
+            Height = 14,
+            CornerRadius = new CornerRadius(7),
+            BorderThickness = new Thickness(1),
+            BorderBrush = Brush(Palette.Hairline),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = new TextBlock
+            {
+                Text = "?",
+                FontSize = 10,
+                FontWeight = FontWeights.Bold,
+                Foreground = Brush(Palette.Dim),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, -1, 0, 0),
+            },
+        };
+
+        var button = new Button
+        {
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(0),
+            Margin = new Thickness(3, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Content = ring,
+        };
+        ToolTipService.SetToolTip(button, $"点击查看「{title}」说明");
+        button.PointerEntered += (s, e) =>
+        {
+            ring.BorderBrush = Brush(Palette.Primary);
+            ring.Background = Brush(Palette.SidebarHover);
+            if (ring.Child is TextBlock tb) tb.Foreground = Brush(Palette.Primary);
+        };
+        button.PointerExited += (s, e) =>
+        {
+            ring.BorderBrush = Brush(Palette.Hairline);
+            ring.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            if (ring.Child is TextBlock tb) tb.Foreground = Brush(Palette.Dim);
+        };
+        button.Click += async (_, _) => await ShowHelpInfoAsync(title, helpText);
+        return button;
+    }
+
+    private async Task ShowHelpInfoAsync(string title, string message)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = title,
+            Content = new TextBlock
+            {
+                Text = message,
+                FontSize = 14,
+                TextWrapping = TextWrapping.Wrap,
+                LineHeight = 22,
+            },
+            CloseButtonText = "我知道了",
+            XamlRoot = XamlRoot,
+        };
+        await dialog.ShowAsync();
+    }
+
+    private string DisplayVariety(string symbol)
+    {
+        var clean = symbol.Split('.').LastOrDefault() ?? symbol;
+        var code = clean.ToUpperInvariant();
+        var letters = new string(code.TakeWhile(char.IsLetter).ToArray());
+        if (letters.Length == 0) return clean;
+        if (State is not null && State.ServerSymbolNames.TryGetValue(letters, out var name) && !string.IsNullOrEmpty(name))
+        {
+            return $"{letters}｜{name}";
+        }
+        return letters;
+    }
+
+    private static string FormatPrice(double? value)
+    {
+        if (value is not { } v) return "—";
+        return v % 1 == 0
+            ? v.ToString("F0", CultureInfo.InvariantCulture)
+            : v.ToString("F2", CultureInfo.InvariantCulture);
     }
 
     // -------- 格式化 --------
