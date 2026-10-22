@@ -80,7 +80,7 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 | `engine.stop` | - | engines 状态。等价 UI 的"自动交易"关；执行中同样推送 `engine_start_progress`（`stage: "stop"`） |
 | `engine.set_auto_trade` | `{value}` | `{}` 只改自动执行标志，不动引擎 |
 | `engine.status` | - | `{auto_trade, trading_active, server_online, server_error, accounts: [{account_id, running, server_connected}]}`；`server_online` 为后端心跳探测的 iTrader 服务器连通性（启动即测、每 10s 周期、保存配置后立即重测），与引擎是否运行无关；`server_error` 是最近一次探测失败的可读原因（在线时为空串），供界面展示 |
-| `trading.records` | `{kind?: "sim"\|"live", account_id?}` | `{accounts: [{account_id, kind, label, error?, account, positions, orders, trades}]}` 账户当日交易数据快照（字段见下）。不传 kind / account_id 时返回全部已配置账户；多账户并发取数，单账户失败只体现在该项 `error` |
+| `trading.records` | `{kind?: "sim"\|"live", account_id?, date_range?: "today"\|"3d"\|"7d"\|"all"}` | `{accounts: [{account_id, kind, label, error?, account, positions, orders, trades}]}` 账户交易数据快照（字段见下）。不传 kind / account_id 时返回全部已配置账户；支持按 `date_range` 筛选或查询历史沉淀的成交记录（默认 today 为当日实时）；多账户并发取数，单账户失败只体现在该项 `error` |
 | `update.check` | `{silent?}` | `{status: "latest"\|"available"\|"none"\|"error"\|"skipped", message, version?, has_patch?}`；silent 尊重"跳过此版本" |
 | `update.download` | - | `{status: "downloading"}` 进度走 `update_progress` 事件 |
 | `update.cancel` | - | `{}` |
@@ -135,7 +135,8 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
       "status": "FINISHED",
       "status_text": "已完",          // 已报 / 已完
       "last_msg": "全部成交",
-      "insert_time": "2024-01-01 09:00:00"   // 北京时间，已格式化
+      "insert_time": "2024-01-01 09:00:00",   // 北京时间，已格式化
+      "source": "智能信号"            // 智能信号 / 手动/外部
     }
   ],
   "trades": [
@@ -149,9 +150,13 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
       "offset_text": "开仓",
       "price": 3800.0,
       "volume": 1,
-      "trade_time": "2024-01-01 09:00:01"
+      "trade_time": "2024-01-01 09:00:01",
+      "commission": 5.0,              // 手续费（可空）
+      "realized_profit": null,        // 单笔平仓盈亏金额（开仓单为 null）
+      "source": "智能信号"            // 智能信号 / 手动/外部
     }
   ]
+
 }
 ```
 

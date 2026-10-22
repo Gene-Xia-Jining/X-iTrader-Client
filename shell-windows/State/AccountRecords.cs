@@ -86,6 +86,7 @@ public sealed class OrderRecord
     public string StatusText { get; init; } = "";
     public string LastMsg { get; init; } = "";
     public string InsertTime { get; init; } = "";
+    public string Source { get; init; } = "智能信号";
 
     public static OrderRecord? From(JsonObject dict)
     {
@@ -106,6 +107,7 @@ public sealed class OrderRecord
             StatusText = dict["status_text"]?.GetValue<string>() ?? "",
             LastMsg = dict["last_msg"]?.GetValue<string>() ?? "",
             InsertTime = dict["insert_time"]?.GetValue<string>() ?? "",
+            Source = dict["source"]?.GetValue<string>() ?? "智能信号",
         };
     }
 }
@@ -120,6 +122,9 @@ public sealed class TradeRecord
     public double? Price { get; init; }
     public int Volume { get; init; }
     public string TradeTime { get; init; } = "";
+    public double? RealizedProfit { get; init; }
+    public double? Commission { get; init; }
+    public string Source { get; init; } = "智能信号";
 
     public static TradeRecord? From(JsonObject dict)
     {
@@ -136,9 +141,13 @@ public sealed class TradeRecord
             Price = JsonHelpers.Double(dict["price"]),
             Volume = JsonHelpers.Int(dict["volume"]) ?? 0,
             TradeTime = dict["trade_time"]?.GetValue<string>() ?? "",
+            RealizedProfit = JsonHelpers.Double(dict["realized_profit"]),
+            Commission = JsonHelpers.Double(dict["commission"]),
+            Source = dict["source"]?.GetValue<string>() ?? "智能信号",
         };
     }
 }
+
 
 /// <summary>单个账户的交易记录快照（取数失败时 Error 非空，其余为空）</summary>
 public sealed class AccountRecords

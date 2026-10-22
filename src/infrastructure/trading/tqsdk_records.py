@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from ...domain.entities import Account
+from ...domain.repositories import TradeHistoryRepository
 
 _logger = logging.getLogger("tqsdk.records")
 
@@ -173,13 +174,67 @@ def _position_rows(positions) -> list[dict]:
     return rows
 
 
-def _order_rows(orders) -> list[dict]:
+_COMMODITY_MULTIPLIERS = {
+    "rb": 10, "hc": 10, "i": 100, "j": 100, "jm": 60,
+    "cu": 5, "al": 5, "zn": 5, "ni": 1, "sn": 1, "au": 1000, "ag": 15,
+    "m": 10, "y": 10, "p": 10, "c": 10, "cs": 10, "a": 10, "b": 10,
+    "ta": 5, "ma": 10, "eg": 10, "eb": 5, "sa": 20, "ur": 20, "fg": 20,
+    "if": 300, "ih": 300, "ic": 200, "im": 200, "t": 10000, "tf": 10000,
+}
+
+
+def _extract_variety(symbol: str) -> str:
+    """从合约代码（如 SHFE.rb2501、KQ.m@DCE.i）提取品种小写前缀（如 rb、i）。"""
+    code = symbol.split(".")[-1]
+    letters = []
+    for ch in code:
+        if ch.isalpha():
+            letters.append(ch)
+        elif letters:
+            break
+    return "".join(letters).lower()
+
+
+def _get_multiplier(api, symbol: str) -> float:
+    """获取合约乘数：优先读 quote.volume_multiple，兜底查常见品种速查表，最终为 1.0。"""
+    if api is not None:
+        try:
+            quote = api.get_quote(symbol)
+            vm = _number(getattr(quote, "volume_multiple", None))
+            if vm and vm > 0:
+                return float(vm)
+        except Exception:
+            pass
+    variety = _extract_variety(symbol)
+    return float(_COMMODITY_MULTIPLIERS.get(variety, 1.0))
+
+
+def _source_label(account: Account, symbol: str) -> str:
+    """根据账户策略配置与品种标记来源：策略品种标为策略名或智能信号，否则标为手动/外部。"""
+    configured_symbols = account.symbols or []
+    is_strategy_symbol = False
+    for s in configured_symbols:
+        if symbol == s or symbol.startswith(s + ".") or s.startswith(symbol + "."):
+            is_strategy_symbol = True
+            break
+        # 兼容主连/实际合约的映射判断
+        if _extract_variety(symbol) == _extract_variety(s):
+            is_strategy_symbol = True
+            break
+    if is_strategy_symbol:
+        return account.strategy if account.strategy else "智能信号"
+    return "手动/外部"
+
+
+def _order_rows(orders, account: Optional[Account] = None) -> list[dict]:
     rows = []
     for order in orders.values():
+        sym = _symbol(_text(order.exchange_id), _text(order.instrument_id))
+        source = _source_label(account, sym) if account else "智能信号"
         rows.append(
             {
                 "order_id": _text(order.order_id),
-                "symbol": _symbol(_text(order.exchange_id), _text(order.instrument_id)),
+                "symbol": sym,
                 "direction": _text(order.direction),
                 "direction_text": _DIRECTION_TEXT.get(_text(order.direction), _text(order.direction)),
                 "offset": _text(order.offset),
@@ -192,6 +247,7 @@ def _order_rows(orders) -> list[dict]:
                 "status_text": _ORDER_STATUS_TEXT.get(_text(order.status), _text(order.status)),
                 "last_msg": _text(order.last_msg),
                 "insert_time": _time_text(order.insert_date_time),
+                "source": source,
             }
         )
     # 新委托在前：insert_date_time 是纳秒，直接按字符串时间倒序等价于时间倒序
@@ -199,14 +255,22 @@ def _order_rows(orders) -> list[dict]:
     return rows
 
 
-def _trade_rows(trades) -> list[dict]:
-    rows = []
+def _trade_rows(
+    trades,
+    account: Optional[Account] = None,
+    api=None,
+    positions_map: Optional[dict] = None,
+) -> list[dict]:
+    # 先按时间升序排序以进行 FIFO 平仓盈亏匹配
+    raw_list = []
     for trade in trades.values():
-        rows.append(
+        sym = _symbol(_text(trade.exchange_id), _text(trade.instrument_id))
+        source = _source_label(account, sym) if account else "智能信号"
+        raw_list.append(
             {
                 "trade_id": _text(trade.trade_id),
                 "order_id": _text(trade.order_id),
-                "symbol": _symbol(_text(trade.exchange_id), _text(trade.instrument_id)),
+                "symbol": sym,
                 "direction": _text(trade.direction),
                 "direction_text": _DIRECTION_TEXT.get(_text(trade.direction), _text(trade.direction)),
                 "offset": _text(trade.offset),
@@ -214,28 +278,105 @@ def _trade_rows(trades) -> list[dict]:
                 "price": _number(trade.price),
                 "volume": _int(trade.volume),
                 "trade_time": _time_text(trade.trade_date_time),
+                "commission": _number(getattr(trade, "commission", None)),
+                "source": source,
+                "_raw_time": getattr(trade, "trade_date_time", 0) or 0,
             }
         )
-    rows.sort(key=lambda row: row["trade_time"] or "", reverse=True)
-    return rows
+    raw_list.sort(key=lambda x: x["_raw_time"])
+
+    # 计算单笔平仓盈亏
+    open_pools: dict[str, dict[str, list[dict]]] = {}  # symbol -> {"BUY": [...], "SELL": [...]}
+    multipliers_cache: dict[str, float] = {}
+
+    for row in raw_list:
+        sym = row["symbol"]
+        offset = row["offset"]
+        direction = row["direction"]
+        price = row["price"]
+        vol = row["volume"]
+
+        if sym not in multipliers_cache:
+            multipliers_cache[sym] = _get_multiplier(api, sym)
+        multiplier = multipliers_cache[sym]
+
+        if sym not in open_pools:
+            open_pools[sym] = {"BUY": [], "SELL": []}
+
+        if offset == "OPEN":
+            row["realized_profit"] = None
+            if price is not None and vol > 0:
+                open_pools[sym][direction].append({"price": price, "volume": vol})
+        elif offset in ("CLOSE", "CLOSETODAY", "CLOSEYESTERDAY"):
+            # 平多（SELL）平的是之前的 BUY；平空（BUY）平的是之前的 SELL
+            target_direction = "BUY" if direction == "SELL" else "SELL"
+            pool = open_pools[sym][target_direction]
+            remaining_to_close = vol
+            matched_cost = 0.0
+            matched_volume = 0
+
+            while pool and remaining_to_close > 0:
+                head = pool[0]
+                matched_vol = min(head["volume"], remaining_to_close)
+                matched_cost += head["price"] * matched_vol
+                matched_volume += matched_vol
+                head["volume"] -= matched_vol
+                remaining_to_close -= matched_vol
+                if head["volume"] <= 0:
+                    pool.pop(0)
+
+            # 若开仓池已用尽但仍有平仓手数（平昨仓），尝试从持仓均价拿开仓价
+            if remaining_to_close > 0 and positions_map:
+                pos = positions_map.get(sym)
+                if pos:
+                    fallback_price = (
+                        _number(getattr(pos, "open_price_long", None))
+                        if target_direction == "BUY"
+                        else _number(getattr(pos, "open_price_short", None))
+                    )
+                    if fallback_price is not None:
+                        matched_cost += fallback_price * remaining_to_close
+                        matched_volume += remaining_to_close
+                        remaining_to_close = 0
+
+            if matched_volume > 0 and price is not None:
+                avg_open_price = matched_cost / matched_volume
+                # 平多：(平仓价 - 开仓价) * 手数 * 乘数
+                # 平空：(开仓价 - 平仓价) * 手数 * 乘数
+                point_diff = (price - avg_open_price) if direction == "SELL" else (avg_open_price - price)
+                profit = point_diff * matched_volume * multiplier
+                row["realized_profit"] = round(profit, 2)
+            else:
+                row["realized_profit"] = None
+        else:
+            row["realized_profit"] = None
+
+        row.pop("_raw_time", None)
+
+    # 最终输出按成交时间倒序
+    raw_list.sort(key=lambda r: r["trade_time"] or "", reverse=True)
+    return raw_list
 
 
 def _build_snapshot_dict(account: Account, api, acc) -> dict:
+    pos_map = api.get_position()
     return {
         "account_id": account.id,
         "kind": account.kind,
         "label": account.label or account.id,
         "account": _account_snapshot(acc),
-        "positions": _position_rows(api.get_position()),
-        "orders": _order_rows(api.get_order()),
-        "trades": _trade_rows(api.get_trade()),
+        "positions": _position_rows(pos_map),
+        "orders": _order_rows(api.get_order(), account=account),
+        "trades": _trade_rows(api.get_trade(), account=account, api=api, positions_map=pos_map),
     }
+
 
 
 def fetch_account_records(
     account: Account,
     auth: tuple[Optional[str], Optional[str]],
     timeout: float = 20.0,
+    history_repo: Optional[TradeHistoryRepository] = None,
 ) -> dict:
     """查询单个账户的当日资金、持仓、委托与成交（单次临时会话）。
 
@@ -258,12 +399,19 @@ def fetch_account_records(
         while _number(acc.balance) is None and time.time() < deadline:
             api.wait_update(deadline=deadline)
 
-        return _build_snapshot_dict(account, api, acc)
+        snapshot = _build_snapshot_dict(account, api, acc)
+        if history_repo is not None and snapshot.get("trades"):
+            try:
+                history_repo.save_trades(account.id, snapshot["trades"])
+            except Exception as e:
+                _logger.warning("历史成交持久化异常: %s", e)
+        return snapshot
     finally:
         try:
             api.close()
         except Exception:
             pass
+
 
 
 # -------- 第二层：常驻只读会话守护与实时更新管理器 --------
@@ -283,10 +431,13 @@ class AccountRecordsWatcher:
         self,
         account: Account,
         on_update: Optional[Callable[[str, str, dict], None]] = None,
+        history_repo: Optional[TradeHistoryRepository] = None,
     ):
         self.account = account
         self._on_update = on_update
+        self._history_repo = history_repo
         self._stopped = False
+
         self._ready_event = threading.Event()
         self._snapshot_lock = threading.Lock()
         self._snapshot: Optional[dict] = None
@@ -416,6 +567,12 @@ class AccountRecordsWatcher:
                 return
             self._snapshot = new_snapshot
 
+        if self._history_repo is not None and new_snapshot.get("trades"):
+            try:
+                self._history_repo.save_trades(self.account.id, new_snapshot["trades"])
+            except Exception as e:
+                _logger.warning("历史成交自动持久化异常: %s", e)
+
         if self._on_update is not None and not self._stopped:
             try:
                 self._on_update(self.account.id, self.account.kind, new_snapshot)
@@ -423,11 +580,17 @@ class AccountRecordsWatcher:
                 _logger.error("记录更新广播回调异常: %s", e)
 
 
+
 class AccountRecordsManager:
     """管理所有账户的记录监听会话。"""
 
-    def __init__(self, on_update: Optional[Callable[[str, str, dict], None]] = None):
+    def __init__(
+        self,
+        on_update: Optional[Callable[[str, str, dict], None]] = None,
+        history_repo: Optional[TradeHistoryRepository] = None,
+    ):
         self._on_update = on_update
+        self._history_repo = history_repo
         self._watchers: dict[str, AccountRecordsWatcher] = {}
         self._lock = threading.Lock()
 
@@ -449,7 +612,11 @@ class AccountRecordsManager:
             # 启动新增或变更的账户
             for acc_id, acc in account_map.items():
                 if acc_id not in self._watchers:
-                    watcher = AccountRecordsWatcher(acc, on_update=self._on_update)
+                    watcher = AccountRecordsWatcher(
+                        acc,
+                        on_update=self._on_update,
+                        history_repo=self._history_repo,
+                    )
                     self._watchers[acc_id] = watcher
                     watcher.start()
 
@@ -457,8 +624,9 @@ class AccountRecordsManager:
         self,
         accounts: list[Account],
         wait_timeout: float = 0.5,
+        date_range: str = "today",
     ) -> list[dict]:
-        """按账户列表获取快照数据（毫秒级）。"""
+        """按账户列表获取快照数据（毫秒级）。支持 date_range 历史范围筛选。"""
         records: list[dict] = []
         with self._lock:
             watchers = dict(self._watchers)
@@ -466,9 +634,9 @@ class AccountRecordsManager:
         for acc in accounts:
             watcher = watchers.get(acc.id)
             if watcher is not None:
-                records.append(watcher.get_snapshot(wait_timeout=wait_timeout))
+                snapshot = watcher.get_snapshot(wait_timeout=wait_timeout)
             else:
-                records.append({
+                snapshot = {
                     "account_id": acc.id,
                     "kind": acc.kind,
                     "label": acc.label or acc.id,
@@ -477,8 +645,21 @@ class AccountRecordsManager:
                     "positions": [],
                     "orders": [],
                     "trades": [],
-                })
+                }
+
+            # 跨日或全部历史查询：若指定了非 today，从 SQLite 历史库中提取对应时间区间的成交
+            if date_range != "today" and self._history_repo is not None:
+                try:
+                    historical_trades = self._history_repo.query_trades(
+                        acc.id, date_range=date_range
+                    )
+                    snapshot["trades"] = historical_trades
+                except Exception as e:
+                    _logger.warning("查询历史成交异常: %s", e)
+
+            records.append(snapshot)
         return records
+
 
     def close(self) -> None:
         """释放所有常驻会话。"""

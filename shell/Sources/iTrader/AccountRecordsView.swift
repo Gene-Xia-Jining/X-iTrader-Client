@@ -69,6 +69,7 @@ struct OrderRecord: Identifiable {
     let statusText: String
     let lastMsg: String
     let insertTime: String
+    let source: String
 
     static func from(_ dict: [String: Any]) -> OrderRecord? {
         guard let id = dict["order_id"] as? String, !id.isEmpty else { return nil }
@@ -83,7 +84,8 @@ struct OrderRecord: Identifiable {
             tradePrice: dict.double("trade_price"),
             statusText: dict["status_text"] as? String ?? "",
             lastMsg: dict["last_msg"] as? String ?? "",
-            insertTime: dict["insert_time"] as? String ?? ""
+            insertTime: dict["insert_time"] as? String ?? "",
+            source: dict["source"] as? String ?? "智能信号"
         )
     }
 }
@@ -97,6 +99,9 @@ struct TradeRecord: Identifiable {
     let price: Double?
     let volume: Int
     let tradeTime: String
+    let commission: Double?
+    let realizedProfit: Double?
+    let source: String
 
     static func from(_ dict: [String: Any]) -> TradeRecord? {
         guard let id = dict["trade_id"] as? String, !id.isEmpty else { return nil }
@@ -107,10 +112,31 @@ struct TradeRecord: Identifiable {
             offsetText: dict["offset_text"] as? String ?? "",
             price: dict.double("price"),
             volume: dict.int("volume") ?? 0,
-            tradeTime: dict["trade_time"] as? String ?? ""
+            tradeTime: dict["trade_time"] as? String ?? "",
+            commission: dict.double("commission"),
+            realizedProfit: dict.double("realized_profit"),
+            source: dict["source"] as? String ?? "智能信号"
         )
     }
 }
+
+/// 历史时间筛选范围
+enum RecordDateRange: String, CaseIterable {
+    case today = "today"
+    case threeDays = "3d"
+    case sevenDays = "7d"
+    case all = "all"
+
+    var title: String {
+        switch self {
+        case .today: return "今日"
+        case .threeDays: return "近3天"
+        case .sevenDays: return "近7天"
+        case .all: return "全部"
+        }
+    }
+}
+
 
 /// 单个账户的交易记录快照（取数失败时 error 非空，其余为空）
 struct AccountRecords: Identifiable {
@@ -177,14 +203,17 @@ struct AccountRecordsView: View {
     @State private var errorText = ""
     /// 请求代号：只有最新一次请求的结果会被采用
     @State private var requestSeq = 0
+    /// 历史时间范围筛选
+    @State private var selectedDateRange: RecordDateRange = .today
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 Text(loading ? "正在读取账户数据…" : hintText)
                     .font(AppTheme.dimFont)
                     .foregroundColor(AppTheme.dim(scheme))
                 Spacer()
+                dateRangeCapsules
                 AppButton("刷新", variant: .secondary, disabled: loading) { load() }
             }
 
@@ -214,12 +243,41 @@ struct AccountRecordsView: View {
             load()
         }
         .onReceive(appState.$recordsRevision) { _ in
-            if let cached = appState.cachedRecords[kind.rawValue], !cached.isEmpty {
+            if selectedDateRange == .today, let cached = appState.cachedRecords[kind.rawValue], !cached.isEmpty {
                 records = cached
                 hasLoaded = true
             }
         }
     }
+
+    private var dateRangeCapsules: some View {
+        HStack(spacing: 4) {
+            ForEach(RecordDateRange.allCases, id: \.self) { range in
+                Button(action: {
+                    guard selectedDateRange != range else { return }
+                    selectedDateRange = range
+                    load()
+                }) {
+                    Text(range.title)
+                        .font(AppTheme.dimFont.weight(selectedDateRange == range ? .semibold : .regular))
+                        .foregroundColor(selectedDateRange == range ? AppTheme.ink(scheme) : AppTheme.dim(scheme))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(selectedDateRange == range ? AppTheme.soft(scheme) : Color.clear)
+                        .cornerRadius(10)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(2)
+        .background(AppTheme.chrome(scheme))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(AppTheme.hairline(scheme), lineWidth: 1)
+        )
+    }
+
 
     private var hintText: String {
         let count = appState.accounts.filter { $0.kind == kind.rawValue }.count
@@ -229,7 +287,10 @@ struct AccountRecordsView: View {
         if loading {
             return records.isEmpty ? "正在读取账户数据…" : "正在刷新账户数据…"
         }
-        return "数据来自快期账户，仅包含当前交易日"
+        if selectedDateRange == .today {
+            return "数据来自快期账户，包含当日实时推送"
+        }
+        return "数据包含本地 SQLite 历史沉淀成交记录"
     }
 
     // ---- 取数 ----
@@ -249,7 +310,10 @@ struct AccountRecordsView: View {
             do {
                 let resp = try await appState.call(
                     method: "trading.records",
-                    params: ["kind": kind.rawValue]
+                    params: [
+                        "kind": kind.rawValue,
+                        "date_range": selectedDateRange.rawValue
+                    ]
                 )
                 result = .success(
                     (resp["accounts"] as? [[String: Any]] ?? []).compactMap(AccountRecords.from)
@@ -263,9 +327,10 @@ struct AccountRecordsView: View {
             switch result {
             case .success(let value):
                 records = value
-                appState.cachedRecords[kind.rawValue] = value
+                if selectedDateRange == .today {
+                    appState.cachedRecords[kind.rawValue] = value
+                }
             case .failure(let error):
-                // 仅当此前完全没有数据时才清空，有旧数据时保留卡片展示
                 if records.isEmpty {
                     records = []
                 }
@@ -301,13 +366,14 @@ struct AccountRecordsView: View {
                 } else {
                     metricsRow(record.account)
                     section("持仓") { positionTable(record.positions) }
-                    section("当日委托") { orderTable(record.orders) }
-                    section("当日成交") { tradeTable(record.trades) }
+                    section(selectedDateRange == .today ? "当日委托" : "委托记录") { orderTable(record.orders) }
+                    section(selectedDateRange == .today ? "当日成交" : "成交记录") { tradeTable(record.trades) }
                 }
             }
             .padding(20)
         }
     }
+
 
     /// 资金指标：权益 / 可用 / 保证金 / 浮动盈亏 / 平仓盈亏 / 风险度
     private func metricsRow(_ account: AccountSnapshot) -> some View {
@@ -384,13 +450,20 @@ struct AccountRecordsView: View {
     }
 
     private func orderTable(_ rows: [OrderRecord]) -> some View {
-        recordTable(
-            headers: ["委托时间", "合约", "买卖", "开平", "委托手数", "成交手数", "委托价", "成交均价", "状态"],
-            widths: [nil, nil, 40, 44, 60, 60, nil, nil, nil],
-            empty: "当日无委托",
+        let totalOrigin = rows.reduce(0) { $0 + $1.volumeOrigin }
+        let filledCount = rows.filter { $0.volumeOrigin > $0.volumeLeft }.count
+        let canceledCount = rows.filter { $0.volumeLeft > 0 && $0.statusText == "已完" }.count
+
+        return recordTable(
+            headers: ["委托时间", "合约", "买卖", "开平", "手数", "成交", "委托价", "成交价", "状态", "来源"],
+            widths: [nil, nil, 36, 40, 40, 40, nil, nil, 60, 68],
+            empty: "无委托记录",
             isEmpty: rows.isEmpty
         ) {
             ForEach(rows) { row in
+                let isAbnormal = row.volumeLeft > 0 && row.statusText == "已完"
+                let statusColor = isAbnormal ? AppTheme.danger(scheme) : AppTheme.dim(scheme)
+
                 tableRow(
                     cells: [
                         .text(row.insertTime),
@@ -401,22 +474,46 @@ struct AccountRecordsView: View {
                         .text("\(row.volumeOrigin - row.volumeLeft)"),
                         .text(formatPrice(row.limitPrice)),
                         .text(formatPrice(row.tradePrice)),
-                        .text(row.statusText),
+                        .withTip(row.statusText, statusColor, row.lastMsg),
+                        sourceBadge(row.source),
                     ],
-                    widths: [nil, nil, 40, 44, 60, 60, nil, nil, nil]
+                    widths: [nil, nil, 36, 40, 40, 40, nil, nil, 60, 68]
+                )
+            }
+            if !rows.isEmpty {
+                summaryRow(
+                    content: "共 \(rows.count) 笔委托 · 报单 \(totalOrigin) 手 · 已成 \(filledCount) 笔"
+                        + (canceledCount > 0 ? " · 已撤/废单 \(canceledCount) 笔" : "")
                 )
             }
         }
     }
 
     private func tradeTable(_ rows: [TradeRecord]) -> some View {
-        recordTable(
-            headers: ["成交时间", "合约", "买卖", "开平", "成交价", "手数"],
-            widths: [nil, nil, 40, 44, nil, 50],
-            empty: "当日无成交",
+        let totalVol = rows.reduce(0) { $0 + $1.volume }
+        let openVol = rows.filter { $0.offsetText == "开仓" }.reduce(0) { $0 + $1.volume }
+        let closeVol = rows.filter { $0.offsetText != "开仓" }.reduce(0) { $0 + $1.volume }
+        let closeProfits = rows.compactMap { $0.realizedProfit }
+        let hasCloseProfit = !closeProfits.isEmpty
+        let totalRealized = closeProfits.reduce(0, +)
+
+        return recordTable(
+            headers: ["成交时间", "合约", "买卖", "开平", "成交价", "手数", "平仓盈亏", "来源"],
+            widths: [nil, nil, 36, 40, nil, 40, 75, 68],
+            empty: "无成交记录",
             isEmpty: rows.isEmpty
         ) {
             ForEach(rows) { row in
+                let profitCell: Cell = {
+                    if row.offsetText == "开仓" {
+                        return .colored("—", AppTheme.dim(scheme))
+                    }
+                    if let profit = row.realizedProfit {
+                        return .colored(formatSigned(profit), profitColor(profit) ?? AppTheme.ink(scheme))
+                    }
+                    return .colored("—", AppTheme.dim(scheme))
+                }()
+
                 tableRow(
                     cells: [
                         .text(row.tradeTime),
@@ -425,17 +522,55 @@ struct AccountRecordsView: View {
                         .text(row.offsetText),
                         .text(formatPrice(row.price)),
                         .text("\(row.volume)"),
+                        profitCell,
+                        sourceBadge(row.source),
                     ],
-                    widths: [nil, nil, 40, 44, nil, 50]
+                    widths: [nil, nil, 36, 40, nil, 40, 75, 68]
                 )
             }
+            if !rows.isEmpty {
+                summaryRow(
+                    content: "共 \(rows.count) 笔成交 · 累计 \(totalVol) 手（开仓 \(openVol) 手 / 平仓 \(closeVol) 手）",
+                    highlighted: hasCloseProfit ? (" · 平仓盈亏合计: " + formatSigned(totalRealized), profitColor(totalRealized) ?? AppTheme.ink(scheme)) : nil
+                )
+            }
+        }
+    }
+
+    private func sourceBadge(_ source: String) -> Cell {
+        let isSmart = source != "手动/外部"
+        let fg = isSmart ? AppTheme.primary(scheme) : AppTheme.dim(scheme)
+        let bg = isSmart ? AppTheme.primary(scheme).opacity(0.12) : AppTheme.soft(scheme)
+        return .badge(source, fg, bg)
+    }
+
+
+    private func summaryRow(content: String, highlighted: (String, Color)? = nil) -> some View {
+        VStack(spacing: 0) {
+            HairlineDivider()
+            HStack(spacing: 2) {
+                Text(content)
+                    .font(AppTheme.dimFont)
+                    .foregroundColor(AppTheme.dim(scheme))
+                if let (highText, highColor) = highlighted {
+                    Text(highText)
+                        .font(AppTheme.dimFont.weight(.semibold))
+                        .foregroundColor(highColor)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
         }
     }
 
     private enum Cell {
         case text(String)
         case colored(String, Color)
+        case badge(String, Color, Color)
+        case withTip(String, Color, String)
     }
+
 
     private func recordTable<Rows: View>(
         headers: [String],
@@ -496,12 +631,31 @@ struct AccountRecordsView: View {
                 Text(text).foregroundColor(AppTheme.ink(scheme))
             case .colored(let text, let color):
                 Text(text).foregroundColor(color)
+            case .badge(let text, let fg, let bg):
+                Text(text)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(fg)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(bg)
+                    .cornerRadius(6)
+            case .withTip(let text, let color, let tip):
+                HStack(spacing: 3) {
+                    Text(text).foregroundColor(color)
+                    if !tip.isEmpty && tip != "全部成交" {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(AppTheme.danger(scheme))
+                    }
+                }
+                .help(tip.isEmpty ? text : tip)
             }
         }
         .font(font)
         .lineLimit(1)
         .truncationMode(.middle)
     }
+
 
     private func errorCard(_ message: String) -> some View {
         AppCard {

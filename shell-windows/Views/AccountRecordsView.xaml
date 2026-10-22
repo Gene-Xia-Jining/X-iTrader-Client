@@ -6,9 +6,14 @@
 
     <StackPanel Spacing="16">
         <Grid>
-            <!-- 右侧留出「刷新」按钮的位置，长文案换行时不压到按钮 -->
-            <TextBlock x:Name="Hint" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,80,0" />
-            <Button x:Name="RefreshButton" Content="刷新" Click="OnRefreshClick" HorizontalAlignment="Right" />
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="Hint" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,16,0" />
+            <StackPanel x:Name="DateRangePanel" Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" Margin="0,0,12,0" />
+            <Button x:Name="RefreshButton" Grid.Column="2" Content="刷新" Click="OnRefreshClick" HorizontalAlignment="Right" />
         </Grid>
 
         <Border x:Name="ErrorCard" BorderThickness="1" CornerRadius="18" Padding="20" Visibility="Collapsed">

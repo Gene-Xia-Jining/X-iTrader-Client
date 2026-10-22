@@ -32,6 +32,7 @@ public sealed partial class AccountRecordsView : UserControl
     /// <summary>请求代号：只有最新一次请求的结果会被采用</summary>
     private int _requestSeq;
     private string _errorText = "";
+    private string _selectedDateRange = "today";
     private IReadOnlyList<AccountRecords> _records = [];
     /// <summary>渲染签名：数据/主题/空态变化才重建账户卡片</summary>
     private string _renderKey = "";
@@ -78,14 +79,51 @@ public sealed partial class AccountRecordsView : UserControl
         RefreshButton.Foreground = Brush(palette.Primary);
         RefreshButton.BorderBrush = Brush(palette.Hairline);
         RefreshButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        RenderDateRangeButtons();
         Hint.Text = HintText();
         // 签名里已含深浅色，配色变化时卡片会自动重建
         RenderRecords();
     }
 
+    private void RenderDateRangeButtons()
+    {
+        DateRangePanel.Children.Clear();
+        var options = new (string Key, string Label)[]
+        {
+            ("today", "今日"),
+            ("3d", "近3天"),
+            ("7d", "近7天"),
+            ("all", "全部"),
+        };
+        foreach (var (key, label) in options)
+        {
+            var isSelected = _selectedDateRange == key;
+            var btn = new Button
+            {
+                Content = label,
+                FontSize = 13,
+                Padding = new Thickness(10, 4, 10, 4),
+                CornerRadius = new CornerRadius(10),
+                BorderThickness = new Thickness(0),
+                Background = isSelected ? Brush(Palette.Soft) : new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+                Foreground = isSelected ? Brush(Palette.Ink) : Brush(Palette.Dim),
+                FontWeight = isSelected ? FontWeights.SemiBold : FontWeights.Normal,
+            };
+            btn.Click += (_, _) =>
+            {
+                if (_selectedDateRange == key) return;
+                _selectedDateRange = key;
+                RenderDateRangeButtons();
+                _ = LoadAsync(force: true);
+            };
+            DateRangePanel.Children.Add(btn);
+        }
+    }
+
     private void OnRecordsUpdated(string kind, IReadOnlyList<AccountRecords> list)
     {
         if (kind != _kind) return;
+        if (_selectedDateRange != "today") return; // 历史模式下不被当日推送冲刷
         DispatcherQueue.TryEnqueue(() =>
         {
             _records = list;
@@ -129,7 +167,11 @@ public sealed partial class AccountRecordsView : UserControl
         RefreshButton.IsEnabled = false;
         try
         {
-            var resp = await _state.CallAsync("trading.records", new JsonObject { ["kind"] = _kind });
+            var resp = await _state.CallAsync("trading.records", new JsonObject
+            {
+                ["kind"] = _kind,
+                ["date_range"] = _selectedDateRange,
+            });
             if (requestId != _requestSeq)
             {
                 return;  // 已被更新的请求（再次刷新）取代
@@ -138,7 +180,10 @@ public sealed partial class AccountRecordsView : UserControl
                 .Select(AccountRecords.From)
                 .OfType<AccountRecords>()
                 .ToList();
-            _state.SetCachedRecords(_kind, _records);
+            if (_selectedDateRange == "today")
+            {
+                _state.SetCachedRecords(_kind, _records);
+            }
         }
         catch (Exception ex)
         {
@@ -176,8 +221,11 @@ public sealed partial class AccountRecordsView : UserControl
         {
             return _records.Count == 0 ? "正在读取账户数据…" : "正在刷新账户数据…";
         }
-        return "数据来自快期账户，仅包含当前交易日";
+        return _selectedDateRange == "today"
+            ? "数据来自快期账户，包含当日实时推送"
+            : "数据包含本地 SQLite 历史沉淀成交记录";
     }
+
 
     // -------- 渲染 --------
 
@@ -270,8 +318,9 @@ public sealed partial class AccountRecordsView : UserControl
         {
             body.Children.Add(BuildMetrics(record.Account));
             body.Children.Add(BuildSection("持仓", BuildPositionTable(record.Positions)));
-            body.Children.Add(BuildSection("当日委托", BuildOrderTable(record.Orders)));
-            body.Children.Add(BuildSection("当日成交", BuildTradeTable(record.Trades)));
+            body.Children.Add(BuildSection(_selectedDateRange == "today" ? "当日委托" : "委托记录", BuildOrderTable(record.Orders)));
+            body.Children.Add(BuildSection(_selectedDateRange == "today" ? "当日成交" : "成交记录", BuildTradeTable(record.Trades)));
+
         }
         return BuildCard(body);
     }
@@ -362,7 +411,9 @@ public sealed partial class AccountRecordsView : UserControl
     private Border BuildTable(
         IReadOnlyList<ColumnSpec> columns,
         IReadOnlyList<IReadOnlyList<TableCell>> rows,
-        string empty)
+        string empty,
+        string? summary = null,
+        (string Text, Windows.UI.Color? Color)? summaryHighlight = null)
     {
         var body = new StackPanel();
         body.Children.Add(BuildTableRow(columns.Select(c => new TableCell(c.Header, null)).ToList(), columns, header: true));
@@ -384,6 +435,34 @@ public sealed partial class AccountRecordsView : UserControl
             foreach (var row in rows)
             {
                 body.Children.Add(BuildTableRow(row, columns, header: false));
+            }
+
+            if (!string.IsNullOrEmpty(summary))
+            {
+                body.Children.Add(new Rectangle { Height = 1, Fill = Brush(Palette.Divider), Margin = new Thickness(12, 0, 12, 0) });
+                var summaryPanel = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Padding = new Thickness(12, 8, 12, 8),
+                    Spacing = 4,
+                };
+                summaryPanel.Children.Add(new TextBlock
+                {
+                    Text = summary,
+                    FontSize = 13,
+                    Foreground = Brush(Palette.Dim),
+                });
+                if (summaryHighlight is { } hl)
+                {
+                    summaryPanel.Children.Add(new TextBlock
+                    {
+                        Text = hl.Text,
+                        FontSize = 13,
+                        FontWeight = FontWeights.SemiBold,
+                        Foreground = Brush(hl.Color ?? Palette.Ink),
+                    });
+                }
+                body.Children.Add(summaryPanel);
             }
         }
 
@@ -412,23 +491,56 @@ public sealed partial class AccountRecordsView : UserControl
                 Width = spec.Width is { } width ? new GridLength(width) : new GridLength(1, GridUnitType.Star),
             });
             var cell = cells.Count > i ? cells[i] : new TableCell("", null);
-            var block = new TextBlock
+
+            UIElement element;
+            if (cell.IsBadge)
             {
-                Text = cell.Text,
-                FontSize = 13,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                TextAlignment = spec.Align == HorizontalAlignment.Right ? TextAlignment.Right : TextAlignment.Left,
-                HorizontalAlignment = spec.Align,
-                Foreground = Brush(cell.Color ?? (header ? Palette.Dim : Palette.Ink)),
-                FontWeight = header ? FontWeights.SemiBold : FontWeights.Normal,
-            };
-            Grid.SetColumn(block, i);
-            grid.Children.Add(block);
+                element = new Border
+                {
+                    Background = Brush(cell.BadgeBg ?? Palette.Soft),
+                    CornerRadius = new CornerRadius(6),
+                    Padding = new Thickness(6, 2, 6, 2),
+                    HorizontalAlignment = spec.Align,
+                    Child = new TextBlock
+                    {
+                        Text = cell.Text,
+                        FontSize = 11,
+                        FontWeight = FontWeights.Medium,
+                        Foreground = Brush(cell.Color ?? Palette.Dim),
+                    },
+                };
+            }
+            else
+            {
+                element = new TextBlock
+                {
+                    Text = cell.Text,
+                    FontSize = 13,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    TextAlignment = spec.Align == HorizontalAlignment.Right ? TextAlignment.Right : TextAlignment.Left,
+                    HorizontalAlignment = spec.Align,
+                    Foreground = Brush(cell.Color ?? (header ? Palette.Dim : Palette.Ink)),
+                    FontWeight = header ? FontWeights.SemiBold : FontWeights.Normal,
+                };
+            }
+
+            if (!string.IsNullOrEmpty(cell.ToolTip) && cell.ToolTip != "全部成交")
+            {
+                ToolTipService.SetToolTip(element, cell.ToolTip);
+            }
+
+            Grid.SetColumn(element, i);
+            grid.Children.Add(element);
         }
         return grid;
     }
 
-    private readonly record struct TableCell(string Text, Windows.UI.Color? Color);
+    private readonly record struct TableCell(
+        string Text,
+        Windows.UI.Color? Color,
+        string? ToolTip = null,
+        bool IsBadge = false,
+        Windows.UI.Color? BadgeBg = null);
 
     private Border BuildPositionTable(IReadOnlyList<PositionRecord> rows)
     {
@@ -454,40 +566,90 @@ public sealed partial class AccountRecordsView : UserControl
     {
         var columns = new[]
         {
-            Left("委托时间"), Left("合约"), Left("买卖", 40), Left("开平", 44),
-            Right("委托手数", 60), Right("成交手数", 60), Right("委托价"), Right("成交均价"), Left("状态"),
+            Left("委托时间"), Left("合约"), Left("买卖", 36), Left("开平", 40),
+            Right("手数", 40), Right("成交", 40), Right("委托价"), Right("成交均价"), Left("状态", 60), Left("来源", 68),
         };
-        var cells = rows.Select(row => new List<TableCell>
+        var cells = rows.Select(row =>
         {
-            new(row.InsertTime, null),
-            new(row.Symbol, null),
-            new(row.DirectionText, SideColor(row.DirectionText)),
-            new(row.OffsetText, null),
-            new(row.VolumeOrigin.ToString(CultureInfo.InvariantCulture), null),
-            new((row.VolumeOrigin - row.VolumeLeft).ToString(CultureInfo.InvariantCulture), null),
-            new(FormatPrice(row.LimitPrice), null),
-            new(FormatPrice(row.TradePrice), null),
-            new(row.StatusText, null),
+            var isAbnormal = row.VolumeLeft > 0 && row.StatusText == "已完";
+            var statusColor = isAbnormal ? Palette.Danger : (Windows.UI.Color?)null;
+            return new List<TableCell>
+            {
+                new(row.InsertTime, null),
+                new(row.Symbol, null),
+                new(row.DirectionText, SideColor(row.DirectionText)),
+                new(row.OffsetText, null),
+                new(row.VolumeOrigin.ToString(CultureInfo.InvariantCulture), null),
+                new((row.VolumeOrigin - row.VolumeLeft).ToString(CultureInfo.InvariantCulture), null),
+                new(FormatPrice(row.LimitPrice), null),
+                new(FormatPrice(row.TradePrice), null),
+                new(row.StatusText, statusColor, ToolTip: isAbnormal ? row.LastMsg : null),
+                NewSourceBadge(row.Source),
+            };
         }).ToList();
-        return BuildTable(columns, cells, "当日无委托");
+
+        var totalOrigin = rows.Sum(r => r.VolumeOrigin);
+        var filledCount = rows.Count(r => r.VolumeOrigin > r.VolumeLeft);
+        var canceledCount = rows.Count(r => r.VolumeLeft > 0 && r.StatusText == "已完");
+        var summary = rows.Count > 0
+            ? $"共 {rows.Count} 笔委托 · 报单 {totalOrigin} 手 · 已成 {filledCount} 笔" + (canceledCount > 0 ? $" · 已撤/废单 {canceledCount} 笔" : "")
+            : null;
+
+        return BuildTable(columns, cells, "无委托记录", summary: summary);
     }
 
     private Border BuildTradeTable(IReadOnlyList<TradeRecord> rows)
     {
         var columns = new[]
         {
-            Left("成交时间"), Left("合约"), Left("买卖", 40), Left("开平", 44),
-            Right("成交价"), Right("手数", 50),
+            Left("成交时间"), Left("合约"), Left("买卖", 36), Left("开平", 40),
+            Right("成交价"), Right("手数", 40), Right("平仓盈亏", 75), Left("来源", 68),
         };
-        var cells = rows.Select(row => new List<TableCell>
+        var cells = rows.Select(row =>
         {
-            new(row.TradeTime, null),
-            new(row.Symbol, null),
-            new(row.DirectionText, SideColor(row.DirectionText)),
-            new(row.OffsetText, null),
-            new(FormatPrice(row.Price), null),
-            new(row.Volume.ToString(CultureInfo.InvariantCulture), null),
+            TableCell profitCell = row.OffsetText == "开仓"
+                ? new TableCell("—", Palette.Dim)
+                : row.RealizedProfit is { } rp
+                    ? new TableCell(FormatSigned(rp), ProfitColor(rp))
+                    : new TableCell("—", Palette.Dim);
+
+            return new List<TableCell>
+            {
+                new(row.TradeTime, null),
+                new(row.Symbol, null),
+                new(row.DirectionText, SideColor(row.DirectionText)),
+                new(row.OffsetText, null),
+                new(FormatPrice(row.Price), null),
+                new(row.Volume.ToString(CultureInfo.InvariantCulture), null),
+                profitCell,
+                NewSourceBadge(row.Source),
+            };
         }).ToList();
+
+        var totalVol = rows.Sum(r => r.Volume);
+        var openVol = rows.Where(r => r.OffsetText == "开仓").Sum(r => r.Volume);
+        var closeVol = rows.Where(r => r.OffsetText != "开仓").Sum(r => r.Volume);
+        var closeProfits = rows.Where(r => r.RealizedProfit != null).Select(r => r.RealizedProfit!.Value).ToList();
+        var totalRealized = closeProfits.Sum();
+
+        var summary = rows.Count > 0
+            ? $"共 {rows.Count} 笔成交 · 累计 {totalVol} 手（开仓 {openVol} 手 / 平仓 {closeVol} 手）"
+            : null;
+        (string Text, Windows.UI.Color? Color)? hl = closeProfits.Count > 0
+            ? ($" · 平仓盈亏合计: {FormatSigned(totalRealized)}", ProfitColor(totalRealized))
+            : null;
+
+        return BuildTable(columns, cells, "无成交记录", summary: summary, summaryHighlight: hl);
+    }
+
+    private TableCell NewSourceBadge(string source)
+    {
+        var isSmart = source != "手动/外部";
+        var fg = isSmart ? Palette.Primary : Palette.Dim;
+        var bg = isSmart ? Palette.Soft : Palette.Soft;
+        return new TableCell(source, fg, IsBadge: true, BadgeBg: bg);
+    }
+
         return BuildTable(columns, cells, "当日无成交");
     }
 

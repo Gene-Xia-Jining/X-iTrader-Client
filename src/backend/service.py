@@ -45,6 +45,7 @@ from ..infrastructure.trading.tqsdk_records import (
     AccountRecordsManager,
     fetch_account_records,
 )
+from ..infrastructure.db.repositories import SQLiteTradeHistoryRepository
 from ..infrastructure.updater import (
     ReleaseInfo,
     apply_update_and_restart,
@@ -110,8 +111,13 @@ class BackendService:
         self._engines: dict[str, TradingEngine] = {}
         self._engine_tasks: dict[str, asyncio.Task] = {}
         self._auto_trade = False
+        # 本地 SQLite 历史成交仓储
+        self._trade_history_repo = SQLiteTradeHistoryRepository(str(workdir / "data/client.db"))
         # 交易记录常驻监听与内存快照
-        self._records_manager = AccountRecordsManager(on_update=self._on_records_updated)
+        self._records_manager = AccountRecordsManager(
+            on_update=self._on_records_updated,
+            history_repo=self._trade_history_repo,
+        )
         # 服务器连通性：常驻心跳任务周期探测 /api/health，启动即连、断线自动恢复
         self._server_online = False
         # 最近一次探测失败的原因（在线时为空串），随 status 事件与 engine.status 下发
@@ -490,9 +496,14 @@ class BackendService:
         kind 用于「交易记录」页的模拟/实盘 tab；指定 account_id 时以它为准。
         同时可能有多个实盘账户，故返回 accounts 数组而不是单个账户。
         每个账户读各自的快期模拟/实盘账户（TqKq / TqAccount），与引擎的账户选择一致。
+        支持 date_range 参数 ("today" | "3d" | "7d" | "all") 进行历史成交追溯。
         """
         kind = params.get("kind")
         account_id = (params.get("account_id") or "").strip()
+        date_range = params.get("date_range") or "today"
+        if date_range not in ("today", "3d", "7d", "all"):
+            date_range = "today"
+
         if kind is not None and kind not in ("sim", "live"):
             raise ValueError("kind 必须是 sim 或 live")
 
@@ -511,22 +522,34 @@ class BackendService:
         # 优先读取常驻监听快照（0ms 响应，推拉结合）；
         # 若管理器未就绪或 fetch_account_records 被单测打桩替换，则优雅走兼容分支
         if self._records_manager is not None and fetch_account_records is _ORIGINAL_FETCH_ACCOUNT_RECORDS:
-            records = self._records_manager.get_records(accounts, wait_timeout=0.6)
+            records = self._records_manager.get_records(
+                accounts, wait_timeout=0.6, date_range=date_range
+            )
             return {"accounts": records}
 
         # TqApi 构造与取数是阻塞网络调用，放线程池避免卡住 asyncio 事件循环；
         # 单账户失败不阻断其余账户，按账户分别回传错误
-        results = await asyncio.gather(
-            *(
-                asyncio.to_thread(
-                    fetch_account_records,
+        def _fetch(acc):
+            try:
+                return fetch_account_records(
+                    acc,
+                    (acc.tq_account, acc.tq_password),
+                    history_repo=self._trade_history_repo,
+                )
+            except TypeError:
+                return fetch_account_records(
                     acc,
                     (acc.tq_account, acc.tq_password),
                 )
+
+        results = await asyncio.gather(
+            *(
+                asyncio.to_thread(_fetch, acc)
                 for acc in accounts
             ),
             return_exceptions=True,
         )
+
 
         records: list[dict] = []
         for acc, result in zip(accounts, results):
@@ -544,8 +567,17 @@ class BackendService:
                     }
                 )
             else:
-                records.append(result)
+                record = result
+                if date_range != "today" and self._trade_history_repo is not None:
+                    try:
+                        record["trades"] = self._trade_history_repo.query_trades(
+                            acc.id, date_range=date_range
+                        )
+                    except Exception as e:
+                        _logger.warning("降级查询历史成交失败: %s", e)
+                records.append(record)
         return {"accounts": records}
+
 
     async def _on_accounts_changed(self) -> None:
         """配置或账户变更后的状态同步。引擎运行中不重建（下次启动生效）。"""

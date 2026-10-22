@@ -39,3 +39,14 @@ class TokenStore(ABC):
 class StrategyStreamClient(ABC):
     @abstractmethod
     async def stream(self): ...
+
+
+class TradeHistoryRepository(ABC):
+    @abstractmethod
+    def save_trades(self, account_id: str, trades: list[dict]) -> None: ...
+
+    @abstractmethod
+    def query_trades(
+        self, account_id: str, date_range: str = "today", limit: int = 500
+    ) -> list[dict]: ...
+
