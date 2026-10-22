@@ -105,18 +105,19 @@ struct PageHeader: View {
 struct AppHelpButton: View {
     let text: String
     @Binding var isPresented: Bool
+    var isOn: Bool = false
     @State private var isHovering = false
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         Button { isPresented = true } label: {
             Text("?")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(AppTheme.primary(scheme))
-                .frame(width: 20, height: 20)
-                .background(isHovering ? AppTheme.sidebarHover(scheme) : .clear)
-                .cornerRadius(10)
-                .overlay(Circle().stroke(AppTheme.hairline(scheme), lineWidth: 1))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(isOn ? .white : AppTheme.primary(scheme))
+                .frame(width: 18, height: 18)
+                .background(isHovering ? (isOn ? Color.white.opacity(0.2) : AppTheme.sidebarHover(scheme)) : .clear)
+                .cornerRadius(9)
+                .overlay(Circle().stroke(isOn ? Color.white.opacity(0.45) : AppTheme.hairline(scheme), lineWidth: 1))
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -138,6 +139,7 @@ struct CapsuleTabBar<Tab: Hashable, Trailing: View>: View {
     let tabs: [Tab]
     let title: (Tab) -> String
     @Binding var selection: Tab
+    let hasTrailing: (Tab) -> Bool
     let trailingView: (Tab) -> Trailing
 
     @Environment(\.colorScheme) private var scheme
@@ -146,45 +148,56 @@ struct CapsuleTabBar<Tab: Hashable, Trailing: View>: View {
         tabs: [Tab],
         title: @escaping (Tab) -> String,
         selection: Binding<Tab>,
+        hasTrailing: @escaping (Tab) -> Bool = { _ in false },
         @ViewBuilder trailing: @escaping (Tab) -> Trailing
     ) {
         self.tabs = tabs
         self.title = title
         self._selection = selection
+        self.hasTrailing = hasTrailing
         self.trailingView = trailing
     }
 
     var body: some View {
         HStack(spacing: 10) {
             ForEach(tabs, id: \.self) { item in
-                HStack(spacing: 8) {
-                    button(item)
-                    trailingView(item)
-                }
+                tabCapsule(item)
             }
             Spacer()
         }
     }
 
-    private func button(_ item: Tab) -> some View {
+    private func tabCapsule(_ item: Tab) -> some View {
         let isOn = selection == item
-        return Button {
-            selection = item
-        } label: {
-            Text(title(item))
-                .font(AppTheme.bodyFont.weight(isOn ? .semibold : .regular))
-                .padding(.horizontal, 20)
-                .frame(minHeight: 34)
-                .foregroundColor(isOn ? .white : AppTheme.ink(scheme))
-                .background(isOn ? AppTheme.primary(scheme) : Color.clear)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 17)
-                        .stroke(isOn ? AppTheme.primary(scheme) : AppTheme.hairline(scheme), lineWidth: 1)
-                )
-                .cornerRadius(17)
+        let trailing = hasTrailing(item)
+        return HStack(spacing: 6) {
+            Button {
+                selection = item
+            } label: {
+                Text(title(item))
+                    .font(AppTheme.bodyFont.weight(isOn ? .semibold : .regular))
+                    .foregroundColor(isOn ? .white : AppTheme.ink(scheme))
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+
+            if trailing {
+                trailingView(item)
+            }
         }
-        .buttonStyle(.plain)
-        .pointerCursor()
+        .padding(.leading, 20)
+        .padding(.trailing, trailing ? 12 : 20)
+        .frame(minHeight: 34)
+        .background(isOn ? AppTheme.primary(scheme) : Color.clear)
+        .overlay(
+            RoundedRectangle(cornerRadius: 17)
+                .stroke(isOn ? AppTheme.primary(scheme) : AppTheme.hairline(scheme), lineWidth: 1)
+        )
+        .cornerRadius(17)
+        .contentShape(RoundedRectangle(cornerRadius: 17))
+        .onTapGesture {
+            selection = item
+        }
     }
 }
 

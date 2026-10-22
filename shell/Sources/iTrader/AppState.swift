@@ -65,7 +65,15 @@ struct AccountInfo: Identifiable, Equatable {
 struct StrategyInfo: Identifiable, Equatable {
     let id: String
     let name: String
+    let alias: String
     let description: String
+
+    init(id: String, name: String, alias: String = "", description: String = "") {
+        self.id = id
+        self.name = name
+        self.alias = alias.isEmpty ? name : alias
+        self.description = description
+    }
 }
 
 /// 「测试连接」验证通过的一组快期凭据：手机号 + 密码摘要。
@@ -655,9 +663,12 @@ final class AppState: ObservableObject {
                 let resp = try await call(method: "strategies.fetch")
                 let list = (resp["strategies"] as? [[String: Any]] ?? []).compactMap { item -> StrategyInfo? in
                     guard let id = item["id"] as? String, !id.isEmpty else { return nil }
+                    let name = item["name"] as? String ?? ""
+                    let alias = item["alias"] as? String ?? name
                     return StrategyInfo(
                         id: id,
-                        name: item["name"] as? String ?? "",
+                        name: name,
+                        alias: alias,
                         description: item["description"] as? String ?? ""
                     )
                 }

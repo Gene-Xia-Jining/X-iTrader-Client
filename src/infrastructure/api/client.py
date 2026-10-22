@@ -106,9 +106,11 @@ async def fetch_server_strategies(
     result: list[dict] = []
     for item in data.get("strategies", []):
         if isinstance(item, dict):
+            alias = str(item.get("alias") or item.get("name") or "")
             result.append({
                 "id": str(item.get("id", "")),
-                "name": str(item.get("name") or ""),
+                "name": str(item.get("name") or alias or item.get("id", "")),
+                "alias": alias,
                 "description": str(item.get("description") or ""),
             })
     return result

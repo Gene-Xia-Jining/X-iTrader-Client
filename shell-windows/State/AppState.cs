@@ -134,6 +134,7 @@ public sealed class StrategyInfo
 {
     public string Id { get; init; } = "";
     public string Name { get; init; } = "";
+    public string Alias { get; init; } = "";
     public string Description { get; init; } = "";
 }
 
@@ -1127,11 +1128,18 @@ public sealed class AppState : INotifyPropertyChanged
                 Post(() => LastActionError = "");
                 var resp = await CallAsync("strategies.fetch");
                 var list = JsonHelpers.ObjectList(resp["strategies"])
-                    .Select(item => new StrategyInfo
+                    .Select(item =>
                     {
-                        Id = item["id"]?.GetValue<string>() ?? "",
-                        Name = item["name"]?.GetValue<string>() ?? "",
-                        Description = item["description"]?.GetValue<string>() ?? "",
+                        var id = item["id"]?.GetValue<string>() ?? "";
+                        var name = item["name"]?.GetValue<string>() ?? "";
+                        var alias = item["alias"]?.GetValue<string>() ?? (name.Length > 0 ? name : id);
+                        return new StrategyInfo
+                        {
+                            Id = id,
+                            Name = name.Length > 0 ? name : alias,
+                            Alias = alias,
+                            Description = item["description"]?.GetValue<string>() ?? "",
+                        };
                     })
                     .Where(s => s.Id.Length > 0)
                     .ToList();

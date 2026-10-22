@@ -162,9 +162,14 @@ struct SimulationView: View {
     // ---- 顶部 tab（等高胶囊，选中态实心，与侧栏选中态同风格）----
 
     private var tabBar: some View {
-        CapsuleTabBar(tabs: SimTab.allCases, title: \.title, selection: $tab) { item in
+        CapsuleTabBar(
+            tabs: SimTab.allCases,
+            title: \.title,
+            selection: $tab,
+            hasTrailing: { $0 == .trades }
+        ) { item in
             if item == .trades {
-                AppHelpButton(text: tradesHelpText, isPresented: $showTradesHelp)
+                AppHelpButton(text: tradesHelpText, isPresented: $showTradesHelp, isOn: tab == .trades)
             }
         }
     }

@@ -616,10 +616,13 @@ public sealed partial class AccountRecordsView : UserControl
 
     private Border BuildOrderTable(IReadOnlyList<OrderRecord> rows)
     {
+        var maxOrderSourceLen = rows.Select(r => DisplaySource(r.Source).Length).DefaultIfEmpty(2).Max();
+        var orderSourceWidth = Math.Max(80, maxOrderSourceLen * 9.5 + 24);
+
         var columns = new[]
         {
             Left("委托时间"), Left("合约"), Left("买卖", 36), Left("开平", 40),
-            Right("手数", 40), Right("成交", 40), Right("委托价"), Right("成交均价"), Left("状态", 60), Left("来源", 84),
+            Right("手数", 40), Right("成交", 40), Right("委托价"), Right("成交均价"), Left("状态", 60), Left("来源", orderSourceWidth),
         };
         var cells = rows.Select(row =>
         {
@@ -653,13 +656,41 @@ public sealed partial class AccountRecordsView : UserControl
     private string DisplayVariety(string symbol)
     {
         var clean = symbol.Split('.').LastOrDefault() ?? symbol;
-        var letters = new string(clean.TakeWhile(char.IsLetter).ToArray()).ToUpperInvariant();
+        var code = clean.ToUpperInvariant();
+        var letters = new string(code.TakeWhile(char.IsLetter).ToArray());
         if (letters.Length == 0) return symbol;
         if (_state?.ServerSymbolNames.TryGetValue(letters, out var name) == true && !string.IsNullOrEmpty(name))
         {
-            return name;
+            return $"{name} {code}";
         }
-        return letters;
+        return code;
+    }
+
+    private string StrategyAlias(string key)
+    {
+        var trimmed = key?.Trim() ?? "";
+        if (string.IsNullOrEmpty(trimmed)) return "";
+        if (_state is not null)
+        {
+            var matched = _state.ServerStrategies.FirstOrDefault(s =>
+                string.Equals(s.Id, trimmed, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(s.Name, trimmed, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(s.Alias, trimmed, StringComparison.OrdinalIgnoreCase));
+            if (matched is not null)
+            {
+                if (!string.IsNullOrEmpty(matched.Alias)) return matched.Alias;
+                if (!string.IsNullOrEmpty(matched.Name) && !string.Equals(matched.Name, matched.Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    return matched.Name;
+                }
+                return matched.Id;
+            }
+        }
+        if (string.Equals(trimmed, "supertrend", StringComparison.OrdinalIgnoreCase))
+        {
+            return "1003";
+        }
+        return trimmed;
     }
 
     private string DisplaySource(string source)
@@ -669,46 +700,46 @@ public sealed partial class AccountRecordsView : UserControl
         {
             return "手动";
         }
-        if (trimmed.StartsWith("策略｜")) return trimmed;
-        if (trimmed.StartsWith("策略|")) return "策略｜" + trimmed[3..];
-        if (trimmed.StartsWith("策略 | ")) return "策略｜" + trimmed[5..];
+        if (trimmed.StartsWith("策略｜")) return "策略｜" + StrategyAlias(trimmed[3..]);
+        if (trimmed.StartsWith("策略|")) return "策略｜" + StrategyAlias(trimmed[3..]);
+        if (trimmed.StartsWith("策略 | ")) return "策略｜" + StrategyAlias(trimmed[5..]);
 
-        if (_state is not null)
-        {
-            var matched = _state.ServerStrategies.FirstOrDefault(s =>
-                string.Equals(s.Id, trimmed, StringComparison.OrdinalIgnoreCase) || s.Name == trimmed);
-            if (matched is not null)
-            {
-                var id = !string.IsNullOrEmpty(matched.Id) ? matched.Id : matched.Name;
-                return $"策略｜{id}";
-            }
-        }
         if (trimmed == "智能信号")
         {
             var acc = _state?.Accounts.FirstOrDefault(a => a.Kind == _kind);
             if (!string.IsNullOrEmpty(acc?.Strategy))
             {
-                return $"策略｜{acc.Strategy}";
+                return $"策略｜{StrategyAlias(acc.Strategy)}";
             }
             var first = _state?.ServerStrategies.FirstOrDefault();
-            if (!string.IsNullOrEmpty(first?.Id))
+            if (!string.IsNullOrEmpty(first?.Alias))
             {
-                return $"策略｜{first.Id}";
+                return $"策略｜{first.Alias}";
+            }
+            if (!string.IsNullOrEmpty(first?.Name))
+            {
+                return $"策略｜{first.Name}";
             }
             return "策略｜智能信号";
         }
-        return $"策略｜{trimmed}";
+        return $"策略｜{StrategyAlias(trimmed)}";
     }
 
     private Border BuildTradeTable(IReadOnlyList<TradeRecord> rows, string accountLabel)
     {
+        var maxVarietyLen = rows.Select(r => DisplayVariety(r.Symbol).Length).DefaultIfEmpty(2).Max();
+        var varietyWidth = Math.Max(70, maxVarietyLen * 8.5 + 16);
+
+        var maxSourceLen = rows.Select(r => DisplaySource(r.Source).Length).DefaultIfEmpty(2).Max();
+        var sourceWidth = Math.Max(80, maxSourceLen * 9.5 + 24);
+
         var columns = new[]
         {
             Center("编号", 36),
             Left("日期", 80),
             Left("时间", 92),
-            Left("品种", 60),
-            Center("来源", 84),
+            Left("品种", varietyWidth),
+            Center("来源", sourceWidth),
             Center("买卖", 36),
             Center("开平", 40),
             Right("成交价", 68),

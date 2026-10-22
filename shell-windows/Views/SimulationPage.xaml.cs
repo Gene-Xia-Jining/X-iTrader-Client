@@ -767,6 +767,8 @@ public sealed partial class SimulationPage : Page
 
     private void OnTradesTabClick(object sender, RoutedEventArgs e) => SwitchTab(Tab.Trades);
 
+    private void OnTradesTabCapsuleTapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e) => SwitchTab(Tab.Trades);
+
     private async void OnTradesHelpClick(object sender, RoutedEventArgs e)
     {
         await ShowHelpAsync(
@@ -842,7 +844,7 @@ public sealed partial class SimulationPage : Page
     {
         _theme.StyleCapsuleTab(StartTab, _tab == Tab.Start);
         _theme.StyleCapsuleTab(RecordsTab, _tab == Tab.Records);
-        _theme.StyleCapsuleTab(TradesTab, _tab == Tab.Trades);
+        _theme.StyleCapsuleTabContainer(TradesTabCapsule, TradesTab, TradesHelpButton, _tab == Tab.Trades);
         Card.Visibility = _tab == Tab.Start ? Visibility.Visible : Visibility.Collapsed;
         FaqCard.Visibility = _tab == Tab.Start ? Visibility.Visible : Visibility.Collapsed;
         RecordsPanel.Visibility = _tab == Tab.Records ? Visibility.Visible : Visibility.Collapsed;

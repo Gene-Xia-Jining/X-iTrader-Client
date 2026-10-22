@@ -55,9 +55,14 @@ struct AccountView: View {
                 title: "实盘交易",
                 subtitle: "添加多个实盘账户，每个账户独立选择期货公司与品种，保存后即时生效。"
             )
-            CapsuleTabBar(tabs: LiveTab.allCases, title: \.title, selection: $tab) { item in
+            CapsuleTabBar(
+                tabs: LiveTab.allCases,
+                title: \.title,
+                selection: $tab,
+                hasTrailing: { $0 == .trades }
+            ) { item in
                 if item == .trades {
-                    AppHelpButton(text: tradesHelpText, isPresented: $showTradesHelp)
+                    AppHelpButton(text: tradesHelpText, isPresented: $showTradesHelp, isOn: tab == .trades)
                 }
             }
 

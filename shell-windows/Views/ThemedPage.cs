@@ -98,6 +98,20 @@ public sealed class ThemedPage
         tab.FontWeight = isOn ? FontWeights.SemiBold : FontWeights.Normal;
     }
 
+    /// <summary>
+    /// 带内嵌问号按钮的胶囊 tab 容器（用于「历史成交」等带说明的 tab）
+    /// </summary>
+    public void StyleCapsuleTabContainer(Border capsule, Button tab, Button helpButton, bool isOn)
+    {
+        capsule.Background = new SolidColorBrush(isOn ? Palette.Primary : Microsoft.UI.Colors.Transparent);
+        capsule.BorderBrush = new SolidColorBrush(isOn ? Palette.Primary : Palette.Hairline);
+        tab.Foreground = new SolidColorBrush(isOn ? Microsoft.UI.Colors.White : Palette.Ink);
+        tab.FontWeight = isOn ? FontWeights.SemiBold : FontWeights.Normal;
+        helpButton.Foreground = new SolidColorBrush(isOn ? Microsoft.UI.Colors.White : Palette.Primary);
+        helpButton.BorderBrush = new SolidColorBrush(isOn ? Windows.UI.Color.FromArgb(115, 255, 255, 255) : Palette.Hairline);
+        helpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+    }
+
     /// <summary>日志/等宽文本的配色（对应 Swift 的 logColors）。</summary>
     public static Windows.UI.Color LogLevelColor(string level, bool dark) => level switch
     {

@@ -138,6 +138,8 @@ public sealed partial class LiveAccountPage : Page
 
     private void OnTradesTabClick(object sender, RoutedEventArgs e) => SwitchTab(Tab.Trades);
 
+    private void OnTradesTabCapsuleTapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e) => SwitchTab(Tab.Trades);
+
     private async void OnTradesHelpClick(object sender, RoutedEventArgs e)
     {
         await _theme.ShowInfoAsync(
@@ -208,10 +210,7 @@ public sealed partial class LiveAccountPage : Page
     {
         _theme.StyleCapsuleTab(StartTab, _tab == Tab.Start);
         _theme.StyleCapsuleTab(RecordsTab, _tab == Tab.Records);
-        _theme.StyleCapsuleTab(TradesTab, _tab == Tab.Trades);
-        TradesHelpButton.Foreground = Brush(Palette.Primary);
-        TradesHelpButton.BorderBrush = Brush(Palette.Hairline);
-        TradesHelpButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        _theme.StyleCapsuleTabContainer(TradesTabCapsule, TradesTab, TradesHelpButton, _tab == Tab.Trades);
         Card.Visibility = _tab == Tab.Start ? Visibility.Visible : Visibility.Collapsed;
         RecordsPanel.Visibility = _tab == Tab.Records ? Visibility.Visible : Visibility.Collapsed;
         TradesPanel.Visibility = _tab == Tab.Trades ? Visibility.Visible : Visibility.Collapsed;

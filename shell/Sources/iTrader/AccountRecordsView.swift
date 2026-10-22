@@ -481,9 +481,13 @@ struct AccountRecordsView: View {
         let filledCount = rows.filter { $0.volumeOrigin > $0.volumeLeft }.count
         let canceledCount = rows.filter { $0.volumeLeft > 0 && $0.statusText == "已完" }.count
 
+        let maxOrderSourceCount = rows.map { displaySource($0.source).count }.max() ?? 2
+        let orderSourceWidth: CGFloat = max(80, CGFloat(maxOrderSourceCount) * 9.5 + 24)
+        let orderWidths: [CGFloat?] = [nil, nil, 36, 40, 40, 40, nil, nil, 60, orderSourceWidth]
+
         return recordTable(
             headers: ["委托时间", "合约", "买卖", "开平", "手数", "成交", "委托价", "成交价", "状态", "来源"],
-            widths: [nil, nil, 36, 40, 40, 40, nil, nil, 60, 84],
+            widths: orderWidths,
             empty: "无委托记录",
             isEmpty: rows.isEmpty
         ) {
@@ -504,7 +508,7 @@ struct AccountRecordsView: View {
                         .withTip(row.statusText, statusColor, row.lastMsg),
                         sourceBadge(displaySource(row.source)),
                     ],
-                    widths: [nil, nil, 36, 40, 40, 40, nil, nil, 60, 84]
+                    widths: orderWidths
                 )
             }
             if !rows.isEmpty {
@@ -516,15 +520,40 @@ struct AccountRecordsView: View {
         }
     }
 
-    /// 从合约代码提取品种纯文字名称（如「纯碱」）
+    /// 从合约代码提取品种名称与代码（如「纯碱 SA409」）
     private func displayVariety(_ symbol: String) -> String {
         let clean = symbol.components(separatedBy: ".").last ?? symbol
-        let letters = String(clean.prefix { $0.isLetter }).uppercased()
+        let code = clean.uppercased()
+        let letters = String(code.prefix { $0.isLetter })
         guard !letters.isEmpty else { return symbol }
         if let name = appState.serverSymbolNames[letters], !name.isEmpty {
-            return name
+            return "\(name) \(code)"
         }
-        return letters
+        return code
+    }
+
+    /// 解析策略的编码别名（如 supertrend -> 1003）
+    private func strategyAlias(for key: String) -> String {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "" }
+        if let matched = appState.serverStrategies.first(where: {
+            $0.id.caseInsensitiveCompare(trimmed) == .orderedSame ||
+            $0.name.caseInsensitiveCompare(trimmed) == .orderedSame ||
+            $0.alias.caseInsensitiveCompare(trimmed) == .orderedSame
+        }) {
+            if !matched.alias.isEmpty {
+                return matched.alias
+            }
+            if !matched.name.isEmpty && matched.name.caseInsensitiveCompare(matched.id) != .orderedSame {
+                return matched.name
+            }
+            return matched.id
+        }
+        // 内置策略兜底映射（即使网络尚未拉取到策略列表也能正确显示）
+        if trimmed.lowercased() == "supertrend" {
+            return "1003"
+        }
+        return trimmed
     }
 
     /// 来源显示：策略｜1003 格式，手动显示为 手动
@@ -534,31 +563,30 @@ struct AccountRecordsView: View {
             return "手动"
         }
         if trimmed.hasPrefix("策略｜") {
-            return trimmed
+            let inner = String(trimmed.dropFirst(3))
+            return "策略｜\(strategyAlias(for: inner))"
         }
         if trimmed.hasPrefix("策略|") {
-            return "策略｜" + trimmed.dropFirst(3)
+            let inner = String(trimmed.dropFirst(3))
+            return "策略｜\(strategyAlias(for: inner))"
         }
         if trimmed.hasPrefix("策略 | ") {
-            return "策略｜" + trimmed.dropFirst(5)
-        }
-        if let matched = appState.serverStrategies.first(where: {
-            $0.id.caseInsensitiveCompare(trimmed) == .orderedSame || $0.name == trimmed
-        }) {
-            let id = !matched.id.isEmpty ? matched.id : matched.name
-            return "策略｜\(id)"
+            let inner = String(trimmed.dropFirst(5))
+            return "策略｜\(strategyAlias(for: inner))"
         }
         if trimmed == "智能信号" {
             if let sim = appState.accounts.first(where: { $0.kind == kind.rawValue }),
                !sim.strategy.isEmpty {
-                return "策略｜\(sim.strategy)"
+                return "策略｜\(strategyAlias(for: sim.strategy))"
             }
-            if let first = appState.serverStrategies.first, !first.id.isEmpty {
-                return "策略｜\(first.id)"
+            if let first = appState.serverStrategies.first, !first.alias.isEmpty || !first.name.isEmpty {
+                let alias = !first.alias.isEmpty ? first.alias : first.name
+                return "策略｜\(alias)"
             }
             return "策略｜智能信号"
         }
-        return "策略｜\(trimmed)"
+        let alias = strategyAlias(for: trimmed)
+        return "策略｜\(alias)"
     }
 
     /// 解析成交时间为日期和精确到毫秒的时间
@@ -580,8 +608,15 @@ struct AccountRecordsView: View {
         let hasCloseProfit = !closeProfits.isEmpty
         let totalRealized = closeProfits.reduce(0, +)
 
+        // 动态计算品种列和来源列的自适应宽度，留足文本与徽章边距，避免出现截断省略号
+        let maxVarietyCount = rows.map { displayVariety($0.symbol).count }.max() ?? 2
+        let varietyWidth: CGFloat = max(70, CGFloat(maxVarietyCount) * 8.5 + 16)
+
+        let maxSourceCount = rows.map { displaySource($0.source).count }.max() ?? 2
+        let sourceWidth: CGFloat = max(80, CGFloat(maxSourceCount) * 9.5 + 24)
+
         let headers = ["编号", "日期", "时间", "品种", "来源", "买卖", "开平", "成交价", "手数", "平仓盈亏"]
-        let widths: [CGFloat?] = [36, 80, 92, 60, 84, 36, 40, 68, 40, 76]
+        let widths: [CGFloat?] = [36, 80, 92, varietyWidth, sourceWidth, 36, 40, 68, 40, 76]
         let alignments: [Alignment] = [.center, .leading, .leading, .leading, .center, .center, .center, .trailing, .trailing, .trailing]
 
         return recordTable(
@@ -823,6 +858,8 @@ struct AccountRecordsView: View {
                 Text(text)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(fg)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(bg)
