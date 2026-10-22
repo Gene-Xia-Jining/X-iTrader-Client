@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -83,6 +84,19 @@ public sealed class ThemedPage
     // -------- 画刷工具 --------
 
     public SolidColorBrush Brush(Windows.UI.Color color) => new(color);
+
+    /// <summary>
+    /// 页内分段 tab 的选中态：实心主题蓝 + 白字半粗，未选中透明底 + 发丝描边。
+    /// 模拟交易页与实盘交易页的「快速开始 / 交易记录」切换共用。
+    /// </summary>
+    public void StyleCapsuleTab(Button tab, bool isOn)
+    {
+        tab.Background = new SolidColorBrush(isOn ? Palette.Primary : Microsoft.UI.Colors.Transparent);
+        tab.BorderBrush = new SolidColorBrush(isOn ? Palette.Primary : Palette.Hairline);
+        tab.BorderThickness = new Thickness(1);
+        tab.Foreground = new SolidColorBrush(isOn ? Microsoft.UI.Colors.White : Palette.Ink);
+        tab.FontWeight = isOn ? FontWeights.SemiBold : FontWeights.Normal;
+    }
 
     /// <summary>日志/等宽文本的配色（对应 Swift 的 logColors）。</summary>
     public static Windows.UI.Color LogLevelColor(string level, bool dark) => level switch

@@ -6,12 +6,22 @@
 
     <ScrollViewer>
         <StackPanel x:Name="Root" Padding="24" Spacing="16">
+            <!-- 标题常驻：切到「交易记录」tab 也能看出这是实盘交易页 -->
             <StackPanel Spacing="4">
                 <TextBlock x:Name="PageTitle" Text="实盘交易" FontSize="22" FontWeight="SemiBold" />
                 <TextBlock x:Name="Subtitle"
                            Text="添加多个实盘账户，每个账户独立选择期货公司与品种，保存后即时生效。" />
             </StackPanel>
 
+            <!-- 两个 tab：快速开始（账户配置）/ 交易记录（实盘账户的执行明细），选中态记在 ShellPrefs -->
+            <StackPanel Orientation="Horizontal" Spacing="10">
+                <Button x:Name="StartTab" Content="快速开始" Click="OnStartTabClick"
+                        CornerRadius="17" MinHeight="34" Padding="20,0" />
+                <Button x:Name="RecordsTab" Content="交易记录" Click="OnRecordsTabClick"
+                        CornerRadius="17" MinHeight="34" Padding="20,0" />
+            </StackPanel>
+
+            <!-- 快速开始 tab：账户配置 -->
             <Border x:Name="Card" BorderThickness="1" CornerRadius="18" Padding="20">
                 <StackPanel Spacing="12">
                     <Button Content="＋ 添加实盘账户" Click="OnAddClick" HorizontalAlignment="Left" />
@@ -21,6 +31,9 @@
                     <StackPanel x:Name="AccountsPanel" Spacing="10" />
                 </StackPanel>
             </Border>
+
+            <!-- 「交易记录」tab：与模拟页同一份实现，只取实盘账户 -->
+            <StackPanel x:Name="RecordsPanel" Spacing="16" Visibility="Collapsed" />
         </StackPanel>
     </ScrollViewer>
 </Page>

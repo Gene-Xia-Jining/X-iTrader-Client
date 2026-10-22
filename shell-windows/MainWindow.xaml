@@ -133,7 +133,7 @@
                   Auto 列：列宽取最宽标题，各按钮再 stretch 成等宽胶囊。
                   行在 BuildNav 里按路由数量动态添加。
                 -->
-                <Grid x:Name="NavItems" Margin="14,18" RowSpacing="6" VerticalAlignment="Top">
+                <Grid x:Name="NavItems" Margin="14,18" RowSpacing="12" VerticalAlignment="Top">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>

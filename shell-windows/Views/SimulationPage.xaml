@@ -8,6 +8,14 @@
     <Grid>
         <ScrollViewer>
             <StackPanel x:Name="Root" Padding="24" Spacing="16">
+                <!-- 两个 tab：快速开始（7 步引导）/ 交易记录（模拟账户的执行明细），选中态记在 ShellPrefs -->
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <Button x:Name="StartTab" Content="快速开始" Click="OnStartTabClick"
+                            CornerRadius="17" MinHeight="34" Padding="20,0" />
+                    <Button x:Name="RecordsTab" Content="交易记录" Click="OnRecordsTabClick"
+                            CornerRadius="17" MinHeight="34" Padding="20,0" />
+                </StackPanel>
+
                 <Border x:Name="Card" BorderThickness="1" CornerRadius="18" Padding="20">
                     <StackPanel Spacing="12">
                         <TextBlock x:Name="Intro" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
@@ -124,6 +132,9 @@
                         <StackPanel x:Name="FaqBody" Spacing="0" Visibility="Collapsed" />
                     </StackPanel>
                 </Border>
+
+                <!-- 「交易记录」tab：与实盘交易页同一份实现，只取模拟账户 -->
+                <StackPanel x:Name="RecordsPanel" Spacing="16" Visibility="Collapsed" />
             </StackPanel>
         </ScrollViewer>
 

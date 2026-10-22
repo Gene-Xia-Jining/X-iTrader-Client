@@ -138,7 +138,7 @@ struct AccountRecords: Identifiable {
     }
 }
 
-/// 交易记录页的两个 tab
+/// 账户类别：模拟 / 实盘
 enum RecordKind: String, CaseIterable {
     case sim
     case live
@@ -158,35 +158,28 @@ private extension Dictionary where Key == String, Value == Any {
     }
 }
 
-// MARK: - 页面
+// MARK: - 一类账户的交易记录
 
-/// 交易记录页：对应快期 App 的交易记录，按「模拟 / 实盘」分 tab，
-/// 每个 tab 展示账户资金、持仓、当日委托与当日成交。
-/// tab 选择存在 UserDefaults，重启后回到上次查看的那一类账户。
-struct TradeRecordView: View {
+/// 按账户类别取数并展示资金、持仓、当日委托与当日成交。
+/// 实盘交易页与模拟交易页的「交易记录」tab 共用这一份实现，只按 kind 区分账户类别。
+struct AccountRecordsView: View {
+    let kind: RecordKind
+    /// 尚未配置这类账户时的引导文案：两个入口指向不同的配置位置
+    let notConfiguredHint: String
+
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var scheme
 
-    private static let kindKey = "tradeRecords.kind"
-
-    @State private var kind: RecordKind = RecordKind(
-        rawValue: UserDefaults.standard.string(forKey: TradeRecordView.kindKey) ?? ""
-    ) ?? .live
     @State private var records: [AccountRecords] = []
     @State private var loading = false
+    /// 是否至少完成过一次取数：未取过就不显示「暂无数据」，避免误导
+    @State private var hasLoaded = false
     @State private var errorText = ""
     /// 请求代号：只有最新一次请求的结果会被采用
     @State private var requestSeq = 0
 
     var body: some View {
-        PageContainer {
-            PageHeader(
-                title: "交易记录",
-                subtitle: "查看模拟与实盘账户的资金、持仓、当日委托与成交。"
-            )
-
-            tabBar
-
+        VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 10) {
                 Text(loading ? "正在读取账户数据…" : hintText)
                     .font(AppTheme.dimFont)
@@ -203,7 +196,7 @@ struct TradeRecordView: View {
                 accountCard(record)
             }
 
-            if records.isEmpty && errorText.isEmpty && !loading {
+            if records.isEmpty && errorText.isEmpty && !loading && hasLoaded {
                 AppCard {
                     Text("暂无数据")
                         .font(AppTheme.dimFont)
@@ -214,53 +207,27 @@ struct TradeRecordView: View {
             }
         }
         .onAppear {
-            // 每次进入页面都取一次最新数据（TqSdk 只给当日快照，页面停留期间可能已成交）
-            load()
-        }
-        .onChange(of: kind) { _ in
-            UserDefaults.standard.set(kind.rawValue, forKey: Self.kindKey)
-            load()
-        }
-    }
-
-    // ---- 顶部 tab（等高胶囊，选中态实心，与品种胶囊同风格）----
-
-    private var tabBar: some View {
-        HStack(spacing: 10) {
-            ForEach(RecordKind.allCases, id: \.self) { item in
-                recordTab(item)
+            if let cached = appState.cachedRecords[kind.rawValue], !cached.isEmpty {
+                records = cached
+                hasLoaded = true
             }
-            Spacer()
+            load()
         }
-    }
-
-    private func recordTab(_ item: RecordKind) -> some View {
-        let isOn = kind == item
-        return Button {
-            kind = item
-        } label: {
-            Text(item.title)
-                .font(AppTheme.bodyFont.weight(isOn ? .semibold : .regular))
-                .padding(.horizontal, 20)
-                .frame(minHeight: 34)
-                .foregroundColor(isOn ? .white : AppTheme.ink(scheme))
-                .background(isOn ? AppTheme.primary(scheme) : Color.clear)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 17)
-                        .stroke(isOn ? AppTheme.primary(scheme) : AppTheme.hairline(scheme), lineWidth: 1)
-                )
-                .cornerRadius(17)
+        .onReceive(appState.$recordsRevision) { _ in
+            if let cached = appState.cachedRecords[kind.rawValue], !cached.isEmpty {
+                records = cached
+                hasLoaded = true
+            }
         }
-        .buttonStyle(.plain)
-        .pointerCursor()
     }
 
     private var hintText: String {
         let count = appState.accounts.filter { $0.kind == kind.rawValue }.count
         if count == 0 {
-            return kind == .sim
-                ? "尚未配置模拟账户，请先在「模拟交易」页保存账户"
-                : "尚未配置实盘账户，请先在「实盘交易」页保存账户"
+            return notConfiguredHint
+        }
+        if loading {
+            return records.isEmpty ? "正在读取账户数据…" : "正在刷新账户数据…"
         }
         return "数据来自快期账户，仅包含当前交易日"
     }
@@ -272,19 +239,17 @@ struct TradeRecordView: View {
             errorText = "后端未连接"
             return
         }
-        // 请求代号：切换 tab 会立即再发一次，旧的返回结果不能覆盖新 tab 的数据
         requestSeq += 1
         let requestId = requestSeq
-        let requestedKind = kind
         loading = true
         errorText = ""
-        records = []
+        // 不清空现有 records，防止刷新时卡片白屏闪烁
         Task {
             let result: Result<[AccountRecords], Error>
             do {
                 let resp = try await appState.call(
                     method: "trading.records",
-                    params: ["kind": requestedKind.rawValue]
+                    params: ["kind": kind.rawValue]
                 )
                 result = .success(
                     (resp["accounts"] as? [[String: Any]] ?? []).compactMap(AccountRecords.from)
@@ -294,11 +259,16 @@ struct TradeRecordView: View {
             }
             guard requestId == requestSeq else { return }
             loading = false
+            hasLoaded = true
             switch result {
             case .success(let value):
                 records = value
+                appState.cachedRecords[kind.rawValue] = value
             case .failure(let error):
-                records = []
+                // 仅当此前完全没有数据时才清空，有旧数据时保留卡片展示
+                if records.isEmpty {
+                    records = []
+                }
                 errorText = "读取失败: \(error.localizedDescription)"
             }
         }

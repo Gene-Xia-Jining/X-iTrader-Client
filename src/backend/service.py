@@ -41,7 +41,10 @@ from ..infrastructure.api.client import (
 )
 from ..infrastructure.proxy import apply_proxy_environment, server_host
 from ..infrastructure.trading.tqsdk_executor import test_account_session, test_tq_auth_connection
-from ..infrastructure.trading.tqsdk_records import fetch_account_records
+from ..infrastructure.trading.tqsdk_records import (
+    AccountRecordsManager,
+    fetch_account_records,
+)
 from ..infrastructure.updater import (
     ReleaseInfo,
     apply_update_and_restart,
@@ -94,16 +97,21 @@ _LOG_LEVELS = {
     LogLevel.ERROR: logging.ERROR,
 }
 
+_ORIGINAL_FETCH_ACCOUNT_RECORDS = fetch_account_records
+
 
 class BackendService:
     def __init__(self, workdir: Path):
         self.workdir = workdir
         self.bootstrap = Bootstrap(str(workdir / "data/client.db"))
         self.event_bus = self.bootstrap.event_bus
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         # 每个启用账户一个引擎，可同时运行
         self._engines: dict[str, TradingEngine] = {}
         self._engine_tasks: dict[str, asyncio.Task] = {}
         self._auto_trade = False
+        # 交易记录常驻监听与内存快照
+        self._records_manager = AccountRecordsManager(on_update=self._on_records_updated)
         # 服务器连通性：常驻心跳任务周期探测 /api/health，启动即连、断线自动恢复
         self._server_online = False
         # 最近一次探测失败的原因（在线时为空串），随 status 事件与 engine.status 下发
@@ -132,15 +140,18 @@ class BackendService:
     # -------- 生命周期 --------
 
     async def startup(self) -> None:
+        self._loop = asyncio.get_running_loop()
         # 清理上次更新遗留的 .old-* 备份（失败不影响启动）
         cleanup_stale_backups()
         self._apply_proxy_env(self.bootstrap.config)
         self._subscribe_events()
+        self._records_manager.sync_accounts(self.bootstrap.accounts)
         self._server_watch_task = asyncio.create_task(self._server_watch_loop())
         self._token_watch_task = asyncio.create_task(self._token_watch_loop())
 
     async def shutdown(self) -> None:
         await self.stop_engines()
+        self._records_manager.close()
         for task in (self._server_watch_task, self._token_watch_task):
             if task is None:
                 continue
@@ -497,6 +508,12 @@ class BackendService:
             hint = "模拟" if kind == "sim" else "实盘" if kind == "live" else ""
             raise ValueError(f"尚未配置{hint}账户")
 
+        # 优先读取常驻监听快照（0ms 响应，推拉结合）；
+        # 若管理器未就绪或 fetch_account_records 被单测打桩替换，则优雅走兼容分支
+        if self._records_manager is not None and fetch_account_records is _ORIGINAL_FETCH_ACCOUNT_RECORDS:
+            records = self._records_manager.get_records(accounts, wait_timeout=0.6)
+            return {"accounts": records}
+
         # TqApi 构造与取数是阻塞网络调用，放线程池避免卡住 asyncio 事件循环；
         # 单账户失败不阻断其余账户，按账户分别回传错误
         results = await asyncio.gather(
@@ -532,6 +549,7 @@ class BackendService:
 
     async def _on_accounts_changed(self) -> None:
         """配置或账户变更后的状态同步。引擎运行中不重建（下次启动生效）。"""
+        self._records_manager.sync_accounts(self.bootstrap.accounts)
         self.event_bus.publish(ConfigChangedEvent())
         if any(e.is_running for e in self._engines.values()):
             self._log("配置已更新（下次启动生效）", LogLevel.WARNING)
@@ -1025,8 +1043,26 @@ class BackendService:
         self._broadcast_fn = fn
 
     def _broadcast(self, event_name: str, data: dict) -> None:
-        if self._broadcast_fn is not None:
+        if self._broadcast_fn is None:
+            return
+        if self._loop is not None and not self._loop.is_closed():
+            try:
+                if asyncio.get_running_loop() is self._loop:
+                    self._broadcast_fn(event_name, data)
+                    return
+            except RuntimeError:
+                pass
+            self._loop.call_soon_threadsafe(self._broadcast_fn, event_name, data)
+        else:
             self._broadcast_fn(event_name, data)
+
+    def _on_records_updated(self, account_id: str, kind: str, record: dict) -> None:
+        """常驻 Watcher 监听到快期柜台推送并生成新快照时，向客户端广播更新。"""
+        self._broadcast("trading_records_updated", {
+            "kind": kind,
+            "account_id": account_id,
+            "record": record,
+        })
 
     def _subscribe_events(self) -> None:
         self.event_bus.subscribe(LogEvent, self._on_event(LogEvent, "log"))

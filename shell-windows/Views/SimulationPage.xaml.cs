@@ -70,6 +70,16 @@ public sealed partial class SimulationPage : Page
     private string _symbolKey = "";
     private string _strategyKey = "";
 
+    // -------- 两个 tab：快速开始（原 7 步引导）/ 交易记录（模拟账户的执行明细）--------
+
+    private const string TabPrefKey = "simulation.tab";
+
+    private enum Tab { Start, Records }
+
+    private Tab _tab = Tab.Start;
+    /// <summary>「交易记录」tab 的主体：懒建一次，切走再切回沿用它自己的数据</summary>
+    private AccountRecordsView? _recordsView;
+
     // -------- 常见问题（展开状态存 ShellPrefs；展开后只列问题，点问题弹窗看详细）--------
 
     private const string FaqPrefKey = "simulation.faqExpanded";
@@ -131,7 +141,7 @@ public sealed partial class SimulationPage : Page
         new(
             "出问题的时候去哪里看？",
             "「系统日志」页有完整的运行日志，包含连接、信号、下单与错误信息；"
-            + "交易执行明细可以在「交易记录」页按模拟 / 实盘分别查看。"),
+            + "交易执行明细可以在本页「交易记录」tab 查看模拟账户，实盘账户在「实盘交易」页的「交易记录」tab 查看。"),
     ];
 
     private bool _faqExpanded;
@@ -197,6 +207,10 @@ public sealed partial class SimulationPage : Page
         // 展开状态在构造时恢复：页面切走再回来不该被重置成收起
         _faqExpanded = ShellPrefs.Get(FaqPrefKey) is "1";
         RenderFaq();
+        _tab = ShellPrefs.Get(TabPrefKey) is "records" ? Tab.Records : Tab.Start;
+        // 构造时就按上次的 tab 定好两栏的可见性，避免首帧闪一下引导卡片
+        ApplyTabStyles();
+
         ServerBox.LostFocus += (_, _) => SaveServerIfChanged();
         ServerBox.KeyDown += (_, e) =>
         {
@@ -720,16 +734,75 @@ public sealed partial class SimulationPage : Page
         {
             return;
         }
+        ApplyTabStyles();
         FillFromAccount();
         FillServerUrl();
         // 第 5 步要在胶囊后显示当前审批状态，进页面时拉一次
         State.RefreshTokenStatus();
+        // 交易记录 tab 每次进入都重新取数（TqSdk 只给当日快照）
+        if (_tab == Tab.Records)
+        {
+            EnsureRecordsView();
+            _recordsView?.Reload();
+        }
+    }
+
+    // -------- tab --------
+
+    private void OnStartTabClick(object sender, RoutedEventArgs e) => SwitchTab(Tab.Start);
+
+    private void OnRecordsTabClick(object sender, RoutedEventArgs e) => SwitchTab(Tab.Records);
+
+    private void SwitchTab(Tab tab)
+    {
+        if (_tab == tab)
+        {
+            return;
+        }
+        _tab = tab;
+        ShellPrefs.Set(TabPrefKey, tab == Tab.Records ? "records" : "start");
+        // 切到交易记录时收起品种弹层，避免遮罩留在记录列表上
+        if (tab == Tab.Records)
+        {
+            HideSymbolDialog();
+        }
+        ApplyTabStyles();
+        if (tab == Tab.Records)
+        {
+            EnsureRecordsView();
+            _recordsView?.Reload();
+        }
+    }
+
+    /// <summary>「交易记录」tab 的主体在本页第一次切过去时创建</summary>
+    private void EnsureRecordsView()
+    {
+        if (_recordsView is not null)
+        {
+            return;
+        }
+        _recordsView = new AccountRecordsView("sim", "尚未配置模拟账户，请先在「快速开始」里保存账户");
+        RecordsPanel.Children.Add(_recordsView);
+        if (State is not null)
+        {
+            _recordsView.Refresh(State, Host.IsDark);
+        }
+    }
+
+    private void ApplyTabStyles()
+    {
+        _theme.StyleCapsuleTab(StartTab, _tab == Tab.Start);
+        _theme.StyleCapsuleTab(RecordsTab, _tab == Tab.Records);
+        Card.Visibility = _tab == Tab.Start ? Visibility.Visible : Visibility.Collapsed;
+        FaqCard.Visibility = _tab == Tab.Start ? Visibility.Visible : Visibility.Collapsed;
+        RecordsPanel.Visibility = _tab == Tab.Records ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void ApplyPalette()
     {
         // 先切主题再上色：RequestedTheme 会重算模板资源，后设颜色才不会被覆盖
         Root.RequestedTheme = Host.IsDark ? ElementTheme.Dark : ElementTheme.Light;
+        ApplyTabStyles();
         Card.Background = Brush(Palette.Card);
         Card.BorderBrush = Brush(Palette.Hairline);
 
@@ -840,6 +913,11 @@ public sealed partial class SimulationPage : Page
         FillFromAccount();
         FillServerUrl();
         RefreshTransientState();
+        // 账户配置变化会改变记录 tab 的提示文案（如刚保存了模拟账户）
+        if (_recordsView is not null && State is not null)
+        {
+            _recordsView.Refresh(State, Host.IsDark);
+        }
     }
 
     /// <summary>

@@ -101,6 +101,46 @@ struct PageHeader: View {
     }
 }
 
+/// 页内分段 tab（等高胶囊，选中态实心，与侧栏选中态同风格）。
+/// 模拟交易页与实盘交易页的「快速开始 / 交易记录」切换共用这一套外观。
+struct CapsuleTabBar<Tab: Hashable>: View {
+    let tabs: [Tab]
+    let title: (Tab) -> String
+    @Binding var selection: Tab
+
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(tabs, id: \.self) { item in
+                button(item)
+            }
+            Spacer()
+        }
+    }
+
+    private func button(_ item: Tab) -> some View {
+        let isOn = selection == item
+        return Button {
+            selection = item
+        } label: {
+            Text(title(item))
+                .font(AppTheme.bodyFont.weight(isOn ? .semibold : .regular))
+                .padding(.horizontal, 20)
+                .frame(minHeight: 34)
+                .foregroundColor(isOn ? .white : AppTheme.ink(scheme))
+                .background(isOn ? AppTheme.primary(scheme) : Color.clear)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 17)
+                        .stroke(isOn ? AppTheme.primary(scheme) : AppTheme.hairline(scheme), lineWidth: 1)
+                )
+                .cornerRadius(17)
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+    }
+}
+
 /// 页面容器（BasePage：外边距 24、行距 16、内容顶对齐）
 struct PageContainer<Content: View>: View {
     let content: Content

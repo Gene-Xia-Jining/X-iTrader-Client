@@ -124,8 +124,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 enum AppRoute: String, CaseIterable, Identifiable {
     // 声明顺序即侧栏顺序
-    // 服务器地址已并入顶栏服务器弹窗，「设置」页只保留代理配置
-    case dashboard, token, sim, live, records, log, settings
+    // 服务器地址已并入顶栏服务器弹窗，「设置」页只保留代理配置；
+    // 交易记录已分别并入模拟 / 实盘交易页的「交易记录」tab，不再单列页面
+    case dashboard, token, sim, live, log, settings
 
     var id: String { rawValue }
 
@@ -140,7 +141,6 @@ enum AppRoute: String, CaseIterable, Identifiable {
         case .log: return "系统日志"
         case .sim: return "模拟交易"
         case .live: return "实盘交易"
-        case .records: return "交易记录"
         case .settings: return "设置"
         }
     }
@@ -311,7 +311,7 @@ struct RootView: View {
     }()
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 12) {
             ForEach(AppRoute.visibleCases) { route in
                 SidebarNavButton(title: route.title, isSelected: selection == route) {
                     selection = route
@@ -341,7 +341,6 @@ struct RootView: View {
         case .log: TradingLogView()
         case .sim: SimulationView()
         case .live: AccountView()
-        case .records: TradeRecordView()
         case .settings: SettingsView()
         }
     }
@@ -616,8 +615,8 @@ struct RootView: View {
     }
 }
 
-// MARK: - 侧边栏导航按钮（SidebarButton：高 44、胶囊、文字左对齐）
-/// 外观对齐交易记录页的「模拟交易 / 实盘交易」分段胶囊：
+// MARK: - 侧边栏导航按钮（SidebarButton：高 36、胶囊、文字左对齐）
+/// 外观对齐页内分段胶囊（如模拟交易页的「快速开始 / 交易记录」）：
 /// 选中为实心主题蓝 + 白字半粗，未选中为透明底 + 发丝描边，
 /// 悬停时底色与描边各提一档（同 AppButton.secondary 的悬停约定）。
 private struct SidebarNavButton: View {
@@ -628,8 +627,8 @@ private struct SidebarNavButton: View {
     @Environment(\.colorScheme) private var scheme
     @State private var hovering = false
 
-    /// 胶囊圆角取按钮高度的一半（44 / 2），与分段胶囊按自身高度取圆角一致
-    private static let cornerRadius: CGFloat = 22
+    /// 胶囊圆角取按钮高度的一半（36 / 2），与顶栏「自动交易」胶囊一致
+    private static let cornerRadius: CGFloat = 18
 
     var body: some View {
         Button(action: action) {
@@ -637,7 +636,7 @@ private struct SidebarNavButton: View {
                 .font(AppTheme.bodyFont.weight(isSelected ? .semibold : .regular))
                 .foregroundColor(isSelected ? .white : AppTheme.dim(scheme))
                 .padding(.horizontal, 24)
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
                 .background(backgroundColor)
                 .overlay(
                     RoundedRectangle(cornerRadius: Self.cornerRadius)

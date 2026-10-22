@@ -266,6 +266,10 @@ final class AppState: ObservableObject {
     /// 只存摘要不存明文：这里只用于让步骤 3 胶囊显示绿色，不参与任何登录
     @Published private(set) var verifiedTqCredentials: VerifiedTqCredentials? =
         VerifiedTqCredentials.loadFromDefaults()
+    /// 交易记录版本号（后端实时推送变动或主动刷新时递增）
+    @Published var recordsRevision: Int = 0
+    /// 本地内存中各类别账户的交易记录缓存（kind -> [AccountRecords]）
+    @Published var cachedRecords: [String: [AccountRecords]] = [:]
 
     private var backend: BackendProcess?
     private var client: RpcClient?
@@ -288,8 +292,16 @@ final class AppState: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
+        Self.purgeLegacyPreferences()
         installExitHooks()
         reconnect()
+    }
+
+    /// 清理已废弃的偏好键：交易记录页不再有模拟 / 实盘分段（模拟账户的记录已并入
+    /// 模拟交易页的「交易记录」tab），老版本留下的选择已无意义。
+    /// removeObject 对不存在的键是空操作，因此每次启动执行都不会有副作用。
+    private static func purgeLegacyPreferences() {
+        UserDefaults.standard.removeObject(forKey: "tradeRecords.kind")
     }
 
     /// 触发一次重连（已有的连接循环未结束时不重复启动）
@@ -474,8 +486,22 @@ final class AppState: ObservableObject {
             }
         case "trade_executed":
             appendLog(level: "SUCCESS", message: "交易已执行: \(data["symbol"] ?? "?") 仓位 \(data["target_position"] ?? "?")")
+            recordsRevision += 1
         case "trade_failed":
             appendLog(level: "ERROR", message: "交易失败: \(data["symbol"] ?? "?") \(data["error"] ?? "")")
+        case "trading_records_updated":
+            if let kind = data["kind"] as? String,
+               let recordDict = data["record"] as? [String: Any],
+               let newRecord = AccountRecords.from(recordDict) {
+                var current = cachedRecords[kind] ?? []
+                if let idx = current.firstIndex(where: { $0.id == newRecord.id }) {
+                    current[idx] = newRecord
+                } else {
+                    current.append(newRecord)
+                }
+                cachedRecords[kind] = current
+                recordsRevision += 1
+            }
         case "update_progress":
             updateProgress = data["pct"] as? Int ?? -1
         case "engine_start_progress":

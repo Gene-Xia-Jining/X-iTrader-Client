@@ -88,7 +88,7 @@
 
             <!--
               侧栏导航项：Button 退化成纯 Border + 文字，选中/悬停底色与描边由代码
-              按 Palette 设置（外观对齐交易记录页的「模拟/实盘」分段胶囊）。
+              按 Palette 设置（外观对齐页内分段胶囊，如「快速开始/交易记录」）。
               保留 Button 是为了键盘焦点与 Space/Enter 激活，原生按钮模板会叠
               PointerOver/Pressed 灰底，盖掉主题色。
             -->
@@ -96,9 +96,9 @@
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderThickness" Value="1" />
                 <Setter Property="Padding" Value="24,0" />
-                <Setter Property="MinHeight" Value="44" />
-                <!-- 胶囊圆角取按钮高度的一半（44 / 2），与分段胶囊按自身高度取圆角一致 -->
-                <Setter Property="CornerRadius" Value="22" />
+                <Setter Property="MinHeight" Value="36" />
+                <!-- 胶囊圆角取按钮高度的一半（36 / 2），与顶栏「自动交易」胶囊一致 -->
+                <Setter Property="CornerRadius" Value="18" />
                 <!--
                   Auto 列在测量阶段取各子项的 desired width（内边距 + 文字），
                   排布阶段再把 Button 撑满列宽，因此各行胶囊等宽——与 mac 壳

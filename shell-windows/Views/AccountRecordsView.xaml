@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="XTrader.Shell.Views.AccountRecordsView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <StackPanel Spacing="16">
+        <Grid>
+            <!-- 右侧留出「刷新」按钮的位置，长文案换行时不压到按钮 -->
+            <TextBlock x:Name="Hint" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,80,0" />
+            <Button x:Name="RefreshButton" Content="刷新" Click="OnRefreshClick" HorizontalAlignment="Right" />
+        </Grid>
+
+        <Border x:Name="ErrorCard" BorderThickness="1" CornerRadius="18" Padding="20" Visibility="Collapsed">
+            <TextBlock x:Name="ErrorText" TextWrapping="Wrap" />
+        </Border>
+
+        <StackPanel x:Name="AccountPanel" Spacing="16" />
+    </StackPanel>
+</UserControl>

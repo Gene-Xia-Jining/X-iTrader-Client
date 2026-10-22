@@ -5,12 +5,13 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
+using XTrader.Shell.Core;
 using XTrader.Shell.State;
 
 namespace XTrader.Shell.Views;
 
 /// <summary>
-/// 实盘交易页：账户卡片列表（对应 mac 壳的 AccountView）。
+/// 实盘交易页：账户配置（快速开始）+ 实盘账户的交易记录，两个 tab 切换。
 /// 每张卡片持有独立的期货公司单选（跨账户不互斥），支持多个实盘账户并存。
 /// </summary>
 public sealed partial class LiveAccountPage : Page
@@ -39,10 +40,23 @@ public sealed partial class LiveAccountPage : Page
     /// <summary>已建卡片的签名：账户列表变化才重建，避免打字时被状态刷新打断</summary>
     private string _accountsKey = "";
 
+    // -------- 两个 tab：快速开始（账户配置）/ 交易记录（实盘账户的执行明细）--------
+
+    private const string TabPrefKey = "live.tab";
+
+    private enum Tab { Start, Records }
+
+    private Tab _tab = Tab.Start;
+    /// <summary>「交易记录」tab 的主体：懒建一次，切走再切回沿用它自己的数据</summary>
+    private AccountRecordsView? _recordsView;
+
     public LiveAccountPage()
     {
         InitializeComponent();
         _theme = new ThemedPage(this, ApplyPalette, OnStateChanged);
+        _tab = ShellPrefs.Get(TabPrefKey) is "records" ? Tab.Records : Tab.Start;
+        // 构造时就按上次的 tab 定好两栏的可见性，避免首帧闪一下配置卡片
+        ApplyTabStyles();
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -54,12 +68,19 @@ public sealed partial class LiveAccountPage : Page
             return;
         }
         RebuildCards();
+        // 交易记录 tab 每次进入都重新取数（TqSdk 只给当日快照）
+        if (_tab == Tab.Records)
+        {
+            EnsureRecordsView();
+            _recordsView?.Reload();
+        }
     }
 
     private void ApplyPalette()
     {
         // 先切主题再上色：RequestedTheme 会重算模板资源，后设颜色才不会被覆盖
         Root.RequestedTheme = Host.IsDark ? ElementTheme.Dark : ElementTheme.Light;
+        ApplyTabStyles();
         PageTitle.Foreground = Brush(Palette.Ink);
         Subtitle.Foreground = Brush(Palette.Dim);
         Card.Background = Brush(Palette.Card);
@@ -68,6 +89,10 @@ public sealed partial class LiveAccountPage : Page
         foreach (var card in _cards)
         {
             card.Refresh(Host.IsDark);
+        }
+        if (_recordsView is not null && State is not null)
+        {
+            _recordsView.Refresh(State, Host.IsDark);
         }
     }
 
@@ -78,6 +103,56 @@ public sealed partial class LiveAccountPage : Page
         {
             card.RefreshSymbols();
         }
+        // 账户配置变化后提示文案要跟着变（如刚保存了实盘账户）
+        if (_recordsView is not null && State is not null)
+        {
+            _recordsView.Refresh(State, Host.IsDark);
+        }
+    }
+
+    // -------- tab --------
+
+    private void OnStartTabClick(object sender, RoutedEventArgs e) => SwitchTab(Tab.Start);
+
+    private void OnRecordsTabClick(object sender, RoutedEventArgs e) => SwitchTab(Tab.Records);
+
+    private void SwitchTab(Tab tab)
+    {
+        if (_tab == tab)
+        {
+            return;
+        }
+        _tab = tab;
+        ShellPrefs.Set(TabPrefKey, tab == Tab.Records ? "records" : "start");
+        ApplyTabStyles();
+        if (tab == Tab.Records)
+        {
+            EnsureRecordsView();
+            _recordsView?.Reload();
+        }
+    }
+
+    /// <summary>「交易记录」tab 的主体在本页第一次切过去时创建</summary>
+    private void EnsureRecordsView()
+    {
+        if (_recordsView is not null)
+        {
+            return;
+        }
+        _recordsView = new AccountRecordsView("live", "尚未配置实盘账户，请先在「快速开始」里添加账户");
+        RecordsPanel.Children.Add(_recordsView);
+        if (State is not null)
+        {
+            _recordsView.Refresh(State, Host.IsDark);
+        }
+    }
+
+    private void ApplyTabStyles()
+    {
+        _theme.StyleCapsuleTab(StartTab, _tab == Tab.Start);
+        _theme.StyleCapsuleTab(RecordsTab, _tab == Tab.Records);
+        Card.Visibility = _tab == Tab.Start ? Visibility.Visible : Visibility.Collapsed;
+        RecordsPanel.Visibility = _tab == Tab.Records ? Visibility.Visible : Visibility.Collapsed;
     }
 
     // -------- 卡片列表 --------

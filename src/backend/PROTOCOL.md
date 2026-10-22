@@ -50,6 +50,7 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 | `signal_received` | `{signal: {id, symbol, side, price, position, updated_at}}` | 服务器信号到达 |
 | `trade_executed` | `{symbol, target_position}` | 调仓指令已交付 |
 | `trade_failed` | `{symbol, error}` | |
+| `trading_records_updated` | `{kind, account_id, record}` | 账户交易数据变动（资金/持仓/委托/成交），后台常驻 watcher 监听到快期推送后自动广播 |
 | `config_changed` | `{}` | 配置/账户已保存（引擎运行中则下次启动生效） |
 | `token_status` | `{status, records: [...]}` | token 审批状态变化；后台轮询领取成功后广播，壳据此刷新 Token 页 |
 | `update_progress` | `{pct, received, total}` | pct=-1 表示总大小未知 |

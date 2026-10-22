@@ -58,7 +58,6 @@ public sealed partial class MainWindow : Window
         ("token", "Token 管理"),
         ("sim", "模拟交易"),
         ("live", "实盘交易"),
-        ("records", "交易记录"),
         ("log", "系统日志"),
         ("settings", "设置"),
     ];
@@ -200,7 +199,7 @@ public sealed partial class MainWindow : Window
     /// <summary>
     /// 按当前路由与悬停状态刷新导航项配色。
     ///
-    /// 外观对齐交易记录页的「模拟/实盘」分段胶囊：选中为实心主题蓝 + 白字半粗、
+    /// 外观对齐页内分段胶囊（如模拟交易页的「快速开始/交易记录」）：选中为实心主题蓝 + 白字半粗、
     /// 描边同色；未选中为透明底 + 发丝描边，悬停时底色与描边各提一档。
     /// </summary>
     private void ApplyNavItemState(string tag)
@@ -240,7 +239,6 @@ public sealed partial class MainWindow : Window
             "log" => typeof(TradingLogPage),
             "sim" => typeof(SimulationPage),
             "live" => typeof(LiveAccountPage),
-            "records" => typeof(TradeRecordPage),
             "settings" => typeof(SettingsPage),
             _ => typeof(DashboardPage),
         };

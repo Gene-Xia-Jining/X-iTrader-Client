@@ -4,36 +4,31 @@ using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Shapes;
-using XTrader.Shell.Core;
 using XTrader.Shell.State;
 using XTrader.Shell.Theme;
 
 namespace XTrader.Shell.Views;
 
 /// <summary>
-/// 交易记录页：对应快期 App 的交易记录，按「模拟 / 实盘」分 tab，
-/// 每个 tab 展示账户资金、持仓、当日委托与当日成交。
-/// tab 选择写在 ShellPrefs，重启后回到上次查看的那一类账户。
+/// 一类账户的交易记录（资金 / 持仓 / 当日委托与成交）。
+///
+/// 按账户类别取数并渲染，实盘交易页与模拟交易页的「交易记录」tab
+/// 共用这一份实现。宿主页负责在进入页面时 <see cref="Reload"/>、
+/// 主题或状态变化时 <see cref="Refresh"/>。
 /// </summary>
-public sealed partial class TradeRecordPage : Page
+public sealed partial class AccountRecordsView : UserControl
 {
+    private readonly string _kind;
+    private readonly string _notConfiguredHint;
 
-    // -------- 页面公共逻辑（状态 / 宿主窗口 / 主题画刷）--------
+    private AppState? _state;
+    private bool _dark;
+    private Palette Palette => ThemeTokens.For(_dark);
 
-    private readonly ThemedPage _theme;
-
-    private AppState State => _theme.State;
-    private MainWindow Host => _theme.Host;
-    private Palette Palette => _theme.Palette;
-
-    private SolidColorBrush Brush(Windows.UI.Color color) => _theme.Brush(color);
-
-    private const string KindPrefKey = "tradeRecords.kind";
-
-    private string _kind = "live";
     private bool _loading;
+    /// <summary>是否至少完成过一次取数：未取过就不显示「暂无数据」，避免误导</summary>
+    private bool _hasLoaded;
     /// <summary>请求代号：只有最新一次请求的结果会被采用</summary>
     private int _requestSeq;
     private string _errorText = "";
@@ -41,101 +36,74 @@ public sealed partial class TradeRecordPage : Page
     /// <summary>渲染签名：数据/主题/空态变化才重建账户卡片</summary>
     private string _renderKey = "";
 
-    public TradeRecordPage()
+    public AccountRecordsView(string kind, string notConfiguredHint)
     {
         InitializeComponent();
-        _kind = ShellPrefs.Get(KindPrefKey) is "sim" ? "sim" : "live";
-        _theme = new ThemedPage(this, ApplyPalette, OnStateChanged);
-    }
-
-    protected override void OnNavigatedTo(NavigationEventArgs e)
-    {
-        base.OnNavigatedTo(e);
-        _theme.Attach(e);
-        if (State is null)
-        {
-            return;
-        }
-        UpdateTabStyles();
-        _ = LoadAsync();
-    }
-
-    private void ApplyPalette()
-    {
-        // 先切主题再上色：RequestedTheme 会重算模板资源，后设颜色才不会被覆盖
-        Root.RequestedTheme = Host.IsDark ? ElementTheme.Dark : ElementTheme.Light;
-        PageTitle.Foreground = Brush(Palette.Ink);
-        Subtitle.Foreground = Brush(Palette.Dim);
-        Hint.Foreground = Brush(Palette.Dim);
-        ErrorCard.Background = Brush(Palette.Card);
-        ErrorCard.BorderBrush = Brush(Palette.Hairline);
-        ErrorText.Foreground = Brush(Palette.Danger);
-        UpdateTabStyles();
-        _renderKey = "";  // 配色变了，卡片需要重建
-        RenderRecords();
-    }
-
-    private void OnStateChanged()
-    {
-        // 账户配置变化会改变提示文案（例如刚在实盘页保存了账户）
-        Hint.Text = HintText();
-        RenderRecords();
-    }
-
-    // -------- tab --------
-
-    private void OnSimTabClick(object sender, RoutedEventArgs e) => SwitchKind("sim");
-
-    private void OnLiveTabClick(object sender, RoutedEventArgs e) => SwitchKind("live");
-
-    private void SwitchKind(string kind)
-    {
-        if (_kind == kind)
-        {
-            return;
-        }
         _kind = kind;
-        ShellPrefs.Set(KindPrefKey, kind);
-        UpdateTabStyles();
-        _ = LoadAsync(force: true);
+        _notConfiguredHint = notConfiguredHint;
     }
 
-    private void UpdateTabStyles()
+    /// <summary>按当前主题重新着色并刷新提示文案（卡片按渲染签名决定是否重建）。</summary>
+    public void Refresh(AppState state, bool dark)
     {
-        ApplyTab(SimTab, _kind == "sim");
-        ApplyTab(LiveTab, _kind == "live");
-    }
-
-    /// <summary>选中态实心主题色，未选中透明描边（与品种胶囊同风格）</summary>
-    private void ApplyTab(Button tab, bool isOn)
-    {
-        tab.Background = new SolidColorBrush(isOn ? Palette.Primary : Microsoft.UI.Colors.Transparent);
-        tab.BorderBrush = new SolidColorBrush(isOn ? Palette.Primary : Palette.Hairline);
-        tab.BorderThickness = new Thickness(1);
-        tab.Foreground = new SolidColorBrush(isOn ? Microsoft.UI.Colors.White : Palette.Ink);
-        tab.FontWeight = isOn ? FontWeights.SemiBold : FontWeights.Normal;
-    }
-
-    private string HintText()
-    {
-        var count = State.Accounts.Count(a => a.Kind == _kind);
-        if (count == 0)
+        if (_state != state)
         {
-            return _kind == "sim"
-                ? "尚未配置模拟账户，请先在「模拟交易」页保存账户"
-                : "尚未配置实盘账户，请先在「实盘交易」页保存账户";
+            if (_state != null)
+            {
+                _state.RecordsUpdated -= OnRecordsUpdated;
+            }
+            _state = state;
+            if (_state != null)
+            {
+                _state.RecordsUpdated += OnRecordsUpdated;
+            }
         }
-        return _loading ? "正在读取账户数据…" : "数据来自快期账户，仅包含当前交易日";
+        _dark = dark;
+        if (_records.Count == 0 && _state != null)
+        {
+            var cached = _state.GetCachedRecords(_kind);
+            if (cached.Count > 0)
+            {
+                _records = cached;
+                _hasLoaded = true;
+            }
+        }
+        // 先切主题再上色：RequestedTheme 会重算模板资源，后设颜色才不会被覆盖
+        RequestedTheme = dark ? ElementTheme.Dark : ElementTheme.Light;
+        var palette = Palette;
+        Hint.Foreground = Brush(palette.Dim);
+        ErrorCard.Background = Brush(palette.Card);
+        ErrorCard.BorderBrush = Brush(palette.Hairline);
+        ErrorText.Foreground = Brush(palette.Danger);
+        RefreshButton.Foreground = Brush(palette.Primary);
+        RefreshButton.BorderBrush = Brush(palette.Hairline);
+        RefreshButton.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        Hint.Text = HintText();
+        // 签名里已含深浅色，配色变化时卡片会自动重建
+        RenderRecords();
     }
 
-    // -------- 取数 --------
+    private void OnRecordsUpdated(string kind, IReadOnlyList<AccountRecords> list)
+    {
+        if (kind != _kind) return;
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            _records = list;
+            _hasLoaded = true;
+            RenderRecords();
+        });
+    }
+
+    /// <summary>进入页面时取一次最新数据（TqSdk 只给当日快照，停留期间可能已成交）。</summary>
+    public void Reload() => _ = LoadAsync(force: true);
+
+    private SolidColorBrush Brush(Windows.UI.Color color) => new(color);
 
     private void OnRefreshClick(object sender, RoutedEventArgs e) => _ = LoadAsync(force: true);
 
     /// <summary>
-    /// 取当前 tab 的数据。切换 tab 时即便上一个请求还在跑也要重新发起
-    /// （force=true 绕过防重入），用请求代号丢弃过期结果——否则旧请求结束
-    /// 时不匹配新 tab，新 tab 会永远停在「正在读取」。
+    /// 取本类账户的数据。再次刷新时即便上一个请求还在跑也要重新发起
+    /// （force=true 绕过防重入），用请求代号丢弃过期结果。
     /// </summary>
     private async Task LoadAsync(bool force = false)
     {
@@ -143,31 +111,34 @@ public sealed partial class TradeRecordPage : Page
         {
             return;
         }
-        if (State.ConnState != ConnState.Connected)
+        if (_state is null || _state.ConnState != ConnState.Connected)
         {
             _errorText = "后端未连接";
-            _records = [];
+            if (_records.Count == 0)
+            {
+                _records = [];
+            }
             RenderRecords();
             return;
         }
 
         var requestId = ++_requestSeq;
-        var kind = _kind;
         _loading = true;
         _errorText = "";
         Hint.Text = HintText();
         RefreshButton.IsEnabled = false;
         try
         {
-            var resp = await State.CallAsync("trading.records", new JsonObject { ["kind"] = kind });
+            var resp = await _state.CallAsync("trading.records", new JsonObject { ["kind"] = _kind });
             if (requestId != _requestSeq)
             {
-                return;  // 已被更新的请求（切 tab 或再次刷新）取代
+                return;  // 已被更新的请求（再次刷新）取代
             }
             _records = JsonHelpers.ObjectList(resp["accounts"])
                 .Select(AccountRecords.From)
                 .OfType<AccountRecords>()
                 .ToList();
+            _state.SetCachedRecords(_kind, _records);
         }
         catch (Exception ex)
         {
@@ -175,7 +146,10 @@ public sealed partial class TradeRecordPage : Page
             {
                 return;
             }
-            _records = [];
+            if (_records.Count == 0)
+            {
+                _records = [];
+            }
             _errorText = $"读取失败: {ex.Message}";
         }
         finally
@@ -183,6 +157,7 @@ public sealed partial class TradeRecordPage : Page
             if (requestId == _requestSeq)
             {
                 _loading = false;
+                _hasLoaded = true;
                 RefreshButton.IsEnabled = true;
                 Hint.Text = HintText();
                 RenderRecords();
@@ -190,11 +165,26 @@ public sealed partial class TradeRecordPage : Page
         }
     }
 
+    private string HintText()
+    {
+        var count = _state?.Accounts.Count(a => a.Kind == _kind) ?? 0;
+        if (count == 0)
+        {
+            return _notConfiguredHint;
+        }
+        if (_loading)
+        {
+            return _records.Count == 0 ? "正在读取账户数据…" : "正在刷新账户数据…";
+        }
+        return "数据来自快期账户，仅包含当前交易日";
+    }
+
     // -------- 渲染 --------
 
     private void RenderRecords()
     {
-        // 签名要覆盖行内容本身：只按行数判断的话，刷新后手数/价格变了但条数没变就不重建
+        // 签名要覆盖行内容本身：只按行数判断的话，刷新后手数/价格变了但条数没变就不重建。
+        // _loading 不进入 key，避免仅进入刷新中就闪烁清空重建卡片。
         var key = string.Join(
             "|",
             _records.Select(r =>
@@ -202,9 +192,8 @@ public sealed partial class TradeRecordPage : Page
                 + string.Join(",", r.Positions.Select(p => $"{p.Symbol}{p.Direction}{p.Volume}{p.FloatProfit}"))
                 + string.Join(",", r.Orders.Select(o => $"{o.Id}{o.VolumeLeft}{o.StatusText}"))
                 + string.Join(",", r.Trades.Select(t => $"{t.Id}{t.Price}{t.Volume}"))),
-            Host.IsDark,
-            _errorText,
-            _loading);
+            _dark,
+            _errorText);
         if (key == _renderKey)
         {
             return;
@@ -219,7 +208,7 @@ public sealed partial class TradeRecordPage : Page
         {
             AccountPanel.Children.Add(BuildAccountCard(record));
         }
-        if (_records.Count == 0 && _errorText.Length == 0 && !_loading)
+        if (_records.Count == 0 && _errorText.Length == 0 && !_loading && _hasLoaded)
         {
             AccountPanel.Children.Add(BuildEmptyCard("暂无数据"));
         }

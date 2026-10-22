@@ -6,13 +6,27 @@ let BROKER_GROUPS: [(group: String, brokers: [String])] = [
     ("天勤专业版", ["东方汇金", "光大期货", "国泰君安"]),
 ]
 
-/// 实盘交易页：账户卡片列表（像素级对应 Qt AccountPage）。
-/// 每张卡片持有独立的期货公司单选（跨账户不互斥），支持多个实盘账户并存。
+/// 实盘交易页：账户配置（快速开始）+ 实盘账户的交易记录，两个 tab 切换。
+/// 每张账户卡片持有独立的期货公司单选（跨账户不互斥），支持多个实盘账户并存。
 struct AccountView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var scheme
     /// 新建未保存卡片的 id（前端生成，对应 Qt live-{uuid4.hex[:8]}，保存时传给后端）
     @State private var draftIDs: [String] = []
+
+    /// 两个 tab：「快速开始」是原来的账户配置，「交易记录」是实盘账户的执行明细
+    private enum LiveTab: String, CaseIterable {
+        case start
+        case records
+
+        var title: String { self == .start ? "快速开始" : "交易记录" }
+    }
+
+    /// tab 选择存在 UserDefaults，重启后回到上次查看的那一栏
+    private static let tabKey = "live.tab"
+    @State private var tab: LiveTab = LiveTab(
+        rawValue: UserDefaults.standard.string(forKey: AccountView.tabKey) ?? ""
+    ) ?? .start
 
     private var savedAccounts: [AccountInfo] {
         appState.accounts.filter { $0.kind == "live" }
@@ -20,29 +34,42 @@ struct AccountView: View {
 
     var body: some View {
         PageContainer {
+            // 标题常驻：切到「交易记录」tab 也能看出这是实盘交易页
             PageHeader(
                 title: "实盘交易",
                 subtitle: "添加多个实盘账户，每个账户独立选择期货公司与品种，保存后即时生效。"
             )
-            AppCard {
-                VStack(alignment: .leading, spacing: 12) {
-                    AppButton("＋ 添加实盘账户", variant: .secondary) { addDraft() }
-                    brokerHint
-                    // 已保存账户卡在前，新建草稿卡在后（对应 Qt set_accounts + _on_add_clicked）
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(savedAccounts) { account in
-                            AccountCardForm(accountID: account.id, account: account)
+            CapsuleTabBar(tabs: LiveTab.allCases, title: \.title, selection: $tab)
+
+            if tab == .start {
+                AppCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        AppButton("＋ 添加实盘账户", variant: .secondary) { addDraft() }
+                        brokerHint
+                        // 已保存账户卡在前，新建草稿卡在后（对应 Qt set_accounts + _on_add_clicked）
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(savedAccounts) { account in
+                                AccountCardForm(accountID: account.id, account: account)
+                            }
+                            ForEach(draftIDs, id: \.self) { id in
+                                AccountCardForm(accountID: id, account: nil, onDismissed: {
+                                    draftIDs.removeAll { $0 == id }
+                                })
+                            }
                         }
-                        ForEach(draftIDs, id: \.self) { id in
-                            AccountCardForm(accountID: id, account: nil, onDismissed: {
-                                draftIDs.removeAll { $0 == id }
-                            })
-                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(20)
                 }
-                .padding(20)
+            } else {
+                AccountRecordsView(
+                    kind: .live,
+                    notConfiguredHint: "尚未配置实盘账户，请先在「快速开始」里添加账户"
+                )
             }
+        }
+        .onChange(of: tab) { value in
+            UserDefaults.standard.set(value.rawValue, forKey: Self.tabKey)
         }
     }
 

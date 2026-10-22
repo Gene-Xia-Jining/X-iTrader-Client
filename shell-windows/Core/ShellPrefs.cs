@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 namespace XTrader.Shell.Core;
 
 /// <summary>
-/// 壳自身的界面偏好（如交易记录页上次选中的 tab）。
+/// 壳自身的界面偏好（如模拟交易页上次选中的 tab、常见问题展开态）。
 ///
 /// 与业务数据分开存放在数据根目录下：后端只认 <c>data/</c> 与 <c>runtime/</c>，
 /// 壳的偏好不参与后端读写，也不会被全量更新覆盖（更新只替换 runtime/backend）。
@@ -49,6 +49,38 @@ internal static class ShellPrefs
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
             // 同上：偏好写不进去不该打断用户操作
+        }
+    }
+
+    /// <summary>
+    /// 删除若干已废弃的偏好键。键不存在时不做任何事（也不会创建文件）；
+    /// 清理失败只影响遗留数据的去留，不向调用方抛。
+    /// </summary>
+    internal static void Remove(params string[] keys)
+    {
+        try
+        {
+            if (!File.Exists(FilePath))
+            {
+                return;
+            }
+            if (JsonNode.Parse(File.ReadAllText(FilePath)) is not JsonObject root)
+            {
+                return;
+            }
+            var removed = false;
+            foreach (var key in keys)
+            {
+                removed |= root.Remove(key);
+            }
+            if (removed)
+            {
+                File.WriteAllText(FilePath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            // 同 Get / Set：偏好清理失败不该打断用户操作
         }
     }
 }

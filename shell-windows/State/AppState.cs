@@ -368,6 +368,26 @@ public sealed class AppState : INotifyPropertyChanged
         private set => Set(ref _serverSymbolNames, value);
     }
 
+    /// <summary>交易记录实时更新事件通知：(kind, records)</summary>
+    public event Action<string, IReadOnlyList<AccountRecords>>? RecordsUpdated;
+    private readonly Dictionary<string, List<AccountRecords>> _cachedRecords = [];
+
+    public IReadOnlyList<AccountRecords> GetCachedRecords(string kind)
+    {
+        lock (_cachedRecords)
+        {
+            return _cachedRecords.TryGetValue(kind, out var list) ? list.ToList() : [];
+        }
+    }
+
+    public void SetCachedRecords(string kind, IReadOnlyList<AccountRecords> records)
+    {
+        lock (_cachedRecords)
+        {
+            _cachedRecords[kind] = records.ToList();
+        }
+    }
+
     private string _symbolsMessage = "";
     public string SymbolsMessage
     {
@@ -860,6 +880,31 @@ public sealed class AppState : INotifyPropertyChanged
                 break;
             case "trade_failed":
                 AppendLog("ERROR", $"交易失败: {data["symbol"]?.GetValue<string>() ?? "?"} {data["error"]?.GetValue<string>() ?? ""}");
+                break;
+            case "trading_records_updated":
+                var recordKind = data["kind"]?.GetValue<string>() ?? "";
+                if (data["record"] is JsonObject recordObj && AccountRecords.From(recordObj) is { } newRec)
+                {
+                    List<AccountRecords> list;
+                    lock (_cachedRecords)
+                    {
+                        if (!_cachedRecords.TryGetValue(recordKind, out list!))
+                        {
+                            list = [];
+                            _cachedRecords[recordKind] = list;
+                        }
+                        var idx = list.FindIndex(r => r.Id == newRec.Id);
+                        if (idx >= 0)
+                        {
+                            list[idx] = newRec;
+                        }
+                        else
+                        {
+                            list.Add(newRec);
+                        }
+                    }
+                    RecordsUpdated?.Invoke(recordKind, list);
+                }
                 break;
             case "update_progress":
                 UpdateProgress = JsonHelpers.Int(data["pct"]) ?? -1;

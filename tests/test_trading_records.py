@@ -92,6 +92,30 @@ class TradingRecordsTest(unittest.TestCase):
             self.run_records({"kind": "sim"})
         self.assertIn("尚未配置模拟账户", str(ctx.exception))
 
+    def test_records_manager_snapshot_and_broadcast(self):
+        """验证 AccountRecordsManager 快照返回与变更事件广播。"""
+        broadcasts = []
+        self.service.attach_broadcast(lambda ev, data: broadcasts.append((ev, data)))
+
+        # 模拟 Watcher 收到柜台更新并回调
+        mock_snapshot = {
+            "account_id": "s1",
+            "kind": "sim",
+            "label": "模拟",
+            "account": {"balance": 100000.0},
+            "positions": [],
+            "orders": [],
+            "trades": [],
+        }
+        self.service._on_records_updated("s1", "sim", mock_snapshot)
+
+        self.assertEqual(len(broadcasts), 1)
+        event_name, data = broadcasts[0]
+        self.assertEqual(event_name, "trading_records_updated")
+        self.assertEqual(data["kind"], "sim")
+        self.assertEqual(data["account_id"], "s1")
+        self.assertEqual(data["record"]["account"]["balance"], 100000.0)
+
 
 if __name__ == "__main__":
     unittest.main()

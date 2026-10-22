@@ -1,9 +1,23 @@
 import SwiftUI
 
-/// 模拟交易页：快期模拟账户 7 步引导卡片（像素级对应 Qt SimulationPage）。
+/// 模拟交易页：7 步引导（快速开始）+ 模拟账户的交易记录，两个 tab 切换。
 struct SimulationView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var scheme
+
+    /// 两个 tab：「快速开始」是原来的 7 步引导，「交易记录」是模拟账户的执行明细
+    private enum SimTab: String, CaseIterable {
+        case start
+        case records
+
+        var title: String { self == .start ? "快速开始" : "交易记录" }
+    }
+
+    /// tab 选择存在 UserDefaults，重启后回到上次查看的那一栏
+    private static let tabKey = "simulation.tab"
+    @State private var tab: SimTab = SimTab(
+        rawValue: UserDefaults.standard.string(forKey: SimulationView.tabKey) ?? ""
+    ) ?? .start
 
     // 表单
     @State private var phone = ""
@@ -73,53 +87,17 @@ struct SimulationView: View {
 
     var body: some View {
         PageContainer {
-            AppCard {
-                VStack(alignment: .leading, spacing: 12) {
-                    guideLabel("在开始实盘交易之前，您应该通过 1-3 个月的模拟交易建立信心。\n\n我们支持快期的模拟交易，您需要：")
+            tabBar
 
-                    HStack(spacing: 8) {
-                        guideLabel("1，")
-                        entryCapsule("下载快期客户端") { showDownloadLinks = true }
-                    }
-
-                    guideLabelWithLink("2，在快期客户端或天勤官网注册：", "https://account.shinnytech.com/")
-
-                    HStack(spacing: 8) {
-                        guideLabel("3，")
-                        accountEntryCapsule
-                    }
-
-                    serverRow
-
-                    // 第 5 步：胶囊内直接向服务器申请 Token，结果紧随其后显示
-                    HStack(spacing: 8) {
-                        guideLabel("5，")
-                        tokenEntryCapsule
-                        if !tokenHint.isEmpty {
-                            Text(tokenHint)
-                                .font(AppTheme.dimFont)
-                                .foregroundColor(tokenHintColor)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-
-                    HStack(spacing: 8) {
-                        guideLabel("6，")
-                        symbolEntryCapsule
-                    }
-
-                    // 标题与策略胶囊同一行：策略多时在标题右侧换行，不再单占一行
-                    HStack(alignment: .top, spacing: 8) {
-                        guideLabel("7，选择交易策略：")
-                            .padding(.top, 5)
-                        strategyPicker
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                .padding(20)
+            if tab == .start {
+                startGuide
+                faqCard
+            } else {
+                AccountRecordsView(
+                    kind: .sim,
+                    notConfiguredHint: "尚未配置模拟账户，请先在「快速开始」里保存账户"
+                )
             }
-
-            faqCard
         }
         .onAppear {
             fillFromAccount()
@@ -158,6 +136,67 @@ struct SimulationView: View {
             if showSymbolPicker {
                 symbolPickerOverlay
             }
+        }
+        .onChange(of: tab) { value in
+            UserDefaults.standard.set(value.rawValue, forKey: Self.tabKey)
+            // 切到交易记录时把品种弹层一并收起，避免遮罩留在记录列表上
+            showSymbolPicker = false
+        }
+    }
+
+    // ---- 顶部 tab（等高胶囊，选中态实心，与侧栏选中态同风格）----
+
+    private var tabBar: some View {
+        CapsuleTabBar(tabs: SimTab.allCases, title: \.title, selection: $tab)
+    }
+
+    // MARK: - 快速开始（7 步引导）
+
+    private var startGuide: some View {
+        AppCard {
+            VStack(alignment: .leading, spacing: 12) {
+                guideLabel("在开始实盘交易之前，您应该通过 1-3 个月的模拟交易建立信心。\n\n我们支持快期的模拟交易，您需要：")
+
+                HStack(spacing: 8) {
+                    guideLabel("1，")
+                    entryCapsule("下载快期客户端") { showDownloadLinks = true }
+                }
+
+                guideLabelWithLink("2，在快期客户端或天勤官网注册：", "https://account.shinnytech.com/")
+
+                HStack(spacing: 8) {
+                    guideLabel("3，")
+                    accountEntryCapsule
+                }
+
+                serverRow
+
+                // 第 5 步：胶囊内直接向服务器申请 Token，结果紧随其后显示
+                HStack(spacing: 8) {
+                    guideLabel("5，")
+                    tokenEntryCapsule
+                    if !tokenHint.isEmpty {
+                        Text(tokenHint)
+                            .font(AppTheme.dimFont)
+                            .foregroundColor(tokenHintColor)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    guideLabel("6，")
+                    symbolEntryCapsule
+                }
+
+                // 标题与策略胶囊同一行：策略多时在标题右侧换行，不再单占一行
+                HStack(alignment: .top, spacing: 8) {
+                    guideLabel("7，选择交易策略：")
+                        .padding(.top, 5)
+                    strategyPicker
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(20)
         }
     }
 
@@ -232,7 +271,7 @@ struct SimulationView: View {
         FaqItem(
             question: "出问题的时候去哪里看？",
             answer: "「系统日志」页有完整的运行日志，包含连接、信号、下单与错误信息；"
-            + "交易执行明细可以在「交易记录」页按模拟 / 实盘分别查看。"
+            + "交易执行明细可以在本页「交易记录」tab 查看模拟账户，实盘账户在「实盘交易」页的「交易记录」tab 查看。"
         ),
     ]
 
