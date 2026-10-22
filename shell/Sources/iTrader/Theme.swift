@@ -101,19 +101,66 @@ struct PageHeader: View {
     }
 }
 
+/// 通用帮助问号按钮（圆形描边 "?"，悬停高亮，点击弹出 popover）
+struct AppHelpButton: View {
+    let text: String
+    @Binding var isPresented: Bool
+    @State private var isHovering = false
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Button { isPresented = true } label: {
+            Text("?")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(AppTheme.primary(scheme))
+                .frame(width: 20, height: 20)
+                .background(isHovering ? AppTheme.sidebarHover(scheme) : .clear)
+                .cornerRadius(10)
+                .overlay(Circle().stroke(AppTheme.hairline(scheme), lineWidth: 1))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .onHover { isHovering = $0 }
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            Text(text)
+                .font(AppTheme.dimFont)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 320, alignment: .leading)
+                .padding(12)
+        }
+    }
+}
+
 /// 页内分段 tab（等高胶囊，选中态实心，与侧栏选中态同风格）。
-/// 模拟交易页与实盘交易页的「快速开始 / 交易记录」切换共用这一套外观。
-struct CapsuleTabBar<Tab: Hashable>: View {
+/// 模拟交易页与实盘交易页的「快速开始 / 交易记录 / 历史成交」切换共用这一套外观。
+struct CapsuleTabBar<Tab: Hashable, Trailing: View>: View {
     let tabs: [Tab]
     let title: (Tab) -> String
     @Binding var selection: Tab
+    let trailingView: (Tab) -> Trailing
 
     @Environment(\.colorScheme) private var scheme
+
+    init(
+        tabs: [Tab],
+        title: @escaping (Tab) -> String,
+        selection: Binding<Tab>,
+        @ViewBuilder trailing: @escaping (Tab) -> Trailing
+    ) {
+        self.tabs = tabs
+        self.title = title
+        self._selection = selection
+        self.trailingView = trailing
+    }
 
     var body: some View {
         HStack(spacing: 10) {
             ForEach(tabs, id: \.self) { item in
-                button(item)
+                HStack(spacing: 8) {
+                    button(item)
+                    trailingView(item)
+                }
             }
             Spacer()
         }
@@ -138,6 +185,16 @@ struct CapsuleTabBar<Tab: Hashable>: View {
         }
         .buttonStyle(.plain)
         .pointerCursor()
+    }
+}
+
+extension CapsuleTabBar where Trailing == EmptyView {
+    init(
+        tabs: [Tab],
+        title: @escaping (Tab) -> String,
+        selection: Binding<Tab>
+    ) {
+        self.init(tabs: tabs, title: title, selection: selection) { _ in EmptyView() }
     }
 }
 

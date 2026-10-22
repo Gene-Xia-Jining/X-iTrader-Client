@@ -103,11 +103,12 @@ def _int(value, default: int = 0) -> int:
 
 
 def _time_text(nanoseconds) -> Optional[str]:
-    """tqsdk 时间字段是 unix 纳秒，转北京时间可读文本（客户端直接展示）。"""
+    """tqsdk 时间字段是 unix 纳秒，转北京时间可读文本（精确到毫秒，客户端直接展示）。"""
     number = _number(nanoseconds)
     if not number:
         return None
-    return datetime.fromtimestamp(number / 1e9, _BEIJING).strftime("%Y-%m-%d %H:%M:%S")
+    dt = datetime.fromtimestamp(number / 1e9, _BEIJING)
+    return dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 
 def _symbol(exchange_id: str, instrument_id: str) -> str:

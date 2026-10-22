@@ -14,12 +14,19 @@ struct AccountView: View {
     /// 新建未保存卡片的 id（前端生成，对应 Qt live-{uuid4.hex[:8]}，保存时传给后端）
     @State private var draftIDs: [String] = []
 
-    /// 两个 tab：「快速开始」是原来的账户配置，「交易记录」是实盘账户的执行明细
+    /// 三个 tab：「快速开始」是原来的账户配置，「交易记录」是资金、持仓与当日委托，「历史成交」是成交记录
     private enum LiveTab: String, CaseIterable {
         case start
         case records
+        case trades
 
-        var title: String { self == .start ? "快速开始" : "交易记录" }
+        var title: String {
+            switch self {
+            case .start: return "快速开始"
+            case .records: return "交易记录"
+            case .trades: return "历史成交"
+            }
+        }
     }
 
     /// tab 选择存在 UserDefaults，重启后回到上次查看的那一栏
@@ -27,6 +34,15 @@ struct AccountView: View {
     @State private var tab: LiveTab = LiveTab(
         rawValue: UserDefaults.standard.string(forKey: AccountView.tabKey) ?? ""
     ) ?? .start
+    @State private var showTradesHelp = false
+
+    private let tradesHelpText = """
+    数据包含本地 SQLite 历史沉淀成交记录。
+
+    • 本地沉淀：快期账户通常仅保留当日实时成交推送，客户端将每笔成交自动持久化至本地 SQLite 数据库，跨交易日长期留存。
+    • 盈亏计算：自动按先进先出原则匹配开平仓，统计单笔平仓盈亏与累计平仓收益。
+    • 多维追溯：支持今日、近3天、近7天及全部历史筛选，点击任意成交行可查看合约与订单详细信息。
+    """
 
     private var savedAccounts: [AccountInfo] {
         appState.accounts.filter { $0.kind == "live" }
@@ -39,7 +55,11 @@ struct AccountView: View {
                 title: "实盘交易",
                 subtitle: "添加多个实盘账户，每个账户独立选择期货公司与品种，保存后即时生效。"
             )
-            CapsuleTabBar(tabs: LiveTab.allCases, title: \.title, selection: $tab)
+            CapsuleTabBar(tabs: LiveTab.allCases, title: \.title, selection: $tab) { item in
+                if item == .trades {
+                    AppHelpButton(text: tradesHelpText, isPresented: $showTradesHelp)
+                }
+            }
 
             if tab == .start {
                 AppCard {
@@ -61,9 +81,16 @@ struct AccountView: View {
                     }
                     .padding(20)
                 }
+            } else if tab == .records {
+                AccountRecordsView(
+                    kind: .live,
+                    mode: .records,
+                    notConfiguredHint: "尚未配置实盘账户，请先在「快速开始」里添加账户"
+                )
             } else {
                 AccountRecordsView(
                     kind: .live,
+                    mode: .trades,
                     notConfiguredHint: "尚未配置实盘账户，请先在「快速开始」里添加账户"
                 )
             }

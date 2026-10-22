@@ -116,6 +116,7 @@ public sealed class OrderRecord
 public sealed class TradeRecord
 {
     public string Id { get; init; } = "";
+    public string OrderId { get; init; } = "";
     public string Symbol { get; init; } = "";
     public string DirectionText { get; init; } = "";
     public string OffsetText { get; init; } = "";
@@ -135,6 +136,7 @@ public sealed class TradeRecord
         return new TradeRecord
         {
             Id = id,
+            OrderId = dict["order_id"]?.GetValue<string>() ?? "",
             Symbol = dict["symbol"]?.GetValue<string>() ?? "",
             DirectionText = dict["direction_text"]?.GetValue<string>() ?? "",
             OffsetText = dict["offset_text"]?.GetValue<string>() ?? "",

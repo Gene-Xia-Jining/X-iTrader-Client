@@ -70,15 +70,17 @@ public sealed partial class SimulationPage : Page
     private string _symbolKey = "";
     private string _strategyKey = "";
 
-    // -------- 两个 tab：快速开始（原 7 步引导）/ 交易记录（模拟账户的执行明细）--------
+    // -------- 三个 tab：快速开始（原 7 步引导）/ 交易记录（资金、持仓与当日委托）/ 历史成交（成交记录明细）--------
 
     private const string TabPrefKey = "simulation.tab";
 
-    private enum Tab { Start, Records }
+    private enum Tab { Start, Records, Trades }
 
     private Tab _tab = Tab.Start;
     /// <summary>「交易记录」tab 的主体：懒建一次，切走再切回沿用它自己的数据</summary>
     private AccountRecordsView? _recordsView;
+    /// <summary>「历史成交」tab 的主体：懒建一次，切走再切回沿用它自己的数据</summary>
+    private AccountRecordsView? _tradesView;
 
     // -------- 常见问题（展开状态存 ShellPrefs；展开后只列问题，点问题弹窗看详细）--------
 
@@ -207,7 +209,12 @@ public sealed partial class SimulationPage : Page
         // 展开状态在构造时恢复：页面切走再回来不该被重置成收起
         _faqExpanded = ShellPrefs.Get(FaqPrefKey) is "1";
         RenderFaq();
-        _tab = ShellPrefs.Get(TabPrefKey) is "records" ? Tab.Records : Tab.Start;
+        _tab = ShellPrefs.Get(TabPrefKey) switch
+        {
+            "trades" => Tab.Trades,
+            "records" => Tab.Records,
+            _ => Tab.Start,
+        };
         // 构造时就按上次的 tab 定好两栏的可见性，避免首帧闪一下引导卡片
         ApplyTabStyles();
 
@@ -739,11 +746,16 @@ public sealed partial class SimulationPage : Page
         FillServerUrl();
         // 第 5 步要在胶囊后显示当前审批状态，进页面时拉一次
         State.RefreshTokenStatus();
-        // 交易记录 tab 每次进入都重新取数（TqSdk 只给当日快照）
+        // 交易记录 / 历史成交 tab 每次进入都重新取数（TqSdk 只给当日快照）
         if (_tab == Tab.Records)
         {
             EnsureRecordsView();
             _recordsView?.Reload();
+        }
+        else if (_tab == Tab.Trades)
+        {
+            EnsureTradesView();
+            _tradesView?.Reload();
         }
     }
 
@@ -753,6 +765,18 @@ public sealed partial class SimulationPage : Page
 
     private void OnRecordsTabClick(object sender, RoutedEventArgs e) => SwitchTab(Tab.Records);
 
+    private void OnTradesTabClick(object sender, RoutedEventArgs e) => SwitchTab(Tab.Trades);
+
+    private async void OnTradesHelpClick(object sender, RoutedEventArgs e)
+    {
+        await ShowHelpAsync(
+            "历史成交",
+            "数据包含本地 SQLite 历史沉淀成交记录。\n\n"
+            + "• 本地沉淀：快期账户通常仅保留当日实时成交推送，客户端将每笔成交自动持久化至本地 SQLite 数据库，跨交易日长期留存。\n"
+            + "• 盈亏计算：自动按先进先出原则匹配开平仓，统计单笔平仓盈亏与累计平仓收益。\n"
+            + "• 多维追溯：支持今日、近3天、近7天及全部历史筛选，点击任意成交行可查看合约与订单详细信息。");
+    }
+
     private void SwitchTab(Tab tab)
     {
         if (_tab == tab)
@@ -760,9 +784,14 @@ public sealed partial class SimulationPage : Page
             return;
         }
         _tab = tab;
-        ShellPrefs.Set(TabPrefKey, tab == Tab.Records ? "records" : "start");
-        // 切到交易记录时收起品种弹层，避免遮罩留在记录列表上
-        if (tab == Tab.Records)
+        ShellPrefs.Set(TabPrefKey, tab switch
+        {
+            Tab.Trades => "trades",
+            Tab.Records => "records",
+            _ => "start",
+        });
+        // 切到交易记录/历史成交时收起品种弹层，避免遮罩留在记录列表上
+        if (tab != Tab.Start)
         {
             HideSymbolDialog();
         }
@@ -771,6 +800,11 @@ public sealed partial class SimulationPage : Page
         {
             EnsureRecordsView();
             _recordsView?.Reload();
+        }
+        else if (tab == Tab.Trades)
+        {
+            EnsureTradesView();
+            _tradesView?.Reload();
         }
     }
 
@@ -781,7 +815,7 @@ public sealed partial class SimulationPage : Page
         {
             return;
         }
-        _recordsView = new AccountRecordsView("sim", "尚未配置模拟账户，请先在「快速开始」里保存账户");
+        _recordsView = new AccountRecordsView("sim", "尚未配置模拟账户，请先在「快速开始」里保存账户", AccountRecordsMode.Records);
         RecordsPanel.Children.Add(_recordsView);
         if (State is not null)
         {
@@ -789,13 +823,30 @@ public sealed partial class SimulationPage : Page
         }
     }
 
+    /// <summary>「历史成交」tab 的主体在本页第一次切过去时创建</summary>
+    private void EnsureTradesView()
+    {
+        if (_tradesView is not null)
+        {
+            return;
+        }
+        _tradesView = new AccountRecordsView("sim", "尚未配置模拟账户，请先在「快速开始」里保存账户", AccountRecordsMode.Trades);
+        TradesPanel.Children.Add(_tradesView);
+        if (State is not null)
+        {
+            _tradesView.Refresh(State, Host.IsDark);
+        }
+    }
+
     private void ApplyTabStyles()
     {
         _theme.StyleCapsuleTab(StartTab, _tab == Tab.Start);
         _theme.StyleCapsuleTab(RecordsTab, _tab == Tab.Records);
+        _theme.StyleCapsuleTab(TradesTab, _tab == Tab.Trades);
         Card.Visibility = _tab == Tab.Start ? Visibility.Visible : Visibility.Collapsed;
         FaqCard.Visibility = _tab == Tab.Start ? Visibility.Visible : Visibility.Collapsed;
         RecordsPanel.Visibility = _tab == Tab.Records ? Visibility.Visible : Visibility.Collapsed;
+        TradesPanel.Visibility = _tab == Tab.Trades ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void ApplyPalette()
@@ -884,7 +935,7 @@ public sealed partial class SimulationPage : Page
         SymbolDialogClose.BorderBrush = Brush(Palette.Hairline);
         SymbolDialogDivider.Fill = Brush(Palette.Divider);
 
-        foreach (var help in new[] { SymbolHelpButton, ServerHelpButton, TokenHelpButton })
+        foreach (var help in new[] { SymbolHelpButton, ServerHelpButton, TokenHelpButton, TradesHelpButton })
         {
             help.Foreground = Brush(Palette.Primary);
             help.BorderBrush = Brush(Palette.Hairline);
@@ -906,6 +957,15 @@ public sealed partial class SimulationPage : Page
         _symbolKey = "";
         _strategyKey = "";
         RenderCapsules();
+
+        if (_recordsView is not null && State is not null)
+        {
+            _recordsView.Refresh(State, Host.IsDark);
+        }
+        if (_tradesView is not null && State is not null)
+        {
+            _tradesView.Refresh(State, Host.IsDark);
+        }
     }
 
     private void OnStateChanged()
@@ -917,6 +977,10 @@ public sealed partial class SimulationPage : Page
         if (_recordsView is not null && State is not null)
         {
             _recordsView.Refresh(State, Host.IsDark);
+        }
+        if (_tradesView is not null && State is not null)
+        {
+            _tradesView.Refresh(State, Host.IsDark);
         }
     }
 

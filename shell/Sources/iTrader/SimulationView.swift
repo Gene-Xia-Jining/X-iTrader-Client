@@ -5,12 +5,19 @@ struct SimulationView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var scheme
 
-    /// 两个 tab：「快速开始」是原来的 7 步引导，「交易记录」是模拟账户的执行明细
+    /// 三个 tab：「快速开始」是原来的 7 步引导，「交易记录」是资金、持仓与当日委托，「历史成交」是成交记录
     private enum SimTab: String, CaseIterable {
         case start
         case records
+        case trades
 
-        var title: String { self == .start ? "快速开始" : "交易记录" }
+        var title: String {
+            switch self {
+            case .start: return "快速开始"
+            case .records: return "交易记录"
+            case .trades: return "历史成交"
+            }
+        }
     }
 
     /// tab 选择存在 UserDefaults，重启后回到上次查看的那一栏
@@ -18,6 +25,7 @@ struct SimulationView: View {
     @State private var tab: SimTab = SimTab(
         rawValue: UserDefaults.standard.string(forKey: SimulationView.tabKey) ?? ""
     ) ?? .start
+    @State private var showTradesHelp = false
 
     // 表单
     @State private var phone = ""
@@ -92,9 +100,16 @@ struct SimulationView: View {
             if tab == .start {
                 startGuide
                 faqCard
+            } else if tab == .records {
+                AccountRecordsView(
+                    kind: .sim,
+                    mode: .records,
+                    notConfiguredHint: "尚未配置模拟账户，请先在「快速开始」里保存账户"
+                )
             } else {
                 AccountRecordsView(
                     kind: .sim,
+                    mode: .trades,
                     notConfiguredHint: "尚未配置模拟账户，请先在「快速开始」里保存账户"
                 )
             }
@@ -139,7 +154,7 @@ struct SimulationView: View {
         }
         .onChange(of: tab) { value in
             UserDefaults.standard.set(value.rawValue, forKey: Self.tabKey)
-            // 切到交易记录时把品种弹层一并收起，避免遮罩留在记录列表上
+            // 切到交易记录/历史成交时把品种弹层一并收起，避免遮罩留在记录列表上
             showSymbolPicker = false
         }
     }
@@ -147,8 +162,20 @@ struct SimulationView: View {
     // ---- 顶部 tab（等高胶囊，选中态实心，与侧栏选中态同风格）----
 
     private var tabBar: some View {
-        CapsuleTabBar(tabs: SimTab.allCases, title: \.title, selection: $tab)
+        CapsuleTabBar(tabs: SimTab.allCases, title: \.title, selection: $tab) { item in
+            if item == .trades {
+                AppHelpButton(text: tradesHelpText, isPresented: $showTradesHelp)
+            }
+        }
     }
+
+    private let tradesHelpText = """
+    数据包含本地 SQLite 历史沉淀成交记录。
+
+    • 本地沉淀：快期账户通常仅保留当日实时成交推送，客户端将每笔成交自动持久化至本地 SQLite 数据库，跨交易日长期留存。
+    • 盈亏计算：自动按先进先出原则匹配开平仓，统计单笔平仓盈亏与累计平仓收益。
+    • 多维追溯：支持今日、近3天、近7天及全部历史筛选，点击任意成交行可查看合约与订单详细信息。
+    """
 
     // MARK: - 快速开始（7 步引导）
 

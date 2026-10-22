@@ -35,8 +35,10 @@ class NumberTest(unittest.TestCase):
 
 class TimeTextTest(unittest.TestCase):
     def test_nanoseconds_to_beijing_time(self):
-        # 2024-01-01 00:00:00 UTC = 北京时间 08:00:00
-        self.assertEqual(_time_text(1704067200 * 10**9), "2024-01-01 08:00:00")
+        # 2024-01-01 00:00:00 UTC = 北京时间 08:00:00.000
+        self.assertEqual(_time_text(1704067200 * 10**9), "2024-01-01 08:00:00.000")
+        # 带毫秒的纳秒
+        self.assertEqual(_time_text(1704067200 * 10**9 + 123 * 10**6), "2024-01-01 08:00:00.123")
 
     def test_missing_time(self):
         self.assertIsNone(_time_text(0))
@@ -163,7 +165,7 @@ class TradeRowsTest(unittest.TestCase):
         rows = _trade_rows(trades)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["offset_text"], "开仓")
-        self.assertEqual(rows[0]["trade_time"], "2024-01-01 08:00:30")
+        self.assertEqual(rows[0]["trade_time"], "2024-01-01 08:00:30.000")
 
 
 class AccountSnapshotTest(unittest.TestCase):

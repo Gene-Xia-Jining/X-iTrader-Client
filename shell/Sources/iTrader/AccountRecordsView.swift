@@ -93,6 +93,7 @@ struct OrderRecord: Identifiable {
 /// 成交行
 struct TradeRecord: Identifiable {
     let id: String
+    let orderId: String
     let symbol: String
     let directionText: String
     let offsetText: String
@@ -107,6 +108,7 @@ struct TradeRecord: Identifiable {
         guard let id = dict["trade_id"] as? String, !id.isEmpty else { return nil }
         return TradeRecord(
             id: id,
+            orderId: dict["order_id"] as? String ?? "",
             symbol: dict["symbol"] as? String ?? "",
             directionText: dict["direction_text"] as? String ?? "",
             offsetText: dict["offset_text"] as? String ?? "",
@@ -118,6 +120,13 @@ struct TradeRecord: Identifiable {
             source: dict["source"] as? String ?? "智能信号"
         )
     }
+}
+
+/// 成交明细弹窗载体
+struct TradeDetailModal: Identifiable {
+    var id: String { trade.id }
+    let trade: TradeRecord
+    let accountLabel: String
 }
 
 /// 历史时间筛选范围
@@ -172,6 +181,12 @@ enum RecordKind: String, CaseIterable {
     var title: String { self == .sim ? "模拟交易" : "实盘交易" }
 }
 
+/// 显示模式：交易记录（资金、持仓、当日委托） / 历史成交（成交记录与时间范围筛选）
+enum AccountRecordsMode {
+    case records
+    case trades
+}
+
 // JSON 数字经由 NSNumber 解出（JSONSerialization 不区分 Int/Double）
 private extension Dictionary where Key == String, Value == Any {
     func double(_ key: String) -> Double? {
@@ -190,6 +205,7 @@ private extension Dictionary where Key == String, Value == Any {
 /// 实盘交易页与模拟交易页的「交易记录」tab 共用这一份实现，只按 kind 区分账户类别。
 struct AccountRecordsView: View {
     let kind: RecordKind
+    var mode: AccountRecordsMode = .records
     /// 尚未配置这类账户时的引导文案：两个入口指向不同的配置位置
     let notConfiguredHint: String
 
@@ -205,6 +221,8 @@ struct AccountRecordsView: View {
     @State private var requestSeq = 0
     /// 历史时间范围筛选
     @State private var selectedDateRange: RecordDateRange = .today
+    /// 点击查看明细的成交
+    @State private var selectedTradeModal: TradeDetailModal? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -213,7 +231,9 @@ struct AccountRecordsView: View {
                     .font(AppTheme.dimFont)
                     .foregroundColor(AppTheme.dim(scheme))
                 Spacer()
-                dateRangeCapsules
+                if mode == .trades {
+                    dateRangeCapsules
+                }
                 AppButton("刷新", variant: .secondary, disabled: loading) { load() }
             }
 
@@ -234,6 +254,9 @@ struct AccountRecordsView: View {
                         .padding(.vertical, 28)
                 }
             }
+        }
+        .sheet(item: $selectedTradeModal) { modal in
+            tradeDetailSheet(modal)
         }
         .onAppear {
             if let cached = appState.cachedRecords[kind.rawValue], !cached.isEmpty {
@@ -287,10 +310,10 @@ struct AccountRecordsView: View {
         if loading {
             return records.isEmpty ? "正在读取账户数据…" : "正在刷新账户数据…"
         }
-        if selectedDateRange == .today {
-            return "数据来自快期账户，包含当日实时推送"
+        if mode == .trades {
+            return ""
         }
-        return "数据包含本地 SQLite 历史沉淀成交记录"
+        return "数据来自快期账户，包含当日实时推送"
     }
 
     // ---- 取数 ----
@@ -308,11 +331,12 @@ struct AccountRecordsView: View {
         Task {
             let result: Result<[AccountRecords], Error>
             do {
+                let range = mode == .trades ? selectedDateRange.rawValue : "today"
                 let resp = try await appState.call(
                     method: "trading.records",
                     params: [
                         "kind": kind.rawValue,
-                        "date_range": selectedDateRange.rawValue
+                        "date_range": range
                     ]
                 )
                 result = .success(
@@ -344,18 +368,20 @@ struct AccountRecordsView: View {
     private func accountCard(_ record: AccountRecords) -> some View {
         AppCard {
             VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 8) {
-                    Text(record.label)
-                        .font(AppTheme.bodyFont.weight(.semibold))
-                        .foregroundColor(AppTheme.ink(scheme))
-                    Text(record.kind == "sim" ? "模拟" : "实盘")
-                        .font(AppTheme.dimFont)
-                        .foregroundColor(AppTheme.dim(scheme))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(AppTheme.soft(scheme))
-                        .cornerRadius(9)
-                    Spacer()
+                if mode != .trades {
+                    HStack(spacing: 8) {
+                        Text(record.label)
+                            .font(AppTheme.bodyFont.weight(.semibold))
+                            .foregroundColor(AppTheme.ink(scheme))
+                        Text(record.kind == "sim" ? "模拟" : "实盘")
+                            .font(AppTheme.dimFont)
+                            .foregroundColor(AppTheme.dim(scheme))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(AppTheme.soft(scheme))
+                            .cornerRadius(9)
+                        Spacer()
+                    }
                 }
 
                 if !record.error.isEmpty {
@@ -363,11 +389,12 @@ struct AccountRecordsView: View {
                         .font(AppTheme.dimFont)
                         .foregroundColor(AppTheme.danger(scheme))
                         .fixedSize(horizontal: false, vertical: true)
-                } else {
+                } else if mode == .records {
                     metricsRow(record.account)
                     section("持仓") { positionTable(record.positions) }
-                    section(selectedDateRange == .today ? "当日委托" : "委托记录") { orderTable(record.orders) }
-                    section(selectedDateRange == .today ? "当日成交" : "成交记录") { tradeTable(record.trades) }
+                    section("当日委托") { orderTable(record.orders) }
+                } else {
+                    tradeTable(record.trades, accountLabel: record.label)
                 }
             }
             .padding(20)
@@ -456,7 +483,7 @@ struct AccountRecordsView: View {
 
         return recordTable(
             headers: ["委托时间", "合约", "买卖", "开平", "手数", "成交", "委托价", "成交价", "状态", "来源"],
-            widths: [nil, nil, 36, 40, 40, 40, nil, nil, 60, 68],
+            widths: [nil, nil, 36, 40, 40, 40, nil, nil, 60, 84],
             empty: "无委托记录",
             isEmpty: rows.isEmpty
         ) {
@@ -475,9 +502,9 @@ struct AccountRecordsView: View {
                         .text(formatPrice(row.limitPrice)),
                         .text(formatPrice(row.tradePrice)),
                         .withTip(row.statusText, statusColor, row.lastMsg),
-                        sourceBadge(row.source),
+                        sourceBadge(displaySource(row.source)),
                     ],
-                    widths: [nil, nil, 36, 40, 40, 40, nil, nil, 60, 68]
+                    widths: [nil, nil, 36, 40, 40, 40, nil, nil, 60, 84]
                 )
             }
             if !rows.isEmpty {
@@ -489,7 +516,63 @@ struct AccountRecordsView: View {
         }
     }
 
-    private func tradeTable(_ rows: [TradeRecord]) -> some View {
+    /// 从合约代码提取品种纯文字名称（如「纯碱」）
+    private func displayVariety(_ symbol: String) -> String {
+        let clean = symbol.components(separatedBy: ".").last ?? symbol
+        let letters = String(clean.prefix { $0.isLetter }).uppercased()
+        guard !letters.isEmpty else { return symbol }
+        if let name = appState.serverSymbolNames[letters], !name.isEmpty {
+            return name
+        }
+        return letters
+    }
+
+    /// 来源显示：策略｜1003 格式，手动显示为 手动
+    private func displaySource(_ source: String) -> String {
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "手动/外部" || trimmed == "手动" {
+            return "手动"
+        }
+        if trimmed.hasPrefix("策略｜") {
+            return trimmed
+        }
+        if trimmed.hasPrefix("策略|") {
+            return "策略｜" + trimmed.dropFirst(3)
+        }
+        if trimmed.hasPrefix("策略 | ") {
+            return "策略｜" + trimmed.dropFirst(5)
+        }
+        if let matched = appState.serverStrategies.first(where: {
+            $0.id.caseInsensitiveCompare(trimmed) == .orderedSame || $0.name == trimmed
+        }) {
+            let id = !matched.id.isEmpty ? matched.id : matched.name
+            return "策略｜\(id)"
+        }
+        if trimmed == "智能信号" {
+            if let sim = appState.accounts.first(where: { $0.kind == kind.rawValue }),
+               !sim.strategy.isEmpty {
+                return "策略｜\(sim.strategy)"
+            }
+            if let first = appState.serverStrategies.first, !first.id.isEmpty {
+                return "策略｜\(first.id)"
+            }
+            return "策略｜智能信号"
+        }
+        return "策略｜\(trimmed)"
+    }
+
+    /// 解析成交时间为日期和精确到毫秒的时间
+    private func parseTradeTime(_ raw: String) -> (date: String, clock: String) {
+        let parts = raw.split(separator: " ")
+        let dateStr = parts.first.map(String.init) ?? raw
+        var clockStr = parts.count > 1 ? String(parts[1]) : ""
+        if !clockStr.isEmpty && !clockStr.contains(".") && clockStr.count == 8 {
+            clockStr += ".000"
+        }
+        return (dateStr, clockStr)
+    }
+
+    private func tradeTable(_ rows: [TradeRecord], accountLabel: String) -> some View {
         let totalVol = rows.reduce(0) { $0 + $1.volume }
         let openVol = rows.filter { $0.offsetText == "开仓" }.reduce(0) { $0 + $1.volume }
         let closeVol = rows.filter { $0.offsetText != "开仓" }.reduce(0) { $0 + $1.volume }
@@ -497,13 +580,19 @@ struct AccountRecordsView: View {
         let hasCloseProfit = !closeProfits.isEmpty
         let totalRealized = closeProfits.reduce(0, +)
 
+        let headers = ["编号", "日期", "时间", "品种", "来源", "买卖", "开平", "成交价", "手数", "平仓盈亏"]
+        let widths: [CGFloat?] = [36, 80, 92, 60, 84, 36, 40, 68, 40, 76]
+        let alignments: [Alignment] = [.center, .leading, .leading, .leading, .center, .center, .center, .trailing, .trailing, .trailing]
+
         return recordTable(
-            headers: ["成交时间", "合约", "买卖", "开平", "成交价", "手数", "平仓盈亏", "来源"],
-            widths: [nil, nil, 36, 40, nil, 40, 75, 68],
+            headers: headers,
+            widths: widths,
+            alignments: alignments,
+            trailingSpacer: true,
             empty: "无成交记录",
             isEmpty: rows.isEmpty
         ) {
-            ForEach(rows) { row in
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                 let profitCell: Cell = {
                     if row.offsetText == "开仓" {
                         return .colored("—", AppTheme.dim(scheme))
@@ -514,19 +603,36 @@ struct AccountRecordsView: View {
                     return .colored("—", AppTheme.dim(scheme))
                 }()
 
-                tableRow(
-                    cells: [
-                        .text(row.tradeTime),
-                        .text(row.symbol),
-                        .colored(row.directionText, sideColor(row.directionText)),
-                        .text(row.offsetText),
-                        .text(formatPrice(row.price)),
-                        .text("\(row.volume)"),
-                        profitCell,
-                        sourceBadge(row.source),
-                    ],
-                    widths: [nil, nil, 36, 40, nil, 40, 75, 68]
-                )
+                let timeInfo = parseTradeTime(row.tradeTime)
+                let dateStr = timeInfo.date
+                let clockStr = timeInfo.clock
+                let variety = displayVariety(row.symbol)
+                let sourceDisplay = displaySource(row.source)
+
+                Button {
+                    selectedTradeModal = TradeDetailModal(trade: row, accountLabel: accountLabel)
+                } label: {
+                    tableRow(
+                        cells: [
+                            .text("\(index + 1)"),
+                            .text(dateStr),
+                            .text(clockStr),
+                            .text(variety),
+                            sourceBadge(sourceDisplay),
+                            .colored(row.directionText, sideColor(row.directionText)),
+                            .text(row.offsetText),
+                            .text(formatPrice(row.price)),
+                            .text("\(row.volume)"),
+                            profitCell,
+                        ],
+                        widths: widths,
+                        alignments: alignments,
+                        trailingSpacer: true
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(TableRowButtonStyle(scheme: scheme))
+                .pointerCursor()
             }
             if !rows.isEmpty {
                 summaryRow(
@@ -538,12 +644,75 @@ struct AccountRecordsView: View {
     }
 
     private func sourceBadge(_ source: String) -> Cell {
-        let isSmart = source != "手动/外部"
+        let isSmart = source != "手动/外部" && source != "手动"
         let fg = isSmart ? AppTheme.primary(scheme) : AppTheme.dim(scheme)
         let bg = isSmart ? AppTheme.primary(scheme).opacity(0.12) : AppTheme.soft(scheme)
         return .badge(source, fg, bg)
     }
 
+    // ---- 成交明细弹窗 ----
+
+    private func tradeDetailSheet(_ detail: TradeDetailModal) -> some View {
+        let trade = detail.trade
+        let variety = displayVariety(trade.symbol)
+        let sourceDisplay = displaySource(trade.source)
+
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("成交明细")
+                    .font(AppTheme.titleFont)
+                    .foregroundColor(AppTheme.ink(scheme))
+                Spacer()
+                AppButton("关闭", variant: .secondary, size: .inline) {
+                    selectedTradeModal = nil
+                }
+            }
+
+            HairlineDivider()
+
+            VStack(spacing: 12) {
+                detailRow("合约代码", trade.symbol, isHighlighted: true)
+                detailRow("交易品种", variety)
+                detailRow("买卖方向", trade.directionText, color: sideColor(trade.directionText))
+                detailRow("开平性质", trade.offsetText)
+                detailRow("成交价格", formatPrice(trade.price))
+                detailRow("成交手数", "\(trade.volume) 手")
+                if trade.offsetText != "开仓", let profit = trade.realizedProfit {
+                    detailRow("平仓盈亏", formatSigned(profit), color: profitColor(profit))
+                }
+                if let commission = trade.commission {
+                    detailRow("手续费", formatMoney(commission))
+                }
+                detailRow("来源策略", sourceDisplay == "手动" ? "手动下单" : sourceDisplay)
+                detailRow("成交时间", trade.tradeTime)
+                if !trade.id.isEmpty {
+                    detailRow("成交编号", trade.id)
+                }
+                if !trade.orderId.isEmpty {
+                    detailRow("委托编号", trade.orderId)
+                }
+                detailRow("所属账户", detail.accountLabel)
+            }
+            .padding(14)
+            .background(AppTheme.soft(scheme))
+            .cornerRadius(12)
+        }
+        .padding(20)
+        .frame(width: 380)
+    }
+
+    private func detailRow(_ label: String, _ value: String, color: Color? = nil, isHighlighted: Bool = false) -> some View {
+        HStack {
+            Text(label)
+                .font(AppTheme.dimFont)
+                .foregroundColor(AppTheme.dim(scheme))
+                .frame(width: 72, alignment: .leading)
+            Spacer()
+            Text(value)
+                .font(isHighlighted ? AppTheme.bodyFont.weight(.semibold) : AppTheme.bodyFont)
+                .foregroundColor(color ?? (isHighlighted ? AppTheme.primary(scheme) : AppTheme.ink(scheme)))
+        }
+    }
 
     private func summaryRow(content: String, highlighted: (String, Color)? = nil) -> some View {
         VStack(spacing: 0) {
@@ -568,13 +737,15 @@ struct AccountRecordsView: View {
         case text(String)
         case colored(String, Color)
         case badge(String, Color, Color)
+        case capsule(String)
         case withTip(String, Color, String)
     }
-
 
     private func recordTable<Rows: View>(
         headers: [String],
         widths: [CGFloat?],
+        alignments: [Alignment]? = nil,
+        trailingSpacer: Bool = false,
         empty: String,
         isEmpty: Bool,
         @ViewBuilder rows: () -> Rows
@@ -583,7 +754,9 @@ struct AccountRecordsView: View {
             tableRow(
                 cells: headers.map { .colored($0, AppTheme.dim(scheme)) },
                 widths: widths,
-                font: AppTheme.dimFont.weight(.semibold)
+                alignments: alignments,
+                font: AppTheme.dimFont.weight(.semibold),
+                trailingSpacer: trailingSpacer
             )
             .padding(.vertical, 7)
             if isEmpty {
@@ -608,16 +781,31 @@ struct AccountRecordsView: View {
     private func tableRow(
         cells: [Cell],
         widths: [CGFloat?],
-        font: Font = AppTheme.dimFont
+        alignments: [Alignment]? = nil,
+        font: Font = AppTheme.dimFont,
+        trailingSpacer: Bool = false
     ) -> some View {
         HStack(spacing: 8) {
             ForEach(Array(cells.enumerated()), id: \.offset) { index, cell in
+                let align: Alignment = {
+                    if let alignments, index < alignments.count {
+                        return alignments[index]
+                    }
+                    return index == 0 ? .leading : .trailing
+                }()
+                let colWidth = index < widths.count ? widths[index] : nil
                 cellView(cell, font: font)
                     .frame(
-                        maxWidth: .infinity,
-                        alignment: index == 0 ? .leading : .trailing
+                        width: colWidth,
+                        alignment: align
                     )
-                    .frame(width: index < widths.count ? widths[index] : nil)
+                    .frame(
+                        maxWidth: (colWidth == nil && !trailingSpacer) ? .infinity : nil,
+                        alignment: align
+                    )
+            }
+            if trailingSpacer {
+                Spacer(minLength: 0)
             }
         }
         .padding(.horizontal, 12)
@@ -639,6 +827,18 @@ struct AccountRecordsView: View {
                     .padding(.vertical, 2)
                     .background(bg)
                     .cornerRadius(6)
+            case .capsule(let text):
+                Text(text)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(AppTheme.ink(scheme))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(AppTheme.chrome(scheme))
+                    .cornerRadius(6)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(AppTheme.hairline(scheme), lineWidth: 1)
+                    )
             case .withTip(let text, let color, let tip):
                 HStack(spacing: 3) {
                     Text(text).foregroundColor(color)
@@ -706,5 +906,31 @@ struct AccountRecordsView: View {
     private func formatPercent(_ value: Double?) -> String {
         guard let value else { return "—" }
         return String(format: "%.1f%%", value * 100)
+    }
+}
+
+/// 表格行悬停高亮按钮样式
+struct TableRowButtonStyle: ButtonStyle {
+    let scheme: ColorScheme
+
+    func makeBody(configuration: Configuration) -> some View {
+        TableRowButtonContent(configuration: configuration, scheme: scheme)
+    }
+
+    private struct TableRowButtonContent: View {
+        let configuration: Configuration
+        let scheme: ColorScheme
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .background(
+                    configuration.isPressed
+                        ? AppTheme.soft(scheme)
+                        : (hovering ? AppTheme.sidebarHover(scheme) : Color.clear)
+                )
+                .cornerRadius(6)
+                .onHover { hovering = $0 }
+        }
     }
 }
