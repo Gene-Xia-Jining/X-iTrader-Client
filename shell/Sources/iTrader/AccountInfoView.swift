@@ -589,28 +589,26 @@ struct AccountInfoView: View {
     }
 
 
-    /// 资金指标：权益 / 可用 / 保证金 / 浮动盈亏 / 平仓盈亏 / 风险度
+    /// 资金指标：账户与资金四项 + 盈亏与费用。
+    /// 直接铺在账户卡片上（不再套内层底色面板），按 5 列排两行减少占用高度。
     private func metricsRow(_ account: AccountSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 0) {
                 metric("账户权益", formatMoney(account.balance), nil)
                 metric("可用资金", formatMoney(account.available), nil)
                 metric("保证金", formatMoney(account.margin), nil)
-            }
-            HStack(spacing: 0) {
-                metric("浮动盈亏", formatSigned(account.floatProfit), profitColor(account.floatProfit), help: floatProfitHelp)
-                metric("持仓盈亏", formatSigned(account.positionProfit), profitColor(account.positionProfit), help: positionProfitHelp)
-                metric("平仓盈亏", formatSigned(account.closeProfit), profitColor(account.closeProfit))
-            }
-            HStack(spacing: 0) {
-                metric("手续费", formatMoney(account.commission), nil)
                 metric("风险度", formatPercent(account.riskRatio), nil, help: riskRatioHelp)
                 metric("昨日权益", formatMoney(account.preBalance), nil)
             }
+            HStack(alignment: .top, spacing: 0) {
+                metric("浮动盈亏", formatSigned(account.floatProfit), profitColor(account.floatProfit), help: floatProfitHelp)
+                metric("持仓盈亏", formatSigned(account.positionProfit), profitColor(account.positionProfit), help: positionProfitHelp)
+                metric("平仓盈亏", formatSigned(account.closeProfit), profitColor(account.closeProfit))
+                metric("手续费", formatMoney(account.commission), nil)
+                // 占位保持两行列宽一致：第二行只有 4 项，缺的这格不能把上面的列挤宽
+                Color.clear.frame(maxWidth: .infinity)
+            }
         }
-        .padding(12)
-        .background(AppTheme.soft(scheme))
-        .cornerRadius(11)
     }
 
     private func metric(_ title: String, _ value: String, _ color: Color?, help: String? = nil) -> some View {

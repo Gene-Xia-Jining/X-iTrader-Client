@@ -425,28 +425,26 @@ public sealed partial class AccountInfoView : UserControl
         Child = new TextBlock { Text = text, FontSize = 13, Foreground = Brush(Palette.Dim) },
     };
 
-    private Border BuildMetrics(AccountSnapshot account)
+    /// <summary>
+    /// 资金指标：直接铺在账户卡片上（不套内层底色面板），5 列排两行以减少占用高度。
+    /// </summary>
+    private StackPanel BuildMetrics(AccountSnapshot account)
     {
-        var panel = new StackPanel { Spacing = 10 };
+        var panel = new StackPanel { Spacing = 12 };
         panel.Children.Add(MetricRow(
             ("账户权益", FormatMoney(account.Balance), null, null),
             ("可用资金", FormatMoney(account.Available), null, null),
-            ("保证金", FormatMoney(account.Margin), null, null)));
+            ("保证金", FormatMoney(account.Margin), null, null),
+            ("风险度", FormatPercent(account.RiskRatio), null, RiskRatioHelp),
+            ("昨日权益", FormatMoney(account.PreBalance), null, null)));
         panel.Children.Add(MetricRow(
             ("浮动盈亏", FormatSigned(account.FloatProfit), ProfitColor(account.FloatProfit), FloatProfitHelp),
             ("持仓盈亏", FormatSigned(account.PositionProfit), ProfitColor(account.PositionProfit), PositionProfitHelp),
-            ("平仓盈亏", FormatSigned(account.CloseProfit), ProfitColor(account.CloseProfit), null)));
-        panel.Children.Add(MetricRow(
+            ("平仓盈亏", FormatSigned(account.CloseProfit), ProfitColor(account.CloseProfit), null),
             ("手续费", FormatMoney(account.Commission), null, null),
-            ("风险度", FormatPercent(account.RiskRatio), null, RiskRatioHelp),
-            ("昨日权益", FormatMoney(account.PreBalance), null, null)));
-        return new Border
-        {
-            Background = Brush(Palette.Soft),
-            CornerRadius = new CornerRadius(11),
-            Padding = new Thickness(12),
-            Child = panel,
-        };
+            // 占位保持两行列宽一致：第二行只有 4 项，缺的这格不能把上面的列挤宽
+            ("", "", null, null)));
+        return panel;
     }
 
     private Grid MetricRow(params (string Title, string Value, Windows.UI.Color? Color, string? Help)[] items)

@@ -189,13 +189,15 @@ struct MetricHelpButton: View {
                 Text(title)
                     .font(AppTheme.bodyFont.weight(.semibold))
                     .foregroundColor(AppTheme.ink(scheme))
+                    .lineLimit(nil)
                 Text(message)
                     .font(AppTheme.dimFont)
                     .foregroundColor(AppTheme.dim(scheme))
                     .lineSpacing(4)
+                    .lineLimit(nil)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .frame(width: 280, alignment: .leading)
+            .frame(width: 300, alignment: .leading)
             .padding(12)
         }
     }
