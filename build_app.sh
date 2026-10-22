@@ -40,6 +40,8 @@ rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp "$BIN_PATH" "$CONTENTS/MacOS/X-iTrader-Client"
 cp -R dist/backend "$CONTENTS/Resources/backend"
+# AGPL-3.0 第 4 节：分发目标码时须附带许可证副本
+cp LICENSE "$CONTENTS/Resources/LICENSE"
 
 cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

@@ -204,6 +204,8 @@ jobs:
           Copy-Item "dist/X-iTrader-Backend/_internal" $stage -Recurse -Force
           # 壳已自包含，不再分发运行环境安装脚本
           Copy-Item "shell-windows/scripts/README.txt" $stage -Force
+          # AGPL-3.0 第 4 节：分发目标码时须附带许可证副本
+          Copy-Item "LICENSE" "$stage/LICENSE.txt" -Force
 
           Compress-Archive -Path "$stage/*" -DestinationPath "dist/x-itrader-client-$ver-windows.zip" -Force
         shell: pwsh

@@ -22,6 +22,7 @@ iTrader 智能交易系统 —— Windows 客户端
   X-iTrader-Backend.exe    本地后端（交易逻辑与行情连接）
   _internal\               后端依赖（含业务代码 src\）
   README.txt               本文件
+  LICENSE.txt              开源许可证（AGPL-3.0）
 
 程序目录内还有一批 .NET 与 Windows App SDK 的运行时文件（如
 coreclr.dll、Microsoft.ui.xaml.dll 等），它们是自包含发行的组成部分，
