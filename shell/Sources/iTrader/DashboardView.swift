@@ -190,12 +190,9 @@ struct DashboardView: View {
         return AppCard {
             VStack(alignment: .leading, spacing: 14) {
                 headerRow(card, summary)
-                balanceBlock(summary)
-                HairlineDivider()
                 metricsRow(summary)
                 HairlineDivider()
                 positionsSection(summary)
-                statusRow(card, summary)
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -235,40 +232,28 @@ struct DashboardView: View {
                 .padding(.vertical, 2)
                 .background(AppTheme.soft(scheme))
                 .cornerRadius(9)
-            Spacer(minLength: 0)
-        }
-    }
-
-    private func balanceBlock(_ summary: DashboardSummary) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("账户权益")
-                .font(AppTheme.dimFont)
-                .foregroundColor(AppTheme.dim(scheme))
-            Text(money(summary.total(\.balance)))
-                .font(AppTheme.metricFont)
-                .kerning(-0.3)
-                .foregroundColor(AppTheme.ink(scheme))
-                .lineLimit(1)
-                .minimumScaleFactor(0.5)
+            Spacer(minLength: 8)
+            statusRow(card, summary)
         }
     }
 
     private func metricsRow(_ summary: DashboardSummary) -> some View {
         let profit = summary.total(\.floatProfit)
         return HStack(alignment: .top, spacing: 12) {
+            metric("账户权益", money(summary.total(\.balance)), AppTheme.ink(scheme), weight: .semibold)
             metric("可用资金", money(summary.total(\.available)), AppTheme.ink(scheme))
             metric("保证金", money(summary.total(\.margin)), AppTheme.ink(scheme))
             metric("浮动盈亏", signed(profit), profitColor(profit))
         }
     }
 
-    private func metric(_ title: String, _ value: String, _ color: Color) -> some View {
+    private func metric(_ title: String, _ value: String, _ color: Color, weight: Font.Weight = .medium) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
                 .font(AppTheme.dimFont)
                 .foregroundColor(AppTheme.dim(scheme))
             Text(value)
-                .font(AppTheme.bodyFont.weight(.medium))
+                .font(AppTheme.bodyFont.weight(weight))
                 .foregroundColor(color)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
@@ -465,8 +450,8 @@ struct DashboardView: View {
         Text(statusText(card, summary))
             .font(AppTheme.dimFont)
             .foregroundColor(summary.failedRecords.isEmpty ? AppTheme.dim(scheme) : AppTheme.danger(scheme))
-            .lineLimit(2)
-            .fixedSize(horizontal: false, vertical: true)
+            .lineLimit(1)
+            .truncationMode(.tail)
     }
 
     private func statusText(_ card: DashboardCard, _ summary: DashboardSummary) -> String {

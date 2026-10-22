@@ -314,12 +314,6 @@ public sealed partial class DashboardPage : Page
         var body = new StackPanel { Spacing = 14 };
 
         body.Children.Add(BuildHeader(kind, summary));
-        body.Children.Add(BuildBalanceBlock(summary));
-        body.Children.Add(new Microsoft.UI.Xaml.Shapes.Rectangle
-        {
-            Height = 1,
-            Fill = Brush(Palette.Divider),
-        });
         body.Children.Add(BuildMetrics(summary));
         body.Children.Add(new Microsoft.UI.Xaml.Shapes.Rectangle
         {
@@ -327,7 +321,6 @@ public sealed partial class DashboardPage : Page
             Fill = Brush(Palette.Divider),
         });
         body.Children.Add(BuildPositionsSection(summary));
-        body.Children.Add(BuildStatus(kind, summary));
         return body;
     }
 
@@ -377,27 +370,13 @@ public sealed partial class DashboardPage : Page
         Grid.SetColumn(badge, 2);
         head.Children.Add(badge);
 
-        return head;
-    }
+        var status = BuildStatus(kind, summary);
+        status.HorizontalAlignment = HorizontalAlignment.Right;
+        status.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(status, 3);
+        head.Children.Add(status);
 
-    private UIElement BuildBalanceBlock(DashboardSummary summary)
-    {
-        var block = new StackPanel { Spacing = 4 };
-        block.Children.Add(new TextBlock
-        {
-            Text = "账户权益",
-            FontSize = 13,
-            Foreground = Brush(Palette.Dim),
-        });
-        block.Children.Add(new TextBlock
-        {
-            Text = FormatMoney(summary.Total(a => a.Balance)),
-            FontSize = 26,
-            FontWeight = FontWeights.SemiBold,
-            Foreground = Brush(Palette.Ink),
-            TextTrimming = TextTrimming.CharacterEllipsis,
-        });
-        return block;
+        return head;
     }
 
     private UIElement BuildMetrics(DashboardSummary summary)
@@ -406,6 +385,7 @@ public sealed partial class DashboardPage : Page
         var grid = new Grid { ColumnSpacing = 12 };
         var items = new (string Title, string Value, Windows.UI.Color Color)[]
         {
+            ("账户权益", FormatMoney(summary.Total(a => a.Balance)), Palette.Ink),
             ("可用资金", FormatMoney(summary.Total(a => a.Available)), Palette.Ink),
             ("保证金", FormatMoney(summary.Total(a => a.Margin)), Palette.Ink),
             ("浮动盈亏", FormatSigned(floatProfit), ProfitColor(floatProfit) ?? Palette.Ink),
@@ -426,7 +406,7 @@ public sealed partial class DashboardPage : Page
             {
                 Text = value,
                 FontSize = 15,
-                FontWeight = FontWeights.Medium,
+                FontWeight = i == 0 ? FontWeights.SemiBold : FontWeights.Medium,
                 Foreground = Brush(color),
                 TextTrimming = TextTrimming.CharacterEllipsis,
             });
@@ -436,7 +416,7 @@ public sealed partial class DashboardPage : Page
         return grid;
     }
 
-    private UIElement BuildStatus(string kind, DashboardSummary summary)
+    private FrameworkElement BuildStatus(string kind, DashboardSummary summary)
     {
         var failed = summary.Records.Where(r => r.Error.Length > 0).ToList();
         string text;
@@ -463,7 +443,7 @@ public sealed partial class DashboardPage : Page
         {
             Text = text,
             FontSize = 13,
-            TextWrapping = TextWrapping.Wrap,
+            TextTrimming = TextTrimming.CharacterEllipsis,
             Foreground = Brush(failed.Count > 0 ? Palette.Danger : Palette.Dim),
         };
     }
