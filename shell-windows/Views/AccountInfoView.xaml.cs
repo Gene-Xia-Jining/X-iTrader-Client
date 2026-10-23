@@ -603,7 +603,7 @@ public sealed partial class AccountInfoView : UserControl
         string? summary = null,
         (string Text, Windows.UI.Color? Color)? summaryHighlight = null,
         Action<int>? onRowClick = null,
-        double maxHeight = 420)
+        double? maxHeight = null)
     {
         var body = new StackPanel();
         body.Children.Add(BuildTableRow(columns.Select(c => new TableCell(c.Header, null)).ToList(), columns, header: true));
@@ -643,14 +643,21 @@ public sealed partial class AccountInfoView : UserControl
                 rowsPanel.Children.Add(rowGrid);
             }
 
-            var scrollViewer = new ScrollViewer
+            if (maxHeight is > 0)
             {
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                MaxHeight = maxHeight,
-                Content = rowsPanel,
-            };
-            body.Children.Add(scrollViewer);
+                var scrollViewer = new ScrollViewer
+                {
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                    MaxHeight = maxHeight.Value,
+                    Content = rowsPanel,
+                };
+                body.Children.Add(scrollViewer);
+            }
+            else
+            {
+                body.Children.Add(rowsPanel);
+            }
 
             if (!string.IsNullOrEmpty(summary))
             {
@@ -820,7 +827,7 @@ public sealed partial class AccountInfoView : UserControl
             new(FormatSigned(row.FloatProfit), ProfitColor(row.FloatProfit)),
             new(FormatMoney(row.Margin), null),
         }).ToList();
-        return BuildTable(columns, cells, "当前无持仓", maxHeight: 280);
+        return BuildTable(columns, cells, "当前无持仓");
     }
 
     private Border BuildOrderTable(IReadOnlyList<OrderRecord> rows)
@@ -859,7 +866,7 @@ public sealed partial class AccountInfoView : UserControl
             ? $"共 {rows.Count} 笔委托 · 报单 {totalOrigin} 手 · 已成 {filledCount} 笔" + (canceledCount > 0 ? $" · 已撤/废单 {canceledCount} 笔" : "")
             : null;
 
-        return BuildTable(columns, cells, "无委托记录", summary: summary, maxHeight: 360);
+        return BuildTable(columns, cells, "无委托记录", summary: summary);
     }
 
     private string DisplayVariety(string symbol)

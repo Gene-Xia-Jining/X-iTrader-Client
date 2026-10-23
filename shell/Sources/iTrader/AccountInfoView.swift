@@ -643,7 +643,7 @@ struct AccountInfoView: View {
             ],
             widths: widths,
             alignments: alignments,
-            maxHeight: 280,
+            maxHeight: nil,
             empty: "当前无持仓",
             isEmpty: rows.isEmpty
         ) {
@@ -680,7 +680,7 @@ struct AccountInfoView: View {
             headers: ["委托时间", "合约", "买卖", "开平", "手数", "成交", "委托价", "成交价", "状态", "来源"],
             widths: orderWidths,
             alignments: orderAlignments,
-            maxHeight: 360,
+            maxHeight: nil,
             empty: "无委托记录",
             isEmpty: rows.isEmpty
         ) {
@@ -1093,7 +1093,9 @@ struct AccountInfoView: View {
                     }
                     .frame(maxHeight: maxHeight)
                 } else {
-                    rows()
+                    VStack(alignment: .leading, spacing: 0) {
+                        rows()
+                    }
                 }
                 footer()
             }

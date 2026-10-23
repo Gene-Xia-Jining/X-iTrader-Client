@@ -379,27 +379,86 @@ public sealed partial class DashboardPage : Page
 
         var isRunning = State?.IsKindRunning(kind) == true;
         var canToggle = summary.ConfiguredCount > 0 && State?.StartChecking != true;
-        var autoTradeCheck = new CheckBox
+
+        var pillBorder = new Border
         {
-            Content = "自动交易",
-            IsChecked = isRunning,
-            IsEnabled = canToggle,
+            CornerRadius = new CornerRadius(12),
+            BorderThickness = new Thickness(isRunning ? 0 : 1),
+            Padding = new Thickness(10, 3, 10, 3),
             Margin = new Thickness(8, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
-        autoTradeCheck.Click += (s, e) =>
+
+        var pillText = new TextBlock
         {
-            var targetOn = autoTradeCheck.IsChecked == true;
-            State?.ToggleTrading(targetOn, kind);
+            Text = isRunning ? "自动交易：开" : "自动交易：关",
+            FontSize = 12,
+            FontWeight = isRunning ? FontWeights.SemiBold : FontWeights.Medium,
+            VerticalAlignment = VerticalAlignment.Center,
         };
+
+        if (!canToggle)
+        {
+            pillBorder.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            pillBorder.BorderBrush = Brush(Palette.Divider);
+            pillText.Foreground = Brush(Palette.Dim);
+            pillBorder.Opacity = 0.45;
+        }
+        else if (isRunning)
+        {
+            pillBorder.Background = Brush(Palette.Success);
+            pillBorder.BorderBrush = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            pillText.Foreground = new SolidColorBrush(Microsoft.UI.Colors.White);
+        }
+        else
+        {
+            pillBorder.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            pillBorder.BorderBrush = Brush(Palette.Hairline);
+            pillText.Foreground = Brush(Palette.Ink);
+        }
+
+        pillBorder.Child = pillText;
+
+        if (canToggle)
+        {
+            pillBorder.PointerEntered += (s, e) =>
+            {
+                if (isRunning)
+                {
+                    pillBorder.Background = Brush(Palette.SuccessHover);
+                }
+                else
+                {
+                    pillBorder.Background = Brush(Palette.SidebarHover);
+                    pillBorder.BorderBrush = Brush(Palette.Dim);
+                }
+            };
+            pillBorder.PointerExited += (s, e) =>
+            {
+                if (isRunning)
+                {
+                    pillBorder.Background = Brush(Palette.Success);
+                }
+                else
+                {
+                    pillBorder.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+                    pillBorder.BorderBrush = Brush(Palette.Hairline);
+                }
+            };
+            pillBorder.Tapped += (s, e) =>
+            {
+                State?.ToggleTrading(!isRunning, kind);
+            };
+        }
+
         ToolTipService.SetToolTip(
-            autoTradeCheck,
+            pillBorder,
             summary.ConfiguredCount == 0
                 ? $"尚未配置{DashboardSummary.TitleOf(kind)}账户"
                 : (isRunning ? $"点击停止{DashboardSummary.TitleOf(kind)}自动交易" : $"点击开启{DashboardSummary.TitleOf(kind)}自动交易")
         );
-        Grid.SetColumn(autoTradeCheck, 4);
-        head.Children.Add(autoTradeCheck);
+        Grid.SetColumn(pillBorder, 4);
+        head.Children.Add(pillBorder);
 
         return head;
     }
@@ -541,7 +600,7 @@ public sealed partial class DashboardPage : Page
             new(FormatSigned(row.FloatProfit), ProfitColor(row.FloatProfit)),
             new(FormatMoney(row.Margin), null),
         }).ToList();
-        return BuildTable(columns, cells, "当前无持仓", maxHeight: 220);
+        return BuildTable(columns, cells, "当前无持仓");
     }
 
     private sealed record ColumnSpec(string Header, double? Width, HorizontalAlignment Align, string? Help = null);
@@ -560,7 +619,7 @@ public sealed partial class DashboardPage : Page
         IReadOnlyList<ColumnSpec> columns,
         IReadOnlyList<IReadOnlyList<TableCell>> rows,
         string empty,
-        double maxHeight = 220)
+        double? maxHeight = null)
     {
         var body = new StackPanel();
         body.Children.Add(BuildTableRow(columns.Select(c => new TableCell(c.Header, null)).ToList(), columns, header: true));
@@ -601,14 +660,21 @@ public sealed partial class DashboardPage : Page
                 rowsPanel.Children.Add(BuildTableRow(row, columns, header: false));
             }
 
-            var scrollViewer = new ScrollViewer
+            if (maxHeight is > 0)
             {
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                MaxHeight = maxHeight,
-                Content = rowsPanel,
-            };
-            body.Children.Add(scrollViewer);
+                var scrollViewer = new ScrollViewer
+                {
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                    MaxHeight = maxHeight.Value,
+                    Content = rowsPanel,
+                };
+                body.Children.Add(scrollViewer);
+            }
+            else
+            {
+                body.Children.Add(rowsPanel);
+            }
         }
 
         return new Border

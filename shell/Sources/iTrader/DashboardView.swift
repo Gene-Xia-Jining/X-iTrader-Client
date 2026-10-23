@@ -31,6 +31,8 @@ struct DashboardView: View {
     @State private var isSwappedInHover = false
     /// 卡片实际渲染高度（默认 180）
     @State private var cardHeight: CGFloat = 180
+    /// 自动交易胶囊悬停状态
+    @State private var pillHovering: [DashboardCard: Bool] = [:]
 
     private let cardSpacing: CGFloat = 16
     private var slotDistance: CGFloat { cardHeight + cardSpacing }
@@ -234,40 +236,57 @@ struct DashboardView: View {
                 .cornerRadius(9)
             Spacer(minLength: 8)
             statusRow(card, summary)
-            autoTradeCheck(for: card, summary: summary)
+            autoTradePill(for: card, summary: summary)
         }
     }
 
-    /// 自动交易 Checkbox 开关（与账户配置的「启用」控件样式一致，模拟与实盘分别开关）
-    private func autoTradeCheck(for card: DashboardCard, summary: DashboardSummary) -> some View {
+    /// 自动交易胶囊按钮（模拟与实盘分别开关）
+    private func autoTradePill(for card: DashboardCard, summary: DashboardSummary) -> some View {
         let isRunning = appState.isKindRunning(card.rawValue)
         let canToggle = summary.configuredCount > 0 && !appState.startChecking
+        let hovering = pillHovering[card] ?? false
+
+        let fg: Color = !canToggle
+            ? AppTheme.dim(scheme).opacity(0.4)
+            : (isRunning ? .white : AppTheme.ink(scheme))
+
+        let bg: Color = !canToggle
+            ? .clear
+            : (isRunning
+                ? (hovering ? AppTheme.successHover(scheme) : AppTheme.success(scheme))
+                : (hovering ? AppTheme.sidebarHover(scheme) : .clear))
+
+        let border: Color = !canToggle
+            ? AppTheme.divider(scheme).opacity(0.5)
+            : (isRunning ? .clear : (hovering ? AppTheme.dim(scheme) : AppTheme.hairline(scheme)))
+
         return Button {
             appState.toggleTrading(!isRunning, kind: card.rawValue)
         } label: {
-            HStack(spacing: 6) {
-                Image(systemName: isRunning ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 14))
-                    .foregroundColor(
-                        !canToggle
-                            ? AppTheme.dim(scheme).opacity(0.4)
-                            : (isRunning ? AppTheme.primary(scheme) : AppTheme.dim(scheme))
-                    )
-                Text("自动交易")
-                    .font(AppTheme.bodyFont)
-                    .foregroundColor(
-                        !canToggle
-                            ? AppTheme.dim(scheme).opacity(0.4)
-                            : AppTheme.ink(scheme)
-                    )
-            }
-            .padding(.leading, 8)
-            .contentShape(Rectangle())
+            Text(isRunning ? "自动交易：开" : "自动交易：关")
+                .font(AppTheme.dimFont.weight(isRunning ? .semibold : .medium))
+                .foregroundColor(fg)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(bg)
+                .overlay(
+                    Capsule()
+                        .stroke(border, lineWidth: isRunning ? 0 : 1)
+                )
+                .clipShape(Capsule())
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .disabled(!canToggle)
+        .onHover { isHover in
+            pillHovering[card] = isHover
+        }
         .pointerCursor()
-        .help(summary.configuredCount == 0 ? "尚未配置\(card.title)账户" : (isRunning ? "点击停止\(card.title)自动交易" : "点击开启\(card.title)自动交易"))
+        .help(
+            summary.configuredCount == 0
+                ? "尚未配置\(card.title)账户"
+                : (isRunning ? "点击停止\(card.title)自动交易" : "点击开启\(card.title)自动交易")
+        )
     }
 
     private func metricsRow(_ summary: DashboardSummary) -> some View {
@@ -339,7 +358,7 @@ struct DashboardView: View {
             ],
             widths: widths,
             alignments: alignments,
-            maxHeight: 220,
+            maxHeight: nil,
             empty: "当前无持仓",
             isEmpty: rows.isEmpty
         ) {
@@ -408,7 +427,9 @@ struct DashboardView: View {
                     }
                     .frame(maxHeight: maxHeight)
                 } else {
-                    rows()
+                    VStack(alignment: .leading, spacing: 0) {
+                        rows()
+                    }
                 }
             }
         }
