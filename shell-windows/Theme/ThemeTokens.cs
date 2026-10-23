@@ -22,6 +22,7 @@ public sealed class Palette
     public required Color PrimaryHover { get; init; }
     public required Color Danger { get; init; }
     public required Color Success { get; init; }
+    public required Color SuccessHover { get; init; }
     public required Color InputBg { get; init; }
     public required Color SidebarHover { get; init; }
     public required Color SidebarSelected { get; init; }
@@ -53,6 +54,7 @@ internal static class ThemeTokens
         PrimaryHover = Hex(0x0071E3),
         Danger = Hex(0xE3342F),
         Success = Hex(0x34C759),
+        SuccessHover = Hex(0x30D158),
         InputBg = Hex(0xFFFFFF),
         SidebarHover = Hex(0xF0F0F0),
         SidebarSelected = Hex(0x0066CC),
@@ -74,6 +76,7 @@ internal static class ThemeTokens
         PrimaryHover = Hex(0x4AA3FF),
         Danger = Hex(0xFF453A),
         Success = Hex(0x30D158),
+        SuccessHover = Hex(0x46DD6A),
         InputBg = Hex(0x2A2A2C),
         SidebarHover = Hex(0x303032),
         SidebarSelected = Hex(0x2997FF),
