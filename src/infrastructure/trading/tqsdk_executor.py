@@ -248,6 +248,33 @@ class TqSdkTradingExecutor(TradingExecutor):
         self._closed = False
         self._closing = False
 
+    def ensure_session(
+        self, account: Account, auth: tuple[Optional[str], Optional[str]]
+    ) -> _AccountSession:
+        """确保该账户会话已就绪，未初始化则在此创建（支持多账户按需启动）。"""
+        if self._closed:
+            raise RuntimeError("执行器已关闭")
+        session = self._sessions.get(account.id)
+        if session is not None:
+            return session
+        session = self._start_session(account, auth)
+        self._sessions[account.id] = session
+        return session
+
+    def close_session(self, account_id: str) -> None:
+        """关闭单个账户的会话（支持多账户按需停止）。"""
+        session = self._sessions.pop(account_id, None)
+        if session is None:
+            return
+        try:
+            self._submit(
+                account_id,
+                lambda api=session.api: api.close(),
+                timeout=self._close_timeout,
+            )
+        except Exception:
+            pass
+
     def _start_session(
         self, account: Account, auth: tuple[Optional[str], Optional[str]]
     ) -> _AccountSession:

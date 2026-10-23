@@ -278,15 +278,15 @@ public sealed partial class DashboardPage : Page
         var key = string.Join(
             ",",
             _order)
-            + $"|{Host.IsDark}|{_errorText}|{_loading}|"
+            + $"|{Host.IsDark}|{_errorText}|{_loading}|{State.StartChecking}|"
             + string.Join(
                 ";",
                 DashboardSummary.Kinds.Select(kind =>
                 {
                     var summary = GetSummary(kind);
-                    return $"{kind}:{summary.ConfiguredCount}:"
+                    return $"{kind}:{summary.ConfiguredCount}:{State.IsKindRunning(kind)}:"
                         + string.Join(",", summary.Records.Select(r =>
-                            $"{r.Id}{r.Error}{r.Account.Balance}{r.Account.Available}{r.Account.Margin}{r.Account.FloatProfit}"));
+                            $"{r.Id}{r.Error}{r.Account.Balance}{r.Account.Available}{r.Account.Margin}{r.Account.FloatProfit}{r.Account.PositionProfit}{r.Account.RiskRatio}"));
                 }));
         if (key == _renderKey)
         {
@@ -331,6 +331,7 @@ public sealed partial class DashboardPage : Page
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         // 拖动手柄固定在左上角，作为卡片可拖的视觉入口
         var handle = new TextBlock
@@ -376,19 +377,46 @@ public sealed partial class DashboardPage : Page
         Grid.SetColumn(status, 3);
         head.Children.Add(status);
 
+        var isRunning = State?.IsKindRunning(kind) == true;
+        var canToggle = summary.ConfiguredCount > 0 && State?.StartChecking != true;
+        var autoTradeCheck = new CheckBox
+        {
+            Content = "自动交易",
+            IsChecked = isRunning,
+            IsEnabled = canToggle,
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        autoTradeCheck.Click += (s, e) =>
+        {
+            var targetOn = autoTradeCheck.IsChecked == true;
+            State?.ToggleTrading(targetOn, kind);
+        };
+        ToolTipService.SetToolTip(
+            autoTradeCheck,
+            summary.ConfiguredCount == 0
+                ? $"尚未配置{DashboardSummary.TitleOf(kind)}账户"
+                : (isRunning ? $"点击停止{DashboardSummary.TitleOf(kind)}自动交易" : $"点击开启{DashboardSummary.TitleOf(kind)}自动交易")
+        );
+        Grid.SetColumn(autoTradeCheck, 4);
+        head.Children.Add(autoTradeCheck);
+
         return head;
     }
 
     private UIElement BuildMetrics(DashboardSummary summary)
     {
         var floatProfit = summary.Total(a => a.FloatProfit);
+        var posProfit = summary.Total(a => a.PositionProfit);
         var grid = new Grid { ColumnSpacing = 12 };
         var items = new (string Title, string Value, Windows.UI.Color Color)[]
         {
             ("账户权益", FormatMoney(summary.Total(a => a.Balance)), Palette.Ink),
             ("可用资金", FormatMoney(summary.Total(a => a.Available)), Palette.Ink),
             ("保证金", FormatMoney(summary.Total(a => a.Margin)), Palette.Ink),
+            ("风险度", FormatPercent(summary.RiskRatio), Palette.Ink),
             ("浮动盈亏", FormatSigned(floatProfit), ProfitColor(floatProfit) ?? Palette.Ink),
+            ("持仓盈亏", FormatSigned(posProfit), ProfitColor(posProfit) ?? Palette.Ink),
         };
 
         for (var i = 0; i < items.Length; i++)
@@ -754,6 +782,9 @@ public sealed partial class DashboardPage : Page
 
     private static string FormatSigned(double? value) =>
         value is { } v ? v.ToString("+0.00;-0.00;0.00", CultureInfo.InvariantCulture) : "—";
+
+    private static string FormatPercent(double? value) =>
+        value is { } v ? (v * 100).ToString("F1", CultureInfo.InvariantCulture) + "%" : "—";
 }
 
 /// <summary>一类账户的当日汇总：只累加读取成功的账户，失败项单独提示。</summary>
@@ -777,5 +808,25 @@ internal sealed class DashboardSummary
             .OfType<double>()
             .ToList();
         return values.Count == 0 ? null : values.Sum();
+    }
+
+    /// <summary>综合风险度：单账户取其自身风险度，多账户按总保证金 ÷ 总权益计算；未就绪或权益非正时返回 null</summary>
+    internal double? RiskRatio
+    {
+        get
+        {
+            var ok = Records.Where(r => r.Error.Length == 0).ToList();
+            if (ok.Count == 1)
+            {
+                return ok[0].Account.RiskRatio;
+            }
+            var margin = Total(a => a.Margin);
+            var balance = Total(a => a.Balance);
+            if (margin is { } m && balance is { } b && b > 0)
+            {
+                return m / b;
+            }
+            return null;
+        }
     }
 }

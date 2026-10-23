@@ -234,16 +234,52 @@ struct DashboardView: View {
                 .cornerRadius(9)
             Spacer(minLength: 8)
             statusRow(card, summary)
+            autoTradeCheck(for: card, summary: summary)
         }
     }
 
+    /// 自动交易 Checkbox 开关（与账户配置的「启用」控件样式一致，模拟与实盘分别开关）
+    private func autoTradeCheck(for card: DashboardCard, summary: DashboardSummary) -> some View {
+        let isRunning = appState.isKindRunning(card.rawValue)
+        let canToggle = summary.configuredCount > 0 && !appState.startChecking
+        return Button {
+            appState.toggleTrading(!isRunning, kind: card.rawValue)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: isRunning ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 14))
+                    .foregroundColor(
+                        !canToggle
+                            ? AppTheme.dim(scheme).opacity(0.4)
+                            : (isRunning ? AppTheme.primary(scheme) : AppTheme.dim(scheme))
+                    )
+                Text("自动交易")
+                    .font(AppTheme.bodyFont)
+                    .foregroundColor(
+                        !canToggle
+                            ? AppTheme.dim(scheme).opacity(0.4)
+                            : AppTheme.ink(scheme)
+                    )
+            }
+            .padding(.leading, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!canToggle)
+        .pointerCursor()
+        .help(summary.configuredCount == 0 ? "尚未配置\(card.title)账户" : (isRunning ? "点击停止\(card.title)自动交易" : "点击开启\(card.title)自动交易"))
+    }
+
     private func metricsRow(_ summary: DashboardSummary) -> some View {
-        let profit = summary.total(\.floatProfit)
+        let floatProfit = summary.total(\.floatProfit)
+        let posProfit = summary.total(\.positionProfit)
         return HStack(alignment: .top, spacing: 12) {
             metric("账户权益", money(summary.total(\.balance)), AppTheme.ink(scheme), weight: .semibold)
             metric("可用资金", money(summary.total(\.available)), AppTheme.ink(scheme))
             metric("保证金", money(summary.total(\.margin)), AppTheme.ink(scheme))
-            metric("浮动盈亏", signed(profit), profitColor(profit))
+            metric("风险度", formatPercent(summary.riskRatio), AppTheme.ink(scheme))
+            metric("浮动盈亏", signed(floatProfit), profitColor(floatProfit))
+            metric("持仓盈亏", signed(posProfit), profitColor(posProfit))
         }
     }
 
@@ -548,6 +584,11 @@ struct DashboardView: View {
         return String(format: "%+.2f", value)
     }
 
+    private func formatPercent(_ value: Double?) -> String {
+        guard let value else { return "—" }
+        return String(format: "%.1f%%", value * 100)
+    }
+
     /// 盈亏染色：正红负绿（国内期货习惯，与账户信息 tab 一致）
     private func profitColor(_ value: Double?) -> Color {
         guard let value, value != 0 else { return AppTheme.ink(scheme) }
@@ -602,5 +643,18 @@ struct DashboardSummary {
     func total(_ keyPath: KeyPath<AccountSnapshot, Double?>) -> Double? {
         let values = okRecords.compactMap { $0.account[keyPath: keyPath] }
         return values.isEmpty ? nil : values.reduce(0, +)
+    }
+
+    /// 综合风险度：单账户取其自身风险度，多账户按总保证金 ÷ 总权益计算；未就绪或权益非正时返回 nil
+    var riskRatio: Double? {
+        if okRecords.count == 1 {
+            return okRecords.first?.account.riskRatio
+        }
+        guard let margin = total(\.margin),
+              let balance = total(\.balance),
+              balance > 0 else {
+            return nil
+        }
+        return margin / balance
     }
 }

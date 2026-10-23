@@ -115,13 +115,16 @@ class Bootstrap:
             raise ValueError(f"未知账户: {account_id}")
         if account_id not in self._engines:
             trade_repo = await self.init_db()
+            executor = self.build_trading_executor()
+            if hasattr(executor, "ensure_session"):
+                executor.ensure_session(account, (account.tq_account, account.tq_password))
             self._engines[account_id] = TradingEngine(
                 deps=TradingEngineDeps(
                     config=self.config,
                     account_id=account_id,
                     trade_repo=trade_repo,
                     stream_client=self.build_stream_client(account),
-                    trading_executor=self.build_trading_executor(),
+                    trading_executor=executor,
                     event_bus=self.event_bus,
                     auto_trade=self.config.auto_trade,
                 )

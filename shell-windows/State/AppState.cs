@@ -1001,8 +1001,9 @@ public sealed class AppState : INotifyPropertyChanged
     /// 自动交易开关。开启时后端先做启动前预检，不通过则返回问题列表：
     /// 这里发布到 <see cref="StartBlockedIssues"/> 由主窗口弹窗拦住，
     /// 而不是只写一条日志让用户猜哪里没配好。
+    /// 支持按 kind 分别开关（"sim" 或 "live"）。
     /// </summary>
-    internal void ToggleTrading(bool on)
+    internal void ToggleTrading(bool on, string? kind = null)
     {
         if (StartChecking)
         {
@@ -1016,15 +1017,21 @@ public sealed class AppState : INotifyPropertyChanged
             try
             {
                 Post(() => LastActionError = "");
-                _ = await CallAsync(on ? "engine.start" : "engine.stop");
+                var p = new JsonObject();
+                if (!string.IsNullOrEmpty(kind))
+                {
+                    p["kind"] = kind;
+                }
+                _ = await CallAsync(on ? "engine.start" : "engine.stop", p);
             }
             catch (RpcException ex)
             {
                 if (ex.Issues.Count > 0)
                 {
                     Post(() => StartBlockedIssues = ex.Issues);
+                    var kindLabel = kind == "sim" ? "模拟" : (kind == "live" ? "实盘" : "");
                     // AppendLog 自带 UI 线程调度，不必再套一层 Post
-                    AppendLog("WARNING", $"自动交易未启动：共 {ex.Issues.Count} 项检查未通过");
+                    AppendLog("WARNING", $"{kindLabel}自动交易未启动：共 {ex.Issues.Count} 项检查未通过");
                 }
                 else
                 {
@@ -1048,6 +1055,11 @@ public sealed class AppState : INotifyPropertyChanged
             }
         });
     }
+
+    /// <summary>判定某种类型（sim 或 live）的账户当前是否有引擎在运行</summary>
+    public bool IsKindRunning(string kind) =>
+        EngineStatus.Accounts.Any(acc =>
+            acc.Running && Accounts.FirstOrDefault(a => a.Id == acc.Id)?.Kind == kind);
 
     internal void SetAutoTrade(bool value) => _ = Task.Run(() =>
         RunActionAsync("engine.set_auto_trade", new JsonObject { ["value"] = value }));

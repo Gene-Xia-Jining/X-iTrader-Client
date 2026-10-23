@@ -577,7 +577,7 @@ final class AppState: ObservableObject {
 
     /// 自动交易开关。开启时后端会先做启动前预检，不通过则返回问题列表：
     /// 这里不写日志了事，而是发布到 startBlockedIssues 由顶栏弹窗展示并拦住。
-    func toggleTrading(_ on: Bool) {
+    func toggleTrading(_ on: Bool, kind: String? = nil) {
         guard !startChecking else { return }
         startChecking = true
         startBlockedIssues = []
@@ -591,12 +591,15 @@ final class AppState: ObservableObject {
             }
             do {
                 lastActionError = ""
-                _ = try await call(method: on ? "engine.start" : "engine.stop")
+                var params: [String: Any] = [:]
+                if let kind { params["kind"] = kind }
+                _ = try await call(method: on ? "engine.start" : "engine.stop", params: params)
             } catch let error as RpcError {
                 let issues = error.issues
                 if !issues.isEmpty {
                     startBlockedIssues = issues
-                    appendLog(level: "WARNING", message: "自动交易未启动：共 \(issues.count) 项检查未通过")
+                    let kindLabel = kind == "sim" ? "模拟" : (kind == "live" ? "实盘" : "")
+                    appendLog(level: "WARNING", message: "\(kindLabel)自动交易未启动：共 \(issues.count) 项检查未通过")
                 } else {
                     lastActionError = error.localizedDescription
                     appendLog(level: "ERROR", message: "engine.start 失败: \(error.localizedDescription)")
@@ -606,6 +609,13 @@ final class AppState: ObservableObject {
                 appendLog(level: "ERROR", message: "engine.start 失败: \(error.localizedDescription)")
             }
             await refreshEngineOnly()
+        }
+    }
+
+    /// 判定某种类型（sim 或 live）的账户当前是否有引擎在运行
+    func isKindRunning(_ kind: String) -> Bool {
+        engineStatus.accounts.contains { acc in
+            acc.running && accounts.first(where: { $0.id == acc.id })?.kind == kind
         }
     }
 

@@ -372,6 +372,35 @@ class EngineStartProgressTest(unittest.TestCase):
         stop = [(text, pct) for stage, text, pct in events if stage == "stop"]
         self.assertEqual(stop, [("正在停止…", -1)])
 
+    def test_start_with_kind_filters_accounts(self):
+        """传入 kind="sim" 时只对模拟账户进行预检，实盘字段不齐不阻断模拟启动。"""
+        service = _make_service()
+        service.bootstrap.save_account(_sim_account(id="sim-1"))
+        # 实盘账户故意不配资金账号和交易密码
+        service.bootstrap.save_account(
+            _live_account(id="live-1", broker="", trade_account="", trade_password="")
+        )
+
+        # 全量启动会被实盘挡住
+        err_all = _start_with(service)
+        self.assertIsNotNone(err_all)
+
+        # 单独启动模拟则成功通过
+        service.bootstrap.token_service.token_store.have_token = lambda: True
+        with patch("src.backend.service.check_server_health", new=_health_ok), \
+             patch("src.backend.service.test_account_session", new=lambda account, auth: None), \
+             patch.object(service, "_start_engines", new=_noop):
+            status = asyncio.run(service.engine_start({"kind": "sim"}))
+            self.assertIsNotNone(status)
+
+    def test_stop_with_kind_broadcasts_specific_text(self):
+        """按 kind 停止时广播对应账户类型的停止文案。"""
+        service = _make_service()
+        events = _collect_progress(service)
+        asyncio.run(service.engine_stop({"kind": "sim"}))
+        stop = [(text, pct) for stage, text, pct in events if stage == "stop"]
+        self.assertEqual(stop, [("正在停止模拟自动交易…", -1)])
+
 
 if __name__ == "__main__":
     unittest.main()

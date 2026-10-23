@@ -10,6 +10,7 @@ EventBus 事件经 _on_event 序列化后广播给所有已连接的 RPC 客户�
 """
 
 import asyncio
+import inspect
 import logging
 import os
 import shutil
@@ -709,24 +710,24 @@ class BackendService:
     def _log(self, message: str, level: LogLevel = LogLevel.INFO) -> None:
         self.event_bus.publish(LogEvent(message=message, level=level))
 
-    def _start_progress_stages(self) -> list[str]:
+    def _start_progress_stages(self, target_accounts: Optional[list[Account]] = None) -> list[str]:
         """本次启动实际会经过的阶段。没有可握手的凭据时跳过 tqsdk，
         否则该阶段的权重会白白占掉一段进度、让进度条冲到一半后停住。"""
-        enabled = [a for a in self.bootstrap.accounts if a.enabled]
+        enabled = target_accounts if target_accounts is not None else [a for a in self.bootstrap.accounts if a.enabled]
         stages = ["server", "accounts"]
         if any(a.tq_account and a.tq_password for a in enabled):
             stages.append("tqsdk")
         stages.append("engines")
         return stages
 
-    def _begin_start_progress(self) -> None:
+    def _begin_start_progress(self, target_accounts: Optional[list[Account]] = None) -> None:
         """按本次实际阶段算出各阶段在总进度里的区间（0-100）。
 
         用跨阶段总进度而不是阶段内的 step/total：单账户时 step/total 只会在
         0/1 与 1/1 之间跳两次，进度条几乎看不到。权重按经验耗时分配，
         让可能耗时数十秒的天勤握手占据主要一段。
         """
-        stages = self._start_progress_stages()
+        stages = self._start_progress_stages(target_accounts)
         total_weight = sum(_START_STAGE_WEIGHTS[s] for s in stages)
         bounds: dict[str, tuple[float, float]] = {}
         acc = 0.0
@@ -769,6 +770,8 @@ class BackendService:
     async def engine_start(self, params: dict) -> dict:
         """开启自动交易：先做启动前预检，任一检查不过则拒绝启动并返回问题列表。
 
+        支持按 kind 分别开启（params.get("kind") 为 "sim" 或 "live"），不传则全部开启。
+
         预检项：
         - 服务器连通（/api/health）；
         - 已启用账户非空，且每个账户的品种、策略、实盘资金账号等关键字段已填；
@@ -776,31 +779,55 @@ class BackendService:
         - 每个启用账户的快期权限账户能完成 TqApi 握手（含账户权限校验）。
 
         预检全过后才置 auto_trade=True 并启动引擎；启动阶段若仍有账户失败，
-        同样回滚（停掉已启动的引擎、不置 auto_trade）并抛出问题列表，避免
-        出现「按钮已显示开启但实际半数账户未起」的不一致状态。
+        同样回滚并抛出问题列表。
         """
+        kind = params.get("kind")
+        if kind and kind not in ("sim", "live"):
+            raise ValueError(f"未知账户类型: {kind}")
+        kind = kind or None
+
+        target_accounts = [
+            a for a in self.bootstrap.accounts
+            if a.enabled and (kind is None or a.kind == kind)
+        ]
+
         # 先算出本次会经过哪些阶段，后续各阶段据此折算成整次启动的百分比
-        self._begin_start_progress()
-        issues = await self._preflight_start_checks()
+        self._begin_start_progress(target_accounts)
+        issues = await self._preflight_start_checks(target_accounts, kind=kind)
         if issues:
             # 拼成多行文案便于日志；结构化 issues 经异常 type 字段回传 UI
             raise EngineStartBlockedError(issues)
+
+        target_ids = [a.id for a in target_accounts]
         # 预检通过后启动；启动期失败也按问题列表抛出，由本方法回滚
         try:
             self.set_auto_trade({"value": True})
-            await self._start_engines()
+            if inspect.signature(self._start_engines).parameters:
+                await self._start_engines(target_ids)
+            else:
+                await self._start_engines()
         except EngineStartBlockedError:
-            await self.stop_engines()
-            self.set_auto_trade({"value": False})
+            if inspect.signature(self.stop_engines).parameters:
+                await self.stop_engines(target_ids)
+            else:
+                await self.stop_engines()
+            if not any(e.is_running for e in self._engines.values()):
+                self.set_auto_trade({"value": False})
             raise
         except Exception as e:
             # 启动期非预期异常：同样回滚，避免半启动状态
-            await self.stop_engines()
-            self.set_auto_trade({"value": False})
+            if inspect.signature(self.stop_engines).parameters:
+                await self.stop_engines(target_ids)
+            else:
+                await self.stop_engines()
+            if not any(e.is_running for e in self._engines.values()):
+                self.set_auto_trade({"value": False})
             raise EngineStartBlockedError([f"启动过程发生未预期错误: {e}"]) from e
         return self.engine_status()
 
-    async def _preflight_start_checks(self) -> list[str]:
+    async def _preflight_start_checks(
+        self, target_accounts: Optional[list[Account]] = None, kind: Optional[str] = None
+    ) -> list[str]:
         """启动前预检，返回人类可读的问题列表（空列表 = 通过）。
 
         单个账户的 TqApi 握手是阻塞网络调用，放线程池并发执行；任一账户
@@ -822,9 +849,17 @@ class BackendService:
 
         # 2) 已启用账户与关键字段
         self._start_progress("accounts", "检查账户配置…")
-        enabled_accounts = [a for a in self.bootstrap.accounts if a.enabled]
+        enabled_accounts = (
+            target_accounts
+            if target_accounts is not None
+            else [a for a in self.bootstrap.accounts if a.enabled]
+        )
         if not enabled_accounts:
-            issues.append("没有已启用的账户，请先在模拟/实盘页启用至少一个账户")
+            if kind:
+                label = "模拟" if kind == "sim" else "实盘"
+                issues.append(f"没有已启用或已配置的{label}账户，请先在{label}交易页配置并启用账户")
+            else:
+                issues.append("没有已启用的账户，请先在模拟/实盘页启用至少一个账户")
         for acc in enabled_accounts:
             label = acc.label or acc.id
             if not acc.tq_account:
@@ -842,6 +877,7 @@ class BackendService:
                 if not acc.trade_account:
                     issues.append(f"实盘账户「{label}」未填写资金账号")
                 if not acc.trade_password:
+                    issues.append(f"实盘账户「{label}」未填写交易密码")
                     issues.append(f"实盘账户「{label}」未填写交易密码")
 
         # 3) 本地 API token（SSE 信号流需要）
@@ -896,13 +932,29 @@ class BackendService:
         # 停止要等每个引擎退出（单账户最多 5 秒），同样给个阶段提示。
         # 文案不带「自动交易」前缀：壳展示时会加上「自动交易：」。
         # pct 恒为 -1（停止没有细分阶段），壳此时只显示文案不画进度条
-        self._start_progress("stop", "正在停止…")
-        self.set_auto_trade({"value": False})
-        await self.stop_engines()
+        kind = params.get("kind")
+        if kind and kind not in ("sim", "live"):
+            raise ValueError(f"未知账户类型: {kind}")
+        kind = kind or None
+
+        if kind:
+            label = "模拟" if kind == "sim" else "实盘"
+            self._start_progress("stop", f"正在停止{label}自动交易…")
+            target_ids = [a.id for a in self.bootstrap.accounts if a.kind == kind]
+            if inspect.signature(self.stop_engines).parameters:
+                await self.stop_engines(target_ids)
+            else:
+                await self.stop_engines()
+            if not any(e.is_running for e in self._engines.values()):
+                self.set_auto_trade({"value": False})
+        else:
+            self._start_progress("stop", "正在停止…")
+            self.set_auto_trade({"value": False})
+            await self.stop_engines()
         return self.engine_status()
 
-    async def _start_engines(self) -> None:
-        """启动全部已启用账户的引擎。
+    async def _start_engines(self, target_account_ids: Optional[list[str]] = None) -> None:
+        """启动指定或全部已启用账户的引擎。
 
         预检已过，但 build_engine 仍可能在 tqsdk 会话构造阶段失败（预检握手
         与正式会话是两次独立连接，偶发网络问题仍可能在此冒出）。任一账户
@@ -913,9 +965,14 @@ class BackendService:
         # 与预检一致用 label 展示（无 label 时回落到 id），避免弹窗里
         # 同一账户在两条问题中出现两种称呼
         labels = {a.id: (a.label or a.id) for a in self.bootstrap.accounts}
+        candidate_ids = (
+            target_account_ids
+            if target_account_ids is not None
+            else self._enabled_account_ids()
+        )
         pending = [
             account_id
-            for account_id in self._enabled_account_ids()
+            for account_id in candidate_ids
             if not (account_id in self._engines and self._engines[account_id].is_running)
         ]
         total = len(pending)
@@ -943,10 +1000,22 @@ class BackendService:
         if started_ids:
             self._log("自动交易已开启", LogLevel.SUCCESS)
 
-    async def stop_engines(self) -> None:
-        """停止全部账户引擎。执行器由 shutdown 统一关闭。"""
+    async def stop_engines(self, target_account_ids: Optional[list[str]] = None) -> None:
+        """停止指定或全部账户引擎。执行器由 shutdown 统一关闭。"""
         stopped = False
-        for account_id, engine in list(self._engines.items()):
+        candidates = [
+            acc_id
+            for acc_id in (
+                target_account_ids
+                if target_account_ids is not None
+                else list(self._engines.keys())
+            )
+            if acc_id in self._engines
+        ]
+        for account_id in candidates:
+            engine = self._engines.get(account_id)
+            if engine is None:
+                continue
             try:
                 await engine.stop()
                 task = self._engine_tasks.get(account_id)
@@ -961,8 +1030,15 @@ class BackendService:
             finally:
                 self._engines.pop(account_id, None)
                 self._engine_tasks.pop(account_id, None)
+                if self.bootstrap._trading_executor is not None and hasattr(
+                    self.bootstrap._trading_executor, "close_session"
+                ):
+                    self.bootstrap._trading_executor.close_session(account_id)
         if stopped:
-            self._log("自动交易已停止", LogLevel.INFO)
+            if not self._engines:
+                self._log("自动交易已停止", LogLevel.INFO)
+            else:
+                self._log("已停止指定账户的自动交易", LogLevel.INFO)
 
     # -------- 自动更新 --------
 
