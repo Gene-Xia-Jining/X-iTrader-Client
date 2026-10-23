@@ -45,6 +45,7 @@ public sealed partial class DashboardPage : Page
     private string _accountsSignature = "";
     /// <summary>拖拽中的卡片 kind</summary>
     private string? _dragging;
+    private AppState? _subscribedState;
 
     public DashboardPage()
     {
@@ -53,12 +54,49 @@ public sealed partial class DashboardPage : Page
         _theme = new ThemedPage(this, ApplyPalette, OnStateChanged);
         SetupDrag(SimCard, DashboardSummary.SimKind);
         SetupDrag(LiveCard, DashboardSummary.LiveKind);
+        Unloaded += (_, _) => UnsubscribeRecords();
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
+        // Attach 同步触发 OnStateChanged：那里按账户签名发一次 LoadAsync，进页面即重取
         _theme.Attach(e);
+    }
+
+    private void SubscribeRecords(AppState? state)
+    {
+        if (_subscribedState == state) return;
+        UnsubscribeRecords();
+        _subscribedState = state;
+        if (_subscribedState != null)
+        {
+            _subscribedState.RecordsUpdated += OnRecordsUpdated;
+        }
+    }
+
+    private void UnsubscribeRecords()
+    {
+        if (_subscribedState != null)
+        {
+            _subscribedState.RecordsUpdated -= OnRecordsUpdated;
+            _subscribedState = null;
+        }
+    }
+
+    private void OnRecordsUpdated(string kind, IReadOnlyList<AccountRecords> records)
+    {
+        if (State?.ConnState != ConnState.Connected) return;
+        if (!DashboardSummary.Kinds.Contains(kind)) return;
+        // 与 AccountInfoView 一致：事件由 Post 投递到 UI 线程，这里再排一次队保证渲染线程安全
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (State?.ConnState != ConnState.Connected) return;
+            var summary = GetSummary(kind);
+            summary.ConfiguredCount = State.Accounts.Count(a => a.Kind == kind);
+            summary.Records = records;
+            Render();
+        });
     }
 
     private void ApplyPalette()
@@ -82,6 +120,7 @@ public sealed partial class DashboardPage : Page
         {
             return;
         }
+        SubscribeRecords(State);
 
         // 账户增删改或连接状态变化都会改变汇总口径，重取一次
         var signature = $"{State.ConnState}:"
@@ -107,6 +146,11 @@ public sealed partial class DashboardPage : Page
         {
             var summary = GetSummary(kind);
             summary.ConfiguredCount = configured.Count(a => a.Kind == kind);
+            var cached = State.GetCachedRecords(kind);
+            if (cached.Count > 0)
+            {
+                summary.Records = cached;
+            }
         }
 
         var requestId = ++_requestSeq;
@@ -138,7 +182,9 @@ public sealed partial class DashboardPage : Page
             {
                 var summary = GetSummary(kind);
                 summary.ConfiguredCount = configured.Count(a => a.Kind == kind);
-                summary.Records = records.Where(r => r.Kind == kind).ToList();
+                var cardRecords = records.Where(r => r.Kind == kind).ToList();
+                summary.Records = cardRecords;
+                State.SetCachedRecords(kind, cardRecords);
             }
         }
         catch (Exception ex)
@@ -286,7 +332,8 @@ public sealed partial class DashboardPage : Page
                     var summary = GetSummary(kind);
                     return $"{kind}:{summary.ConfiguredCount}:{State.IsKindRunning(kind)}:"
                         + string.Join(",", summary.Records.Select(r =>
-                            $"{r.Id}{r.Error}{r.Account.Balance}{r.Account.Available}{r.Account.Margin}{r.Account.FloatProfit}{r.Account.PositionProfit}{r.Account.RiskRatio}"));
+                            $"{r.Id}{r.Error}{r.Account.Balance}{r.Account.Available}{r.Account.Margin}{r.Account.FloatProfit}{r.Account.PositionProfit}{r.Account.RiskRatio}"
+                            + string.Join(";", r.Positions.Select(p => $"{p.Symbol}{p.Direction}{p.Volume}{p.OpenPrice}{p.PositionPrice}{p.LastPrice}{p.FloatProfit}{p.Margin}"))));
                 }));
         if (key == _renderKey)
         {
@@ -466,7 +513,6 @@ public sealed partial class DashboardPage : Page
     private UIElement BuildMetrics(DashboardSummary summary)
     {
         var floatProfit = summary.Total(a => a.FloatProfit);
-        var posProfit = summary.Total(a => a.PositionProfit);
         var grid = new Grid { ColumnSpacing = 12 };
         var items = new (string Title, string Value, Windows.UI.Color Color)[]
         {
@@ -475,7 +521,6 @@ public sealed partial class DashboardPage : Page
             ("保证金", FormatMoney(summary.Total(a => a.Margin)), Palette.Ink),
             ("风险度", FormatPercent(summary.RiskRatio), Palette.Ink),
             ("浮动盈亏", FormatSigned(floatProfit), ProfitColor(floatProfit) ?? Palette.Ink),
-            ("持仓盈亏", FormatSigned(posProfit), ProfitColor(posProfit) ?? Palette.Ink),
         };
 
         for (var i = 0; i < items.Length; i++)
@@ -538,7 +583,6 @@ public sealed partial class DashboardPage : Page
     // -------- 持仓表格 --------
 
     private const string FloatProfitHelp = "按当前市场最新价与开仓均价计算的未实现盈亏。反映当前所有未平仓持仓以最新市价全部平仓时预估的累计盈亏金额。";
-    private const string PositionPriceHelp = "当前持仓用于每日结算与盯市的基准成本价。当日新开仓等于开仓均价；跨交易日的历史持仓在每日结算后调整为上一交易日的结算价。";
     private const string OpenPriceHelp = "当前持仓在建立仓位时的实际成交均价。若同一合约多次开仓，按各笔成交手数加权平均计算，不会随每日结算价变动。";
 
     private UIElement BuildPositionsSection(DashboardSummary summary)
@@ -585,7 +629,7 @@ public sealed partial class DashboardPage : Page
         {
             Left("品种", varietyWidth), Left("合约"), Center("方向", 40), Right("手数", 44),
             Right("开仓均价", help: OpenPriceHelp),
-            Right("持仓均价", help: PositionPriceHelp),
+            Right("当前价"),
             Right("浮动盈亏", help: FloatProfitHelp),
             Right("保证金"),
         };
@@ -596,7 +640,7 @@ public sealed partial class DashboardPage : Page
             new(row.Direction, row.Direction == "多" ? Palette.Danger : Palette.Success),
             new(row.Volume.ToString(CultureInfo.InvariantCulture), null),
             new(FormatPrice(row.OpenPrice), null),
-            new(FormatPrice(row.PositionPrice), null),
+            new(FormatPrice(row.LastPrice), null),
             new(FormatSigned(row.FloatProfit), ProfitColor(row.FloatProfit)),
             new(FormatMoney(row.Margin), null),
         }).ToList();

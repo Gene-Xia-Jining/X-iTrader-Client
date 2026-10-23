@@ -50,6 +50,7 @@ public sealed class PositionRecord
     public int Volume { get; init; }
     public double? OpenPrice { get; init; }
     public double? PositionPrice { get; init; }
+    public double? LastPrice { get; init; }
     public double? FloatProfit { get; init; }
     public double? Margin { get; init; }
 
@@ -66,6 +67,7 @@ public sealed class PositionRecord
             Volume = JsonHelpers.Int(dict["volume"]) ?? 0,
             OpenPrice = JsonHelpers.Double(dict["open_price"]),
             PositionPrice = JsonHelpers.Double(dict["position_price"]),
+            LastPrice = JsonHelpers.Double(dict["last_price"]),
             FloatProfit = JsonHelpers.Double(dict["float_profit"]),
             Margin = JsonHelpers.Double(dict["margin"]),
         };

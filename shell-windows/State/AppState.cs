@@ -288,8 +288,8 @@ public sealed class AppState : INotifyPropertyChanged
     private bool _started;
     private int _shutdown;
     private readonly CancellationTokenSource _lifetime = new();
-    /// <summary>本次启动是否已做过静默更新检查（顶栏角标只在启动时探一次）</summary>
-    private bool _didAutoCheckUpdate;
+    /// <summary>定时静默更新检查循环是否已启动</summary>
+    private int _periodicUpdateStarted;
     /// <summary>弹窗里已确认更新：下载完成后自动安装并重启</summary>
     private bool _autoApplyUpdate;
     /// <summary>已下载更新包的类型（"patch"/"full"）；安装后据此决定重连还是退出</summary>
@@ -657,9 +657,8 @@ public sealed class AppState : INotifyPropertyChanged
                     }
                 });
                 await RefreshAllAsync(ct);
-                // 连接成功即静默检查一次更新（失败不打扰）；排在状态回填之后，
-                // 保证版本号已就绪，胶囊有内容可显示
-                Post(CheckUpdateOnConnect);
+                // 连接成功即启动定时更新检查（首次立即静默探测，之后每小时一次）
+                Post(StartPeriodicUpdateCheck);
                 return;
             }
             catch (OperationCanceledException)
@@ -1378,34 +1377,74 @@ public sealed class AppState : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// 连接成功后的静默探活：每次启动只做一次，总是执行（没有开关）。
-    /// 失败不打扰用户——顶栏点版本胶囊可手动重试。
+    /// 启动定时静默更新检查：连接成功后立即探测一次，之后在应用运行期间每小时检查一次。
+    /// 失败不打扰用户——顶栏点版本胶囊仍可手动检查。
     /// </summary>
-    private void CheckUpdateOnConnect()
+    private void StartPeriodicUpdateCheck()
     {
-        if (_didAutoCheckUpdate)
+        if (Interlocked.Exchange(ref _periodicUpdateStarted, 1) == 1)
+        {
+            // 已有常驻定时循环，重连成功时顺带静默探测一次
+            _ = PerformSilentUpdateCheckAsync();
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            // 首次连接成功后立即探测一次
+            await PerformSilentUpdateCheckAsync();
+
+            while (!_lifetime.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromHours(1), _lifetime.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                await PerformSilentUpdateCheckAsync();
+            }
+        }, _lifetime.Token);
+    }
+
+    /// <summary>
+    /// 执行一次静默更新检查。
+    /// 仅在连接正常且未处于更新流程（未发现新版、未下载、未安装）时发起，失败保持静默。
+    /// </summary>
+    private async Task PerformSilentUpdateCheckAsync()
+    {
+        if (ConnState != ConnState.Connected)
         {
             return;
         }
-        _didAutoCheckUpdate = true;
-        _ = Task.Run(async () =>
+        if (UpdatePhase is not (UpdatePhase.Idle or UpdatePhase.Latest or UpdatePhase.Failed))
         {
-            try
+            return;
+        }
+
+        try
+        {
+            var resp = await CallAsync("update.check", new JsonObject { ["silent"] = true });
+            if (resp["status"]?.GetValue<string>() != "available")
             {
-                var resp = await CallAsync("update.check", new JsonObject { ["silent"] = true });
-                if (resp["status"]?.GetValue<string>() != "available")
+                return;
+            }
+            Post(() =>
+            {
+                if (UpdatePhase is UpdatePhase.Idle or UpdatePhase.Latest or UpdatePhase.Failed)
                 {
-                    return;
+                    UpdatePhase = new UpdatePhase.Available(
+                        resp["version"]?.GetValue<string>() ?? "",
+                        resp["has_patch"]?.GetValue<bool>() ?? false);
                 }
-                Post(() => UpdatePhase = new UpdatePhase.Available(
-                    resp["version"]?.GetValue<string>() ?? "",
-                    resp["has_patch"]?.GetValue<bool>() ?? false));
-            }
-            catch
-            {
-                // 静默检查失败保持 idle：用户点版本胶囊可手动重试
-            }
-        });
+            });
+        }
+        catch
+        {
+            // 静默检查失败保持现状：用户点版本胶囊可手动重试
+        }
     }
 
     /// <summary>

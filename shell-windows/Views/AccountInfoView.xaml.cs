@@ -65,8 +65,6 @@ public sealed partial class AccountInfoView : UserControl
         "保证金占用占账户总权益的比例（计算公式：保证金 ÷ 账户权益 × 100%）。风险度越高代表仓位与杠杆越重；当风险度达到或超过 100% 时，可用资金将为负，可能面临追加保证金或被强行平仓的风险。";
     private const string OpenPriceHelp =
         "当前持仓在建立仓位时的实际成交均价。若同一合约多次开仓，按各笔成交手数加权平均计算，不会随每日结算价变动。";
-    private const string PositionPriceHelp =
-        "当前持仓用于每日结算与盯市的基准成本价。当日新开仓等于开仓均价；跨交易日的历史持仓在每日结算后调整为上一交易日的结算价。";
     private const string CloseProfitHelp =
         "本交易日内已平仓合约实现的累计盈亏金额（平仓价与持仓成本价之差）。当日未进行平仓操作时为 0.00。";
     private const string CommissionHelp =
@@ -812,7 +810,7 @@ public sealed partial class AccountInfoView : UserControl
         {
             Left("品种", varietyWidth), Left("合约"), Center("方向", 40), Right("手数", 44),
             Right("开仓均价", help: OpenPriceHelp),
-            Right("持仓均价", help: PositionPriceHelp),
+            Right("当前价"),
             Right("浮动盈亏", help: FloatProfitHelp),
             Right("保证金"),
         };
@@ -823,7 +821,7 @@ public sealed partial class AccountInfoView : UserControl
             new(row.Direction, row.Direction == "多" ? Palette.Danger : Palette.Success),
             new(row.Volume.ToString(CultureInfo.InvariantCulture), null),
             new(FormatPrice(row.OpenPrice), null),
-            new(FormatPrice(row.PositionPrice), null),
+            new(FormatPrice(row.LastPrice), null),
             new(FormatSigned(row.FloatProfit), ProfitColor(row.FloatProfit)),
             new(FormatMoney(row.Margin), null),
         }).ToList();

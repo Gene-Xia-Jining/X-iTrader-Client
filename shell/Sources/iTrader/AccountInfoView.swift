@@ -39,6 +39,7 @@ struct PositionRecord: Identifiable {
     let volume: Int
     let openPrice: Double?
     let positionPrice: Double?
+    let lastPrice: Double?
     let floatProfit: Double?
     let margin: Double?
 
@@ -50,6 +51,7 @@ struct PositionRecord: Identifiable {
             volume: dict.int("volume") ?? 0,
             openPrice: dict.double("open_price"),
             positionPrice: dict.double("position_price"),
+            lastPrice: dict.double("last_price"),
             floatProfit: dict.double("float_profit"),
             margin: dict.double("margin")
         )
@@ -240,7 +242,6 @@ struct AccountInfoView: View {
     private let positionProfitHelp = "按当前最新价与持仓成本（历史持仓按上一交易日结算价、当日开仓按开仓均价）计算的盯市盈亏。用于反映当日持仓所产生的盈亏变动及每日结算。"
     private let riskRatioHelp = "保证金占用占账户总权益的比例（计算公式：保证金 ÷ 账户权益 × 100%）。风险度越高代表仓位与杠杆越重；当风险度达到或超过 100% 时，可用资金将为负，可能面临追加保证金或被强行平仓的风险。"
     private let openPriceHelp = "当前持仓在建立仓位时的实际成交均价。若同一合约多次开仓，按各笔成交手数加权平均计算，不会随每日结算价变动。"
-    private let positionPriceHelp = "当前持仓用于每日结算与盯市的基准成本价。当日新开仓等于开仓均价；跨交易日的历史持仓在每日结算后调整为上一交易日的结算价。"
     private let closeProfitHelp = "本交易日内已平仓合约实现的累计盈亏金额（平仓价与持仓成本价之差）。当日未进行平仓操作时为 0.00。"
     private let commissionHelp = "本交易日内因开仓、平仓等交易产生的累计手续费支出。隔夜历史持仓产生的手续费已在以往结算中扣减并计入昨日权益；若当日无新成交则为 0.00。"
 
@@ -635,10 +636,9 @@ struct AccountInfoView: View {
         let alignments: [Alignment] = [.leading, .leading, .center, .trailing, .trailing, .trailing, .trailing, .trailing]
 
         return recordTable(
-            headers: ["品种", "合约", "方向", "手数", "开仓均价", "持仓均价", "浮动盈亏", "保证金"],
+            headers: ["品种", "合约", "方向", "手数", "开仓均价", "当前价", "浮动盈亏", "保证金"],
             headerHelps: [
                 "开仓均价": openPriceHelp,
-                "持仓均价": positionPriceHelp,
                 "浮动盈亏": floatProfitHelp,
             ],
             widths: widths,
@@ -655,7 +655,7 @@ struct AccountInfoView: View {
                         .colored(row.direction, row.direction == "多" ? AppTheme.statusRed : AppTheme.statusGreen),
                         .text("\(row.volume)"),
                         .text(formatPrice(row.openPrice)),
-                        .text(formatPrice(row.positionPrice)),
+                        .text(formatPrice(row.lastPrice)),
                         .colored(formatSigned(row.floatProfit), profitColor(row.floatProfit) ?? AppTheme.ink(scheme)),
                         .text(formatMoney(row.margin)),
                     ],

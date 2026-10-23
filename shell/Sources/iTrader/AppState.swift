@@ -285,8 +285,8 @@ final class AppState: ObservableObject {
     private var signalSources: [DispatchSourceSignal] = []
     /// 进行中的连接循环：断开事件由 RPC 断链与进程退出两处触发，去重避免并发多份循环
     private var reconnectTask: Task<Void, Never>?
-    /// 本次启动是否已做过静默更新检查（顶栏角标只在启动时探一次）
-    private var didAutoCheckUpdate = false
+    /// 常驻的定时静默更新检查任务（连接成功后立即探测，运行期间每小时再测一次）
+    private var periodicUpdateCheckTask: Task<Void, Never>?
     /// 弹窗里已确认更新：下载完成后自动安装并重启
     private var autoApplyUpdate = false
     /// 差量更新后的重连等待窗口：期间忽略断链/进程退出触发的重连，
@@ -381,7 +381,7 @@ final class AppState: ObservableObject {
                     updateInstalling = false
                 }
                 await refreshAll()
-                checkUpdateOnConnect()
+                startPeriodicUpdateCheck()
                 return
             } catch {
                 connState = .disconnected
@@ -830,21 +830,45 @@ final class AppState: ObservableObject {
         return false
     }
 
-    /// 连接成功后的静默探活：每次启动只做一次，总是执行（没有开关）。
+    /// 启动定时静默更新检查：连接成功后立即探测一次，之后在应用运行期间每小时检查一次。
     /// 失败不打扰用户——顶栏点版本胶囊仍可手动检查。
-    private func checkUpdateOnConnect() {
-        guard !didAutoCheckUpdate else { return }
-        didAutoCheckUpdate = true
-        Task {
-            guard
-                let resp = try? await call(method: "update.check", params: ["silent": true]),
-                resp["status"] as? String == "available"
-            else { return }
-            updatePhase = .available(
-                version: resp["version"] as? String ?? "",
-                hasPatch: resp["has_patch"] as? Bool ?? false
-            )
+    private func startPeriodicUpdateCheck() {
+        if periodicUpdateCheckTask != nil {
+            // 已有常驻定时任务，重连成功时顺带静默探测一次
+            Task { await performSilentUpdateCheck() }
+            return
         }
+        periodicUpdateCheckTask = Task { [weak self] in
+            // 首次连接成功后立即探测一次
+            await self?.performSilentUpdateCheck()
+
+            while !Task.isCancelled {
+                // 每 1 小时检查一次
+                try? await Task.sleep(nanoseconds: 3_600_000_000_000)
+                if Task.isCancelled { break }
+                await self?.performSilentUpdateCheck()
+            }
+        }
+    }
+
+    /// 执行一次静默更新检查。
+    /// 仅在连接正常且未处于更新流程（未发现新版、未下载、未安装）时发起，失败保持静默。
+    private func performSilentUpdateCheck() async {
+        guard connState == .connected else { return }
+        switch updatePhase {
+        case .idle, .latest, .failed:
+            break
+        default:
+            return
+        }
+        guard
+            let resp = try? await call(method: "update.check", params: ["silent": true]),
+            resp["status"] as? String == "available"
+        else { return }
+        updatePhase = .available(
+            version: resp["version"] as? String ?? "",
+            hasPatch: resp["has_patch"] as? Bool ?? false
+        )
     }
 
     /// 手动检查。只查不下载：发现新版本由壳弹确认框，用户确认后才走 `confirmUpdate()`。
@@ -915,6 +939,8 @@ final class AppState: ObservableObject {
     }
 
     func quitBackend() {
+        periodicUpdateCheckTask?.cancel()
+        periodicUpdateCheckTask = nil
         connState = .stopped
         Task { await runAction(method: "app.quit") }
     }

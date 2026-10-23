@@ -116,6 +116,7 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
       "volume": 2,
       "open_price": 3800.0,           // 开仓均价
       "position_price": 3790.0,       // 持仓均价
+      "last_price": 3806.0,           // 当前价 / 最新价
       "float_profit": 120.0,
       "margin": 7600.0
     }

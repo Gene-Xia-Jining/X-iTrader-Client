@@ -133,13 +133,26 @@ def _account_snapshot(account_obj) -> dict:
     }
 
 
-def _position_rows(positions) -> list[dict]:
+def _position_rows(positions, api=None) -> list[dict]:
     """一个合约的多空各成一行（与快期持仓列表一致），无持仓方向不输出。"""
     rows: list[dict] = []
+    quotes_cache: dict[str, Any] = {}
     for symbol, pos in positions.items():
         exchange_id = _text(pos.exchange_id) or symbol.split(".", 1)[0]
         instrument_id = _text(pos.instrument_id) or (symbol.split(".", 1)[-1] if "." in symbol else symbol)
         base = _symbol(exchange_id, instrument_id)
+
+        last_price_from_quote = None
+        if api is not None:
+            if base not in quotes_cache:
+                try:
+                    quotes_cache[base] = api.get_quote(base)
+                except Exception:
+                    quotes_cache[base] = None
+            quote_obj = quotes_cache.get(base)
+            if quote_obj is not None:
+                last_price_from_quote = _number(getattr(quote_obj, "last_price", None))
+
         for direction, volume, open_price, position_price, float_profit, margin in (
             (
                 "多",
@@ -160,14 +173,28 @@ def _position_rows(positions) -> list[dict]:
         ):
             if not volume:
                 continue
+
+            num_vol = _int(volume)
+            num_open = _number(open_price)
+            num_float_profit = _number(float_profit)
+
+            # 确定当前价：优先 quote.last_price；若未就绪则尝试根据浮动盈亏反推
+            calc_last_price = last_price_from_quote
+            if calc_last_price is None and num_vol > 0 and num_open is not None and num_float_profit is not None:
+                multiplier = _get_multiplier(api, base)
+                if multiplier > 0:
+                    diff = num_float_profit / (num_vol * multiplier)
+                    calc_last_price = round(num_open + diff if direction == "多" else num_open - diff, 4)
+
             rows.append(
                 {
                     "symbol": base,
                     "direction": direction,
-                    "volume": _int(volume),
-                    "open_price": _number(open_price),
+                    "volume": num_vol,
+                    "open_price": num_open,
                     "position_price": _number(position_price),
-                    "float_profit": _number(float_profit),
+                    "last_price": _number(calc_last_price),
+                    "float_profit": num_float_profit,
                     "margin": _number(margin),
                 }
             )
@@ -366,7 +393,7 @@ def _build_snapshot_dict(account: Account, api, acc) -> dict:
         "kind": account.kind,
         "label": account.label or account.id,
         "account": _account_snapshot(acc),
-        "positions": _position_rows(pos_map),
+        "positions": _position_rows(pos_map, api=api),
         "orders": _order_rows(api.get_order(), account=account),
         "trades": _trade_rows(api.get_trade(), account=account, api=api, positions_map=pos_map),
     }

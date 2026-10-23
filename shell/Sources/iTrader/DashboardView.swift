@@ -62,6 +62,9 @@ struct DashboardView: View {
         .onChange(of: appState.connState) { state in
             if state == .connected { load() }
         }
+        .onReceive(appState.$recordsRevision) { _ in
+            syncFromCache()
+        }
     }
 
     // MARK: - 卡片槽位与拖动占位
@@ -291,14 +294,12 @@ struct DashboardView: View {
 
     private func metricsRow(_ summary: DashboardSummary) -> some View {
         let floatProfit = summary.total(\.floatProfit)
-        let posProfit = summary.total(\.positionProfit)
         return HStack(alignment: .top, spacing: 12) {
             metric("账户权益", money(summary.total(\.balance)), AppTheme.ink(scheme), weight: .semibold)
             metric("可用资金", money(summary.total(\.available)), AppTheme.ink(scheme))
             metric("保证金", money(summary.total(\.margin)), AppTheme.ink(scheme))
             metric("风险度", formatPercent(summary.riskRatio), AppTheme.ink(scheme))
             metric("浮动盈亏", signed(floatProfit), profitColor(floatProfit))
-            metric("持仓盈亏", signed(posProfit), profitColor(posProfit))
         }
     }
 
@@ -319,7 +320,6 @@ struct DashboardView: View {
     // MARK: - 持仓表格
 
     private let floatProfitHelp = "按当前市场最新价与开仓均价计算的未实现盈亏。反映当前所有未平仓持仓以最新市价全部平仓时预估的累计盈亏金额。"
-    private let positionPriceHelp = "当前持仓用于每日结算与盯市的基准成本价。当日新开仓等于开仓均价；跨交易日的历史持仓在每日结算后调整为上一交易日的结算价。"
     private let openPriceHelp = "当前持仓在建立仓位时的实际成交均价。若同一合约多次开仓，按各笔成交手数加权平均计算，不会随每日结算价变动。"
 
     private func positionsSection(_ summary: DashboardSummary) -> some View {
@@ -350,10 +350,9 @@ struct DashboardView: View {
         let alignments: [Alignment] = [.leading, .leading, .center, .trailing, .trailing, .trailing, .trailing, .trailing]
 
         return recordTable(
-            headers: ["品种", "合约", "方向", "手数", "开仓均价", "持仓均价", "浮动盈亏", "保证金"],
+            headers: ["品种", "合约", "方向", "手数", "开仓均价", "当前价", "浮动盈亏", "保证金"],
             headerHelps: [
                 "开仓均价": openPriceHelp,
-                "持仓均价": positionPriceHelp,
                 "浮动盈亏": floatProfitHelp,
             ],
             widths: widths,
@@ -370,7 +369,7 @@ struct DashboardView: View {
                         .colored(row.direction, row.direction == "多" ? AppTheme.statusRed : AppTheme.statusGreen),
                         .text("\(row.volume)"),
                         .text(formatPrice(row.openPrice)),
-                        .text(formatPrice(row.positionPrice)),
+                        .text(formatPrice(row.lastPrice)),
                         .colored(signed(row.floatProfit), profitColor(row.floatProfit)),
                         .text(money(row.margin)),
                     ],
@@ -541,11 +540,27 @@ struct DashboardView: View {
 
     // MARK: - 取数（trading.records 一次返回全部账户，两卡按 kind 分组）
 
+    private func syncFromCache() {
+        guard appState.connState == .connected else { return }
+        let configured = appState.accounts
+        for card in DashboardCard.allCases {
+            var summary = summaries[card] ?? DashboardSummary()
+            summary.configuredCount = configured.filter { $0.kind == card.rawValue }.count
+            if let cached = appState.cachedRecords[card.rawValue] {
+                summary.records = cached
+            }
+            summaries[card] = summary
+        }
+    }
+
     private func load() {
         let configured = appState.accounts
         for card in DashboardCard.allCases {
             var summary = summaries[card] ?? DashboardSummary()
             summary.configuredCount = configured.filter { $0.kind == card.rawValue }.count
+            if let cached = appState.cachedRecords[card.rawValue], !cached.isEmpty {
+                summary.records = cached
+            }
             summaries[card] = summary
         }
 
@@ -571,11 +586,10 @@ struct DashboardView: View {
                 guard seq == requestSeq else { return }
                 let records = (resp["accounts"] as? [[String: Any]] ?? []).compactMap(AccountRecords.from)
                 for card in DashboardCard.allCases {
-                    var summary = summaries[card] ?? DashboardSummary()
-                    summary.configuredCount = configured.filter { $0.kind == card.rawValue }.count
-                    summary.records = records.filter { $0.kind == card.rawValue }
-                    summaries[card] = summary
+                    let cardRecords = records.filter { $0.kind == card.rawValue }
+                    appState.cachedRecords[card.rawValue] = cardRecords
                 }
+                syncFromCache()
                 loading = false
             } catch {
                 guard seq == requestSeq else { return }
