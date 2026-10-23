@@ -1,7 +1,7 @@
 import asyncio
 import datetime
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable
 
 from ..domain.entities import (
     StrategySignal,
@@ -25,7 +25,7 @@ from ..domain.repositories import (
     TradeCommandRepository,
 )
 from ..domain.services import TradingExecutor
-from ..domain.trading_hours import in_trading_period
+from ..domain.trading_hours import beijing_now, in_trading_period
 
 
 @dataclass
@@ -37,8 +37,8 @@ class TradingEngineDeps:
     trading_executor: TradingExecutor
     event_bus: EventBus
     auto_trade: bool = False
-    # 交易时段门控的时钟；None 时用 in_trading_period 内部的北京时间当前时刻
-    clock: Optional[Callable[[], datetime.datetime]] = None
+    # 交易时段门控的时钟；默认北京时间当前时刻，测试可注入固定时刻
+    clock: Callable[[], datetime.datetime] = beijing_now
 
 
 class TradingEngine:

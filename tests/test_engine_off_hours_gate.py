@@ -83,21 +83,25 @@ class OffHoursGateTest(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _engine(self, executor, auto_trade=True, clock=None):
-        return TradingEngine(
-            deps=TradingEngineDeps(
-                config=TradingConfiguration(
-                    server_url="http://192.0.2.1:3080", auto_trade=auto_trade
-                ),
-                account_id="acc",
-                trade_repo=self.repo,
-                stream_client=_FakeStream(),
-                trading_executor=executor,
-                event_bus=EventBus(),
-                auto_trade=auto_trade,
-                clock=clock or (lambda: _at(10, 0)),
-            )
+    def _deps(self, executor, auto_trade=True, clock=None):
+        """构造引擎依赖；clock 为 None 时保留默认值（生产走的正是这条路径）。"""
+        deps = TradingEngineDeps(
+            config=TradingConfiguration(
+                server_url="http://192.0.2.1:3080", auto_trade=auto_trade
+            ),
+            account_id="acc",
+            trade_repo=self.repo,
+            stream_client=_FakeStream(),
+            trading_executor=executor,
+            event_bus=EventBus(),
+            auto_trade=auto_trade,
         )
+        if clock is not None:
+            deps.clock = clock
+        return deps
+
+    def _engine(self, executor, auto_trade=True, clock=None):
+        return TradingEngine(deps=self._deps(executor, auto_trade, clock))
 
     def _status(self, signal_id="sig-1"):
         return asyncio.run(self.repo.get("acc", signal_id)).status
@@ -154,6 +158,20 @@ class OffHoursGateTest(unittest.TestCase):
         self.assertEqual(executor.calls, [])
         self.assertEqual(self._status(), TradeCommandStatus.PENDING)
 
+    def test_default_clock_is_callable(self):
+        """生产路径不注入 clock，默认值必须可直接调用。
+
+        曾经默认值是 None，门控一执行就抛 TypeError('NoneType' object is not
+        callable)，异常被 _run_loop 当成连接错误吞掉：信号永远停在 pending，
+        界面只显示「收到信号」，账户一笔都没动。
+        """
+        executor = _FakeExecutor()
+        engine = TradingEngine(deps=self._deps(executor))
+        self.assertTrue(callable(engine._clock))
+        # 真的走一遍门控：无论当前是否在交易时段，都不得抛异常
+        asyncio.run(engine._handle_signal(_signal()))
+        self.assertNotEqual(self._status(), TradeCommandStatus.EXECUTING)
+
     def test_pending_signal_can_execute_when_market_opens(self):
         """停在 pending 的信号，交易时段内重投要能执行（不得永久卡死）。"""
         executor = _FakeExecutor()
@@ -171,7 +189,8 @@ class OffHoursGateTest(unittest.TestCase):
     def test_executed_signal_not_repeated(self):
         """已执行的信号重投不得重复下单。"""
         executor = _FakeExecutor()
-        engine = self._engine(executor)
+        # 显式给交易时段内的时钟：这条断言与时段无关，不能被门控拦成 0 次
+        engine = self._engine(executor, clock=lambda: _at(10, 0))
         asyncio.run(engine._handle_signal(_signal()))
         asyncio.run(engine._handle_signal(_signal()))
         self.assertEqual(len(executor.calls), 1)

@@ -23,6 +23,16 @@ def _seconds(hhmmss: str) -> int:
     return hour * 3600 + minute * 60 + second
 
 
+def beijing_now() -> datetime.datetime:
+    """当前北京时间。
+
+    作为时段判断的默认时钟直接挂在 TradingEngineDeps.clock 上：默认值必须是
+    可调用对象，否则调用方漏传时会在门控里抛 TypeError，把「非交易时段拦截」
+    变成「信号处理链路整体崩溃」。
+    """
+    return datetime.datetime.now(_BEIJING)
+
+
 def in_trading_period(
     trading_time, now: Optional[datetime.datetime] = None
 ) -> bool:
