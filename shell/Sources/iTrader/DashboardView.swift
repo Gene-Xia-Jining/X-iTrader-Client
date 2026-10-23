@@ -300,6 +300,7 @@ struct DashboardView: View {
             metric("保证金", money(summary.total(\.margin)), AppTheme.ink(scheme))
             metric("风险度", formatPercent(summary.riskRatio), AppTheme.ink(scheme))
             metric("浮动盈亏", signed(floatProfit), profitColor(floatProfit))
+            metric("手续费", money(summary.total(\.commission)), AppTheme.ink(scheme))
         }
     }
 

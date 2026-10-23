@@ -1121,6 +1121,7 @@ public sealed partial class AccountInfoView : UserControl
             Right("成交价", 68),
             Right("手数", 40),
             Right("平仓盈亏", 76),
+            Right("手续费", 68),
             new ColumnSpec("", null, HorizontalAlignment.Stretch),
         };
         var cells = rows.Select((row, index) =>
@@ -1130,6 +1131,10 @@ public sealed partial class AccountInfoView : UserControl
                 : row.RealizedProfit is { } rp
                     ? new TableCell(FormatSigned(rp), ProfitColor(rp))
                     : new TableCell("—", Palette.Dim);
+
+            TableCell commissionCell = row.Commission is { } comm
+                ? new TableCell(FormatMoney(comm), null)
+                : new TableCell("—", Palette.Dim);
 
             var timeParts = row.TradeTime.Split(' ');
             var dateStr = timeParts.Length > 0 ? timeParts[0] : row.TradeTime;
@@ -1154,6 +1159,7 @@ public sealed partial class AccountInfoView : UserControl
                 new(FormatPrice(row.Price), null),
                 new(row.Volume.ToString(CultureInfo.InvariantCulture), null),
                 profitCell,
+                commissionCell,
                 new("", null),
             };
         }).ToList();

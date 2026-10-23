@@ -861,9 +861,9 @@ struct AccountInfoView: View {
         let maxSourceCount = rows.map { displaySource($0.source).count }.max() ?? 2
         let sourceWidth: CGFloat = max(70, CGFloat(maxSourceCount) * 8.5 + 16)
 
-        let headers = ["编号", "日期", "时间", "品种", "来源", "开平", "买卖", "成交价", "手数", "平仓盈亏"]
-        let widths: [CGFloat?] = [noColWidth, 80, 92, varietyWidth, sourceWidth, 40, 36, 68, 40, 76]
-        let alignments: [Alignment] = [.center, .leading, .leading, .leading, .leading, .center, .center, .trailing, .trailing, .trailing]
+        let headers = ["编号", "日期", "时间", "品种", "来源", "开平", "买卖", "成交价", "手数", "平仓盈亏", "手续费"]
+        let widths: [CGFloat?] = [noColWidth, 80, 92, varietyWidth, sourceWidth, 40, 36, 68, 40, 76, 68]
+        let alignments: [Alignment] = [.center, .leading, .leading, .leading, .leading, .center, .center, .trailing, .trailing, .trailing, .trailing]
 
         return recordTable(
             headers: headers,
@@ -881,6 +881,13 @@ struct AccountInfoView: View {
                     }
                     if let profit = row.realizedProfit {
                         return .colored(formatSigned(profit), profitColor(profit) ?? AppTheme.ink(scheme))
+                    }
+                    return .colored("—", AppTheme.dim(scheme))
+                }()
+
+                let commissionCell: Cell = {
+                    if let commission = row.commission {
+                        return .text(formatMoney(commission))
                     }
                     return .colored("—", AppTheme.dim(scheme))
                 }()
@@ -907,6 +914,7 @@ struct AccountInfoView: View {
                             .text(formatPrice(row.price)),
                             .text("\(row.volume)"),
                             profitCell,
+                            commissionCell,
                         ],
                         widths: widths,
                         alignments: alignments,

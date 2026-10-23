@@ -332,7 +332,7 @@ public sealed partial class DashboardPage : Page
                     var summary = GetSummary(kind);
                     return $"{kind}:{summary.ConfiguredCount}:{State.IsKindRunning(kind)}:"
                         + string.Join(",", summary.Records.Select(r =>
-                            $"{r.Id}{r.Error}{r.Account.Balance}{r.Account.Available}{r.Account.Margin}{r.Account.FloatProfit}{r.Account.PositionProfit}{r.Account.RiskRatio}"
+                            $"{r.Id}{r.Error}{r.Account.Balance}{r.Account.Available}{r.Account.Margin}{r.Account.FloatProfit}{r.Account.Commission}{r.Account.RiskRatio}"
                             + string.Join(";", r.Positions.Select(p => $"{p.Symbol}{p.Direction}{p.Volume}{p.OpenPrice}{p.PositionPrice}{p.LastPrice}{p.FloatProfit}{p.Margin}"))));
                 }));
         if (key == _renderKey)
@@ -521,6 +521,7 @@ public sealed partial class DashboardPage : Page
             ("保证金", FormatMoney(summary.Total(a => a.Margin)), Palette.Ink),
             ("风险度", FormatPercent(summary.RiskRatio), Palette.Ink),
             ("浮动盈亏", FormatSigned(floatProfit), ProfitColor(floatProfit) ?? Palette.Ink),
+            ("手续费", FormatMoney(summary.Total(a => a.Commission)), Palette.Ink),
         };
 
         for (var i = 0; i < items.Length; i++)
