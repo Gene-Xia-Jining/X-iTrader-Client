@@ -812,6 +812,7 @@ public sealed partial class AccountInfoView : UserControl
             Right("开仓均价", help: OpenPriceHelp),
             Right("当前价"),
             Right("浮动盈亏", help: FloatProfitHelp),
+            Right("手续费"),
             Right("保证金"),
         };
         var cells = rows.Select(row => new List<TableCell>
@@ -823,6 +824,7 @@ public sealed partial class AccountInfoView : UserControl
             new(FormatPrice(row.OpenPrice), null),
             new(FormatPrice(row.LastPrice), null),
             new(FormatSigned(row.FloatProfit), ProfitColor(row.FloatProfit)),
+            new(FormatMoney(row.Commission), null),
             new(FormatMoney(row.Margin), null),
         }).ToList();
         return BuildTable(columns, cells, "当前无持仓");

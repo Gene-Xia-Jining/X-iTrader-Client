@@ -332,8 +332,8 @@ public sealed partial class DashboardPage : Page
                     var summary = GetSummary(kind);
                     return $"{kind}:{summary.ConfiguredCount}:{State.IsKindRunning(kind)}:"
                         + string.Join(",", summary.Records.Select(r =>
-                            $"{r.Id}{r.Error}{r.Account.Balance}{r.Account.Available}{r.Account.Margin}{r.Account.FloatProfit}{r.Account.Commission}{r.Account.RiskRatio}"
-                            + string.Join(";", r.Positions.Select(p => $"{p.Symbol}{p.Direction}{p.Volume}{p.OpenPrice}{p.PositionPrice}{p.LastPrice}{p.FloatProfit}{p.Margin}"))));
+                            $"{r.Id}{r.Error}{r.Account.Balance}{r.Account.Available}{r.Account.Margin}{r.Account.FloatProfit}{r.Account.RiskRatio}"
+                            + string.Join(";", r.Positions.Select(p => $"{p.Symbol}{p.Direction}{p.Volume}{p.OpenPrice}{p.PositionPrice}{p.LastPrice}{p.FloatProfit}{p.Commission}{p.Margin}"))));
                 }));
         if (key == _renderKey)
         {
@@ -521,7 +521,6 @@ public sealed partial class DashboardPage : Page
             ("保证金", FormatMoney(summary.Total(a => a.Margin)), Palette.Ink),
             ("风险度", FormatPercent(summary.RiskRatio), Palette.Ink),
             ("浮动盈亏", FormatSigned(floatProfit), ProfitColor(floatProfit) ?? Palette.Ink),
-            ("手续费", FormatMoney(summary.Total(a => a.Commission)), Palette.Ink),
         };
 
         for (var i = 0; i < items.Length; i++)
@@ -632,6 +631,7 @@ public sealed partial class DashboardPage : Page
             Right("开仓均价", help: OpenPriceHelp),
             Right("当前价"),
             Right("浮动盈亏", help: FloatProfitHelp),
+            Right("手续费"),
             Right("保证金"),
         };
         var cells = rows.Select(row => new List<TableCell>
@@ -643,6 +643,7 @@ public sealed partial class DashboardPage : Page
             new(FormatPrice(row.OpenPrice), null),
             new(FormatPrice(row.LastPrice), null),
             new(FormatSigned(row.FloatProfit), ProfitColor(row.FloatProfit)),
+            new(FormatMoney(row.Commission), null),
             new(FormatMoney(row.Margin), null),
         }).ToList();
         return BuildTable(columns, cells, "当前无持仓");

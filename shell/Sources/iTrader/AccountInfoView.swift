@@ -41,6 +41,7 @@ struct PositionRecord: Identifiable {
     let positionPrice: Double?
     let lastPrice: Double?
     let floatProfit: Double?
+    let commission: Double?
     let margin: Double?
 
     static func from(_ dict: [String: Any]) -> PositionRecord? {
@@ -53,6 +54,7 @@ struct PositionRecord: Identifiable {
             positionPrice: dict.double("position_price"),
             lastPrice: dict.double("last_price"),
             floatProfit: dict.double("float_profit"),
+            commission: dict.double("commission"),
             margin: dict.double("margin")
         )
     }
@@ -632,11 +634,11 @@ struct AccountInfoView: View {
     private func positionTable(_ rows: [PositionRecord]) -> some View {
         let maxVarietyCount = rows.map { displayVariety($0.symbol).count }.max() ?? 2
         let varietyWidth: CGFloat = max(80, CGFloat(maxVarietyCount) * 8.5 + 16)
-        let widths: [CGFloat?] = [varietyWidth, nil, 40, 44, nil, nil, nil, nil]
-        let alignments: [Alignment] = [.leading, .leading, .center, .trailing, .trailing, .trailing, .trailing, .trailing]
+        let widths: [CGFloat?] = [varietyWidth, nil, 40, 44, nil, nil, nil, nil, nil]
+        let alignments: [Alignment] = [.leading, .leading, .center, .trailing, .trailing, .trailing, .trailing, .trailing, .trailing]
 
         return recordTable(
-            headers: ["品种", "合约", "方向", "手数", "开仓均价", "当前价", "浮动盈亏", "保证金"],
+            headers: ["品种", "合约", "方向", "手数", "开仓均价", "当前价", "浮动盈亏", "手续费", "保证金"],
             headerHelps: [
                 "开仓均价": openPriceHelp,
                 "浮动盈亏": floatProfitHelp,
@@ -657,6 +659,7 @@ struct AccountInfoView: View {
                         .text(formatPrice(row.openPrice)),
                         .text(formatPrice(row.lastPrice)),
                         .colored(formatSigned(row.floatProfit), profitColor(row.floatProfit) ?? AppTheme.ink(scheme)),
+                        .text(formatMoney(row.commission)),
                         .text(formatMoney(row.margin)),
                     ],
                     widths: widths,

@@ -300,7 +300,6 @@ struct DashboardView: View {
             metric("保证金", money(summary.total(\.margin)), AppTheme.ink(scheme))
             metric("风险度", formatPercent(summary.riskRatio), AppTheme.ink(scheme))
             metric("浮动盈亏", signed(floatProfit), profitColor(floatProfit))
-            metric("手续费", money(summary.total(\.commission)), AppTheme.ink(scheme))
         }
     }
 
@@ -347,11 +346,11 @@ struct DashboardView: View {
     private func positionTable(_ rows: [PositionRecord]) -> some View {
         let maxVarietyCount = rows.map { displayVariety($0.symbol).count }.max() ?? 2
         let varietyWidth: CGFloat = max(80, CGFloat(maxVarietyCount) * 8.5 + 16)
-        let widths: [CGFloat?] = [varietyWidth, nil, 40, 44, nil, nil, nil, nil]
-        let alignments: [Alignment] = [.leading, .leading, .center, .trailing, .trailing, .trailing, .trailing, .trailing]
+        let widths: [CGFloat?] = [varietyWidth, nil, 40, 44, nil, nil, nil, nil, nil]
+        let alignments: [Alignment] = [.leading, .leading, .center, .trailing, .trailing, .trailing, .trailing, .trailing, .trailing]
 
         return recordTable(
-            headers: ["品种", "合约", "方向", "手数", "开仓均价", "当前价", "浮动盈亏", "保证金"],
+            headers: ["品种", "合约", "方向", "手数", "开仓均价", "当前价", "浮动盈亏", "手续费", "保证金"],
             headerHelps: [
                 "开仓均价": openPriceHelp,
                 "浮动盈亏": floatProfitHelp,
@@ -372,6 +371,7 @@ struct DashboardView: View {
                         .text(formatPrice(row.openPrice)),
                         .text(formatPrice(row.lastPrice)),
                         .colored(signed(row.floatProfit), profitColor(row.floatProfit)),
+                        .text(money(row.commission)),
                         .text(money(row.margin)),
                     ],
                     widths: widths,

@@ -52,6 +52,7 @@ public sealed class PositionRecord
     public double? PositionPrice { get; init; }
     public double? LastPrice { get; init; }
     public double? FloatProfit { get; init; }
+    public double? Commission { get; init; }
     public double? Margin { get; init; }
 
     public static PositionRecord? From(JsonObject dict)
@@ -69,6 +70,7 @@ public sealed class PositionRecord
             PositionPrice = JsonHelpers.Double(dict["position_price"]),
             LastPrice = JsonHelpers.Double(dict["last_price"]),
             FloatProfit = JsonHelpers.Double(dict["float_profit"]),
+            Commission = JsonHelpers.Double(dict["commission"]),
             Margin = JsonHelpers.Double(dict["margin"]),
         };
     }

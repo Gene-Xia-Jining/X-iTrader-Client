@@ -63,13 +63,22 @@ class PositionRowsTest(unittest.TestCase):
                 margin_short=11400.0,
             )
         }
-        rows = _position_rows(positions)
+        trades = {
+            "t1": FakeEntity(
+                trade_id="t1", order_id="o1", exchange_id="SHFE", instrument_id="rb2405",
+                direction="BUY", offset="OPEN", price=3800.0, volume=2,
+                trade_date_time=0, commission=10.0,
+            )
+        }
+        rows = _position_rows(positions, trades=trades)
         self.assertEqual([r["direction"] for r in rows], ["多", "空"])
         self.assertEqual(rows[0]["symbol"], "SHFE.rb2405")
         self.assertEqual(rows[0]["volume"], 2)
         # rb 乘数 10，2 手多头，开仓 3800，浮动盈亏 120 -> 当前价 = 3800 + 120/(2*10) = 3806.0
         self.assertEqual(rows[0]["last_price"], 3806.0)
+        self.assertEqual(rows[0]["commission"], 10.0)
         self.assertIsNone(rows[1]["open_price"])
+        self.assertIsNone(rows[1]["commission"])
         self.assertEqual(rows[1]["margin"], 11400.0)
 
     def test_zero_volume_direction_skipped(self):

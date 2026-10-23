@@ -133,10 +133,30 @@ def _account_snapshot(account_obj) -> dict:
     }
 
 
-def _position_rows(positions, api=None) -> list[dict]:
+def _position_rows(positions, api=None, trades=None) -> list[dict]:
     """一个合约的多空各成一行（与快期持仓列表一致），无持仓方向不输出。"""
     rows: list[dict] = []
     quotes_cache: dict[str, Any] = {}
+
+    # 统计当日开仓成交手续费 (symbol, "BUY"/"SELL") -> (total_volume, total_commission)
+    open_comm_map: dict[tuple[str, str], tuple[int, float]] = {}
+    if trades:
+        trade_items = trades.values() if hasattr(trades, "values") else trades
+        for t in trade_items:
+            t_offset = _text(getattr(t, "offset", None) or (t.get("offset") if isinstance(t, dict) else ""))
+            if t_offset in ("OPEN", ""):
+                t_ex = _text(getattr(t, "exchange_id", None) or (t.get("exchange_id") if isinstance(t, dict) else ""))
+                t_ins = _text(getattr(t, "instrument_id", None) or (t.get("instrument_id") if isinstance(t, dict) else ""))
+                t_sym = _symbol(t_ex, t_ins)
+                if not t_sym and isinstance(t, dict):
+                    t_sym = t.get("symbol", "")
+                t_dir = _text(getattr(t, "direction", None) or (t.get("direction") if isinstance(t, dict) else ""))
+                t_vol = _int(getattr(t, "volume", None) or (t.get("volume") if isinstance(t, dict) else 0))
+                t_comm = _number(getattr(t, "commission", None) or (t.get("commission") if isinstance(t, dict) else None))
+                if t_vol > 0 and t_comm is not None:
+                    curr_vol, curr_comm = open_comm_map.get((t_sym, t_dir), (0, 0.0))
+                    open_comm_map[(t_sym, t_dir)] = (curr_vol + t_vol, curr_comm + t_comm)
+
     for symbol, pos in positions.items():
         exchange_id = _text(pos.exchange_id) or symbol.split(".", 1)[0]
         instrument_id = _text(pos.instrument_id) or (symbol.split(".", 1)[-1] if "." in symbol else symbol)
@@ -186,6 +206,14 @@ def _position_rows(positions, api=None) -> list[dict]:
                     diff = num_float_profit / (num_vol * multiplier)
                     calc_last_price = round(num_open + diff if direction == "多" else num_open - diff, 4)
 
+            # 持仓手续费：按当日开仓成交按手数等比分摊
+            pos_comm = None
+            target_dir = "BUY" if direction == "多" else "SELL"
+            if (base, target_dir) in open_comm_map:
+                t_vol, t_comm = open_comm_map[(base, target_dir)]
+                if t_vol > 0:
+                    pos_comm = round((t_comm / t_vol) * num_vol, 2)
+
             rows.append(
                 {
                     "symbol": base,
@@ -195,6 +223,7 @@ def _position_rows(positions, api=None) -> list[dict]:
                     "position_price": _number(position_price),
                     "last_price": _number(calc_last_price),
                     "float_profit": num_float_profit,
+                    "commission": pos_comm,
                     "margin": _number(margin),
                 }
             )
@@ -388,14 +417,15 @@ def _trade_rows(
 
 def _build_snapshot_dict(account: Account, api, acc) -> dict:
     pos_map = api.get_position()
+    trade_map = api.get_trade()
     return {
         "account_id": account.id,
         "kind": account.kind,
         "label": account.label or account.id,
         "account": _account_snapshot(acc),
-        "positions": _position_rows(pos_map, api=api),
+        "positions": _position_rows(pos_map, api=api, trades=trade_map),
         "orders": _order_rows(api.get_order(), account=account),
-        "trades": _trade_rows(api.get_trade(), account=account, api=api, positions_map=pos_map),
+        "trades": _trade_rows(trade_map, account=account, api=api, positions_map=pos_map),
     }
 
 
