@@ -16,8 +16,10 @@ __version__ 打 tag 并发布）：
 cleanup_stale_backups() 清理 .old-* 残留。开发态（非 frozen）不做任何文件替换。
 """
 
+import asyncio
 import os
 import plistlib
+import re
 import shutil
 import stat
 import subprocess
@@ -31,6 +33,10 @@ import httpx
 GITHUB_REPO = "Gene-Xia-Jining/X-iTrader-Client"
 RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 RELEASE_PAGE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
+
+# 默认本地更新源目录（与服务端一致）：
+# 该目录下若存在 x-itrader-client-*.dmg 或 *.zip 安装包，自动优先走本地更新
+DEFAULT_LOCAL_SOURCE = "/Users/xiajining/Desktop/Dev/X-iTrader"
 
 # 当前平台全量包的 asset 名关键字与扩展名
 # （CI 产物 x-itrader-client-{version}-{平台}.dmg/.zip）。
@@ -109,17 +115,130 @@ def _select_assets(assets: list[dict]) -> tuple[str, str]:
     return full_url, patch_url
 
 
-async def fetch_latest_release(timeout: float = 10.0, transport=None) -> ReleaseInfo | None:
-    """查询 GitHub 最新 Release。
+def is_local_source(source: str) -> bool:
+    """判断更新源是否为本地目录路径。"""
+    s = (source or "").strip()
+    if not s:
+        return False
+    if s.startswith("~") or s.startswith(("/", "./", "../", ".\\", "..\\")) or "\\" in s:
+        return True
+    try:
+        p = Path(s).expanduser()
+        if p.is_dir() or p.exists():
+            return True
+    except Exception:
+        pass
+    if "/" not in s:
+        return True
+    parts = s.split("/")
+    if len(parts) != 2 or not all(p for p in parts):
+        return True
+    return False
 
-    返回 None 表示无可更新内容（无 tag 或没有当前平台的全量包）；
-    网络失败等错误直接抛出，由调用方处理。
+
+def find_latest_in_folder(folder: Path) -> ReleaseInfo | None:
+    """从本地目录中扫描最新的客户端更新包（全量 dmg/zip 或补丁 zip）。
+
+    全量包：macOS 匹配 .dmg，Windows 匹配 .zip；
+    补丁包：匹配含 src 的 .zip。
     """
+    if not folder.exists() or not folder.is_dir():
+        return None
+
+    if sys.platform == "darwin":
+        pattern_full = re.compile(
+            r"x-itrader-client[_-]v?(\d+(?:\.\d+)+).*(?:macos)?.*\.dmg$", re.IGNORECASE
+        )
+    else:
+        pattern_full = re.compile(
+            r"x-itrader-client[_-]v?(\d+(?:\.\d+)+).*(?:windows)?.*\.zip$", re.IGNORECASE
+        )
+
+    pattern_patch = re.compile(
+        r"x-itrader-client[_-]v?(\d+(?:\.\d+)+).*src.*\.zip$", re.IGNORECASE
+    )
+
+    versions: dict[tuple[int, ...], tuple[str, Path | None, Path | None]] = {}
+
+    for item in folder.iterdir():
+        if not item.is_file():
+            continue
+
+        # 补丁包
+        m_patch = pattern_patch.search(item.name)
+        if m_patch:
+            ver_str = m_patch.group(1)
+            parsed = parse_version(ver_str)
+            if parsed is not None:
+                curr_ver, curr_full, curr_patch = versions.get(
+                    parsed, (ver_str, None, None)
+                )
+                versions[parsed] = (ver_str, curr_full, item)
+                continue
+
+        # 全量包
+        m_full = pattern_full.search(item.name)
+        if m_full:
+            ver_str = m_full.group(1)
+            parsed = parse_version(ver_str)
+            if parsed is not None:
+                curr_ver, curr_full, curr_patch = versions.get(
+                    parsed, (ver_str, None, None)
+                )
+                versions[parsed] = (ver_str, item, curr_patch)
+
+    if not versions:
+        return None
+
+    sorted_versions = sorted(versions.keys(), reverse=True)
+    best_ver, best_full, best_patch = versions[sorted_versions[0]]
+    if best_full is None and best_patch is None:
+        return None
+
+    full_url = str(best_full.resolve()) if best_full else ""
+    patch_url = str(best_patch.resolve()) if best_patch else ""
+    if not full_url and patch_url:
+        full_url = patch_url
+
+    return ReleaseInfo(
+        version=best_ver,
+        notes=f"本地安装包: {best_full.name if best_full else best_patch.name}",
+        full_url=full_url,
+        patch_url=patch_url,
+    )
+
+
+async def fetch_latest_release(
+    source: str = "", timeout: float = 10.0, transport=None
+) -> ReleaseInfo | None:
+    """查询最新 Release（支持本地目录与 GitHub Releases）。
+
+    优先级：入参 source -> 环境变量 ITRADER_UPDATE_SOURCE -> 默认本地目录（若非 mock 测试且存在包）-> GitHub Releases。
+    """
+    src = (source or os.environ.get("ITRADER_UPDATE_SOURCE", "")).strip()
+    if not src and transport is None:
+        # 未显式指定且非测试 mock transport 时，若默认本地目录存在且含有客户端更新包，优先走本地
+        default_p = Path(DEFAULT_LOCAL_SOURCE).expanduser()
+        if default_p.is_dir():
+            local_rel = find_latest_in_folder(default_p)
+            if local_rel is not None:
+                return local_rel
+        src = GITHUB_REPO
+    elif not src:
+        src = GITHUB_REPO
+
+    if is_local_source(src):
+        folder = Path(src).expanduser().resolve()
+        if not folder.is_dir():
+            raise FileNotFoundError(f"本地更新目录不存在: {folder}")
+        return find_latest_in_folder(folder)
+
+    api_url = f"https://api.github.com/repos/{src}/releases/latest"
     async with httpx.AsyncClient(
         timeout=timeout, follow_redirects=True, transport=transport
     ) as client:
         resp = await client.get(
-            RELEASES_API_URL, headers={"Accept": "application/vnd.github+json"}
+            api_url, headers={"Accept": "application/vnd.github+json"}
         )
         resp.raise_for_status()
         data = resp.json()
@@ -139,16 +258,19 @@ async def fetch_latest_release(timeout: float = 10.0, transport=None) -> Release
 
 
 async def download_release(url: str, dest_dir: Path, progress_cb=None) -> Path:
-    """流式下载更新包到 dest_dir/update.<ext>，progress_cb(received, total) 汇报进度。
-
-    扩展名取自 URL 路径（.dmg/.zip），使 extract_update 能按格式分派；无法识别
-    时按 .zip 处理。取消由调用方取消协程实现：CancelledError 会在 await 点抛出，
-    文件句柄随 with 块关闭，半成品由调用方清理暂存目录。
-    """
+    """下载更新包（支持本地文件直接复制与网络下载）。"""
     dest_dir.mkdir(parents=True, exist_ok=True)
     url_path = url.split("?", 1)[0]
     ext = ".dmg" if url_path.lower().endswith(".dmg") else ".zip"
     archive_path = dest_dir / f"update{ext}"
+
+    local_path = Path(url)
+    if local_path.is_file():
+        await asyncio.to_thread(shutil.copy2, str(local_path), str(archive_path))
+        if progress_cb is not None:
+            progress_cb(1, 1)
+        return archive_path
+
     # 下载大文件：connect/pool 短超时，read 允许单个 chunk 间隔最长 60s
     timeout = httpx.Timeout(connect=10.0, read=60.0, write=60.0, pool=10.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
@@ -327,9 +449,19 @@ def apply_update_and_restart(stage_item: Path, kind: str) -> Path:
 
     kind: "patch" 只替换外置 src 目录（二进制不变）；"full" 替换整个
     程序目录 / .app。调用方在返回后应尽快退出当前进程。
-    开发态（非 frozen）一律拒绝，避免误改源码/虚拟环境。
+    开发态（非 frozen）默认拒绝，避免误改源码/虚拟环境；全量更新时若能唯一定位
+    上级目录已安装的 .app 则允许替换。
     """
     if not is_frozen():
+        if kind == "full":
+            candidate = Path(__file__).resolve().parents[3] / "X-iTrader-Client.app"
+            if candidate.is_dir():
+                target = candidate
+                _launch_binary_of(stage_item)
+                _swap_directory(stage_item, target)
+                binary = _launch_binary_of(target)
+                subprocess.Popen([str(binary)], cwd=str(binary.parent), close_fds=True)
+                return binary
         raise RuntimeError("开发模式不支持自动安装，请从 GitHub Release 页面手动下载")
 
     if kind == "patch":

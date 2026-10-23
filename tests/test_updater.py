@@ -19,6 +19,7 @@ from src.infrastructure.updater import (
     ReleaseInfo,
     apply_update_and_restart,
     cleanup_stale_backups,
+    download_release,
     extract_update,
     fetch_latest_release,
     is_newer,
@@ -444,6 +445,135 @@ class CleanupStaleBackupsTest(unittest.TestCase):
 
         self.assertFalse(stale.exists())
         self.assertTrue(progdir.exists())
+
+
+class LocalSourceTest(unittest.TestCase):
+    """本地目录更新源：路径识别、包扫描与本地文件复制。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_is_local_source(self):
+        self.assertTrue(updater.is_local_source("/tmp/releases"))
+        self.assertTrue(updater.is_local_source("~/releases"))
+        self.assertTrue(updater.is_local_source("./releases"))
+        self.assertTrue(updater.is_local_source("releases"))
+        self.assertTrue(updater.is_local_source(str(self.dir)))
+        # owner/repo 形式才当作 GitHub 仓库
+        self.assertFalse(updater.is_local_source("Gene-Xia-Jining/X-iTrader-Client"))
+        self.assertFalse(updater.is_local_source(""))
+
+    def test_find_latest_picks_highest_version(self):
+        (self.dir / "x-itrader-client-0.6.1-macos.dmg").write_bytes(b"old")
+        (self.dir / "x-itrader-client-0.6.10-macos.dmg").write_bytes(b"new")
+        with mock.patch.object(sys, "platform", "darwin"):
+            release = updater.find_latest_in_folder(self.dir)
+        # 按整数元组比较，0.6.10 高于 0.6.1
+        self.assertEqual(release.version, "0.6.10")
+        self.assertEqual(release.full_url, str((self.dir / "x-itrader-client-0.6.10-macos.dmg").resolve()))
+        self.assertFalse(release.has_patch)
+
+    def test_find_latest_pairs_patch_with_full(self):
+        (self.dir / "x-itrader-client-0.6.1-macos.dmg").write_bytes(b"full")
+        (self.dir / "x-itrader-client-0.6.1-src.zip").write_bytes(b"patch")
+        with mock.patch.object(sys, "platform", "darwin"):
+            release = updater.find_latest_in_folder(self.dir)
+        self.assertEqual(release.version, "0.6.1")
+        self.assertTrue(release.has_patch)
+        self.assertTrue(release.patch_url.endswith("-src.zip"))
+
+    def test_find_latest_platform_suffix(self):
+        # Windows 只认 zip 全量包，macOS 的 dmg 不参与匹配
+        (self.dir / "x-itrader-client-0.6.1-macos.dmg").write_bytes(b"mac")
+        (self.dir / "x-itrader-client-0.6.2-windows.zip").write_bytes(b"win")
+        with mock.patch.object(sys, "platform", "win32"):
+            release = updater.find_latest_in_folder(self.dir)
+        self.assertEqual(release.version, "0.6.2")
+
+    def test_find_latest_empty_folder(self):
+        self.assertIsNone(updater.find_latest_in_folder(self.dir))
+        self.assertIsNone(updater.find_latest_in_folder(self.dir / "missing"))
+
+    def test_fetch_from_local_folder(self):
+        dmg = self.dir / "x-itrader-client-0.6.2-macos.dmg"
+        dmg.write_bytes(b"dmg")
+        with mock.patch.object(sys, "platform", "darwin"):
+            release = asyncio.run(fetch_latest_release(source=str(self.dir)))
+        self.assertEqual(release.version, "0.6.2")
+        self.assertEqual(release.full_url, str(dmg.resolve()))
+
+    def test_fetch_missing_local_folder_raises(self):
+        with self.assertRaises(FileNotFoundError):
+            asyncio.run(fetch_latest_release(source=str(self.dir / "missing")))
+
+    def test_fetch_env_source_overrides_default(self):
+        dmg = self.dir / "x-itrader-client-0.6.3-macos.dmg"
+        dmg.write_bytes(b"dmg")
+        with mock.patch.dict(os.environ, {"ITRADER_UPDATE_SOURCE": str(self.dir)}):
+            with mock.patch.object(sys, "platform", "darwin"):
+                release = asyncio.run(fetch_latest_release())
+        self.assertEqual(release.version, "0.6.3")
+
+    def test_download_copies_local_file(self):
+        src = self.dir / "x-itrader-client-0.6.2-macos.dmg"
+        src.write_bytes(b"dmg-content")
+        stage = self.dir / "stage"
+        progress = []
+        archive = asyncio.run(
+            download_release(str(src), stage, progress_cb=lambda rcv, total: progress.append((rcv, total)))
+        )
+        self.assertEqual(archive, stage / "update.dmg")
+        self.assertEqual(archive.read_bytes(), b"dmg-content")
+        self.assertEqual(progress, [(1, 1)])
+
+
+class DevModeFullUpdateTest(unittest.TestCase):
+    """开发态（非 frozen）下，若能定位上级目录已安装的 .app，则允许全量更新。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_dev_full_update_swaps_sibling_app(self):
+        # 模拟 src/infrastructure/updater.py -> 仓库根 -> 上一级/X-iTrader-Client.app
+        repo = self.dir / "X-iTrader-Client"
+        fake_module = repo / "src" / "infrastructure" / "updater.py"
+        fake_module.parent.mkdir(parents=True)
+        fake_module.write_text("x")
+        app = self.dir / "X-iTrader-Client.app"
+        old_exe = app / "Contents" / "MacOS" / "X-iTrader-Client"
+        old_exe.parent.mkdir(parents=True)
+        old_exe.write_text("old")
+
+        new_app = self.dir / "stage" / "X-iTrader-Client.app"
+        (new_app / "Contents" / "MacOS").mkdir(parents=True)
+        (new_app / "Contents" / "MacOS" / "X-iTrader-Client").write_text("new")
+
+        with (
+            mock.patch.object(updater, "is_frozen", return_value=False),
+            mock.patch.object(sys, "platform", "darwin"),
+            mock.patch.object(updater, "__file__", str(fake_module)),
+            mock.patch.object(updater.subprocess, "Popen") as popen,
+        ):
+            binary = apply_update_and_restart(new_app, "full")
+
+        self.assertEqual(old_exe.read_text(), "new")
+        self.assertEqual(binary.resolve(), old_exe.resolve())
+        popen.assert_called_once()
+
+    def test_dev_patch_still_rejected(self):
+        item = self.dir / "stage" / "src"
+        item.mkdir(parents=True)
+        with mock.patch.object(updater, "is_frozen", return_value=False):
+            with self.assertRaises(RuntimeError):
+                apply_update_and_restart(item, "patch")
 
 
 class ReleaseInfoTest(unittest.TestCase):
