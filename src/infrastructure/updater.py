@@ -1,6 +1,6 @@
-"""GitHub Releases 自动更新基础设施。
+"""自动更新基础设施（本地目录 + GitHub Releases 双源）。
 
-更新源是本仓库的 GitHub Releases（CI 在 push main 时以 src/__init__.py 的
+主源是本仓库的 GitHub Releases（CI 在 push main 时以 src/__init__.py 的
 __version__ 打 tag 并发布）：
 
 - x-itrader-client-{version}-macos.dmg    全量包（内含 X-iTrader-Client.app，拖拽安装）
@@ -10,10 +10,16 @@ __version__ 打 tag 并发布）：
                                           全平台共用；src 在打包时外置为普通目录，
                                           替换该目录即完成差量更新）
 
+本地源是同名安装包所在的目录（默认 DEFAULT_LOCAL_SOURCE，可用
+ITRADER_UPDATE_SOURCE 覆盖）。检查更新时本地目录与 GitHub 并发查询，
+取版本更高者、同版本优先本地；GitHub 失败（如匿名 API 403 限流）时回落到本地结果。
+显式指定 source 时只查该源。
+
 全量包两种格式都可解：macOS 用 dmg（hdiutil 挂载后复制 .app），Windows 用 zip；
 补丁包恒为 zip。替换采用 rename→move→Popen→退出 模式：旧安装物整体改名让位，
 新安装物移入原位置，启动新进程后旧进程退出；新进程启动时调用
-cleanup_stale_backups() 清理 .old-* 残留。开发态（非 frozen）不做任何文件替换。
+cleanup_stale_backups() 清理 .old-* 残留。开发态（非 frozen）仅允许全量替换
+上级目录已安装的 .app。
 """
 
 import asyncio
@@ -35,7 +41,8 @@ RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 RELEASE_PAGE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 
 # 默认本地更新源目录（与服务端一致）：
-# 该目录下若存在 x-itrader-client-*.dmg 或 *.zip 安装包，自动优先走本地更新
+# 非空时检查更新会同时扫描该目录与 GitHub Releases，取版本更高者；
+# 置空字符串可关闭默认本地源。
 DEFAULT_LOCAL_SOURCE = "/Users/xiajining/Desktop/Dev/X-iTrader"
 
 # 当前平台全量包的 asset 名关键字与扩展名
@@ -208,32 +215,11 @@ def find_latest_in_folder(folder: Path) -> ReleaseInfo | None:
     )
 
 
-async def fetch_latest_release(
-    source: str = "", timeout: float = 10.0, transport=None
+async def _fetch_github_release(
+    repo: str, timeout: float = 10.0, transport=None
 ) -> ReleaseInfo | None:
-    """查询最新 Release（支持本地目录与 GitHub Releases）。
-
-    优先级：入参 source -> 环境变量 ITRADER_UPDATE_SOURCE -> 默认本地目录（若非 mock 测试且存在包）-> GitHub Releases。
-    """
-    src = (source or os.environ.get("ITRADER_UPDATE_SOURCE", "")).strip()
-    if not src and transport is None:
-        # 未显式指定且非测试 mock transport 时，若默认本地目录存在且含有客户端更新包，优先走本地
-        default_p = Path(DEFAULT_LOCAL_SOURCE).expanduser()
-        if default_p.is_dir():
-            local_rel = find_latest_in_folder(default_p)
-            if local_rel is not None:
-                return local_rel
-        src = GITHUB_REPO
-    elif not src:
-        src = GITHUB_REPO
-
-    if is_local_source(src):
-        folder = Path(src).expanduser().resolve()
-        if not folder.is_dir():
-            raise FileNotFoundError(f"本地更新目录不存在: {folder}")
-        return find_latest_in_folder(folder)
-
-    api_url = f"https://api.github.com/repos/{src}/releases/latest"
+    """查询 GitHub 最新 Release；无可用全量包时返回 None，网络错误直接抛出。"""
+    api_url = f"https://api.github.com/repos/{repo}/releases/latest"
     async with httpx.AsyncClient(
         timeout=timeout, follow_redirects=True, transport=transport
     ) as client:
@@ -255,6 +241,66 @@ async def fetch_latest_release(
         full_url=full_url,
         patch_url=patch_url,
     )
+
+
+def _pick_higher(local: ReleaseInfo | None, remote: ReleaseInfo | None) -> ReleaseInfo | None:
+    """两路结果取版本更高者；同版本优先本地（本机包免下载）。
+
+    版本无法解析时退回「有本地用本地，否则用远端」，避免把可用结果丢掉。
+    """
+    if local is None:
+        return remote
+    if remote is None:
+        return local
+    local_v = parse_version(local.version)
+    remote_v = parse_version(remote.version)
+    if local_v is None or remote_v is None:
+        return local
+    return remote if remote_v > local_v else local
+
+
+async def fetch_latest_release(
+    source: str = "", timeout: float = 10.0, transport=None
+) -> ReleaseInfo | None:
+    """查询最新 Release（支持本地目录与 GitHub Releases）。
+
+    - 显式给定 source（入参或 ITRADER_UPDATE_SOURCE）时只查该源：本地目录即扫描目录，
+      owner/repo 即查该仓库。
+    - 未显式指定时同时查默认本地目录与 GITHUB_REPO，取版本更高者（同版本优先本地）；
+      GitHub 请求失败时若本地有结果就返回本地，两路都没有才抛出网络错误。
+    """
+    src = (source or os.environ.get("ITRADER_UPDATE_SOURCE", "")).strip()
+    if src:
+        if not is_local_source(src):
+            return await _fetch_github_release(src, timeout, transport)
+        folder = Path(src).expanduser().resolve()
+        if not folder.is_dir():
+            raise FileNotFoundError(f"本地更新目录不存在: {folder}")
+        return find_latest_in_folder(folder)
+
+    local_task = None
+    default_dir = (DEFAULT_LOCAL_SOURCE or "").strip()
+    if default_dir:
+        default_p = Path(default_dir).expanduser()
+        if default_p.is_dir():
+            local_task = asyncio.to_thread(find_latest_in_folder, default_p)
+
+    remote_task = _fetch_github_release(GITHUB_REPO, timeout, transport)
+    if local_task is None:
+        return await remote_task
+
+    # 两路并发：本地扫描几乎瞬时，不等 GitHub 超时就能拿到结果
+    local_release, remote_result = await asyncio.gather(
+        local_task, remote_task, return_exceptions=True
+    )
+    if isinstance(local_release, BaseException):
+        local_release = None
+    if isinstance(remote_result, BaseException):
+        # 本地有可用包时不让网络故障挡住更新；两路皆空才把错误抛给调用方
+        if local_release is None:
+            raise remote_result
+        return local_release
+    return _pick_higher(local_release, remote_result)
 
 
 async def download_release(url: str, dest_dir: Path, progress_cb=None) -> Path:

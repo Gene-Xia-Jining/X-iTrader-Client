@@ -113,6 +113,12 @@ class FetchLatestReleaseTest(unittest.TestCase):
             ],
         }
 
+    def setUp(self):
+        # 这些用例只验证 GitHub 分支：关掉默认本地源，避免开发者本机的安装包混入结果
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(mock.patch.object(updater, "DEFAULT_LOCAL_SOURCE", ""))
+
     def _fetch(self, payload, status=200):
         def handler(request: httpx.Request) -> httpx.Response:
             assert str(request.url) == RELEASES_API_URL
@@ -529,6 +535,81 @@ class LocalSourceTest(unittest.TestCase):
         self.assertEqual(archive, stage / "update.dmg")
         self.assertEqual(archive.read_bytes(), b"dmg-content")
         self.assertEqual(progress, [(1, 1)])
+
+
+class DualSourceFetchTest(unittest.TestCase):
+    """未显式指定更新源时：本地目录与 GitHub 同时查，取版本更高者。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.addCleanup(self._tmp.cleanup)
+        stack.enter_context(mock.patch.object(updater, "DEFAULT_LOCAL_SOURCE", str(self.dir)))
+        stack.enter_context(mock.patch.object(sys, "platform", "darwin"))
+        stack.enter_context(mock.patch.dict(os.environ, {}, clear=False))
+        os.environ.pop("ITRADER_UPDATE_SOURCE", None)
+
+    def _fetch(self, payload, status=200):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(status, json=payload)
+
+        return asyncio.run(fetch_latest_release(transport=httpx.MockTransport(handler)))
+
+    @staticmethod
+    def _remote(version: str) -> dict:
+        return {
+            "tag_name": version,
+            "body": "remote notes",
+            "assets": [
+                {
+                    "name": f"x-itrader-client-{version}-macos.dmg",
+                    "browser_download_url": f"https://x/{version}.dmg",
+                }
+            ],
+        }
+
+    def _local(self, version: str) -> Path:
+        path = self.dir / f"x-itrader-client-{version}-macos.dmg"
+        path.write_bytes(b"dmg")
+        return path
+
+    def test_remote_newer_wins_over_local(self):
+        # 关键回归：本地残留旧包不能遮住线上新版本
+        self._local("0.6.1")
+        release = self._fetch(self._remote("0.6.2"))
+        self.assertEqual(release.version, "0.6.2")
+        self.assertEqual(release.full_url, "https://x/0.6.2.dmg")
+
+    def test_local_newer_wins_over_remote(self):
+        local = self._local("0.7.0")
+        release = self._fetch(self._remote("0.6.2"))
+        self.assertEqual(release.version, "0.7.0")
+        self.assertEqual(release.full_url, str(local.resolve()))
+
+    def test_same_version_prefers_local(self):
+        local = self._local("0.6.2")
+        release = self._fetch(self._remote("0.6.2"))
+        self.assertEqual(release.version, "0.6.2")
+        self.assertEqual(release.full_url, str(local.resolve()))
+
+    def test_no_local_package_falls_back_to_remote(self):
+        release = self._fetch(self._remote("0.6.2"))
+        self.assertEqual(release.version, "0.6.2")
+
+    def test_github_error_falls_back_to_local(self):
+        local = self._local("0.6.1")
+        release = self._fetch({}, status=403)
+        self.assertEqual(release.version, "0.6.1")
+        self.assertEqual(release.full_url, str(local.resolve()))
+
+    def test_github_error_raises_when_no_local(self):
+        with self.assertRaises(httpx.HTTPStatusError):
+            self._fetch({}, status=403)
+
+    def test_both_empty_returns_none(self):
+        self.assertIsNone(self._fetch({"tag_name": "", "assets": []}))
 
 
 class DevModeFullUpdateTest(unittest.TestCase):
