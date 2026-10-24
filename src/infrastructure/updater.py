@@ -26,6 +26,7 @@ import asyncio
 import os
 import plistlib
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -372,6 +373,11 @@ def _extract_dmg(dmg_path: Path, extract_root: Path) -> Path:
             raise ValueError("dmg 中未找到 X-iTrader-Client.app")
         app_dst = extract_root / "X-iTrader-Client.app"
         subprocess.run(["ditto", str(app_src), str(app_dst)], check=True)
+        # 移除可能从下载 dmg 继承的 quarantine 隔离属性，避免 Gatekeeper 阻止自启动
+        subprocess.run(
+            ["xattr", "-r", "-d", "com.apple.quarantine", str(app_dst)],
+            capture_output=True,
+        )
     finally:
         subprocess.run(
             ["hdiutil", "detach", mount_point, "-force"],
@@ -490,6 +496,47 @@ def _launch_binary_of(install_root: Path) -> Path:
     return binary
 
 
+def _relaunch_full_app(target: Path, binary: Path) -> None:
+    """脱离当前进程树拉起新版本的完整应用（壳进程）。
+
+    macOS: target 是 X-iTrader-Client.app 目录。
+    必须通过 /usr/bin/open -n <app> 启动以获得合法的 LaunchServices GUI 上下文；
+    必须延时 2 秒（sleep 2）等旧壳与旧后端完成退出收尾（旧壳收到 stopping 事件后有
+    1.5s 退出延迟），避免同 bundle、同端口、同 backend.json 发生重叠冲突；
+    必须使用 start_new_session=True 脱离当前进程组与 session，避免被 launchd
+    销毁旧 App service 时连坐清理。
+
+    Windows: target 是程序根目录，binary 是根级 X-iTrader.exe。
+    使用 cmd.exe 延时 2 秒拉起新壳并脱离当前进程树。
+    """
+    if sys.platform == "darwin":
+        cmd = f"sleep 2 && /usr/bin/open -n {shlex.quote(str(target))}"
+        subprocess.Popen(
+            ["/bin/sh", "-c", cmd],
+            start_new_session=True,
+            close_fds=True,
+        )
+    elif sys.platform == "win32":
+        cmd = f'ping 127.0.0.1 -n 3 >nul & start "" "{binary}"'
+        creationflags = (
+            getattr(subprocess, "DETACHED_PROCESS", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        )
+        subprocess.Popen(
+            cmd,
+            shell=True,
+            close_fds=True,
+            creationflags=creationflags,
+        )
+    else:
+        subprocess.Popen(
+            [str(binary)],
+            cwd=str(binary.parent),
+            close_fds=True,
+            start_new_session=True,
+        )
+
+
 def apply_update_and_restart(stage_item: Path, kind: str) -> Path:
     """安装已暂存的更新并启动新进程，返回新进程二进制路径。
 
@@ -506,7 +553,7 @@ def apply_update_and_restart(stage_item: Path, kind: str) -> Path:
                 _launch_binary_of(stage_item)
                 _swap_directory(stage_item, target)
                 binary = _launch_binary_of(target)
-                subprocess.Popen([str(binary)], cwd=str(binary.parent), close_fds=True)
+                _relaunch_full_app(target, binary)
                 return binary
         raise RuntimeError("开发模式不支持自动安装，请从 GitHub Release 页面手动下载")
 
@@ -530,7 +577,7 @@ def apply_update_and_restart(stage_item: Path, kind: str) -> Path:
     _swap_directory(stage_item, target)
     binary = _launch_binary_of(target)
 
-    subprocess.Popen([str(binary)], cwd=str(binary.parent), close_fds=True)
+    _relaunch_full_app(target, binary)
     return binary
 
 

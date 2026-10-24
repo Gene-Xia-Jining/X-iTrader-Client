@@ -252,6 +252,8 @@ class ExtractDmgTest(unittest.TestCase):
                 return subprocess.CompletedProcess(cmd, 0, "", "")
             if cmd[0] == "hdiutil" and cmd[1] == "detach":
                 return subprocess.CompletedProcess(cmd, 0, "", "")
+            if cmd[0] == "xattr":
+                return subprocess.CompletedProcess(cmd, 0, "", "")
             raise AssertionError(f"未预期的命令: {cmd}")
 
         with mock.patch.object(updater.subprocess, "run", side_effect=fake_run):
@@ -330,6 +332,10 @@ class ApplyUpdateTest(unittest.TestCase):
         self.assertEqual(len(backups), 1)
         self.assertEqual((backups[0] / "Contents" / "MacOS" / "X-iTrader-Client").read_text(), "old")
         popen.assert_called_once()
+        cmd_args, kwargs = popen.call_args
+        self.assertIn("/usr/bin/open -n", cmd_args[0][2])
+        self.assertTrue(kwargs.get("start_new_session"))
+        self.assertTrue(kwargs.get("close_fds"))
 
     def test_full_update_windows(self):
         # Windows 扁平布局：后端 X-iTrader-Backend.exe 的父目录即安装根，
@@ -356,6 +362,9 @@ class ApplyUpdateTest(unittest.TestCase):
         backups = list(self.dir.glob("X-iTrader-Client.old-*"))
         self.assertEqual(len(backups), 1)
         popen.assert_called_once()
+        cmd_args, kwargs = popen.call_args
+        self.assertIn("X-iTrader.exe", cmd_args[0])
+        self.assertTrue(kwargs.get("shell"))
 
     def test_patch_update_replaces_src_only(self):
         meipass = self.dir / "meipass"
