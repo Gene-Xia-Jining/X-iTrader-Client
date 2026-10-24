@@ -135,7 +135,7 @@ a.datas = [d for d in a.datas if not d[0].startswith(_drop)]
 pyz = PYZ(a.pure)
 
 # 产物名按平台区分：
-# - macOS：backend（build_app.sh 期望 dist/backend/backend，作为 .app 内嵌后端）
+# - macOS：backend（build.sh 期望 dist/backend/backend，作为 .app 内嵌后端）
 # - Windows：X-iTrader-Backend（与壳 X-iTrader.exe 同级的扁平布局，
 #   updater 的 app_install_root() 取后端 exe 的父目录作为安装根）
 BACKEND_NAME = 'X-iTrader-Backend' if sys.platform == 'win32' else 'backend'

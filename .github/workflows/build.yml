@@ -82,7 +82,7 @@ jobs:
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          # 建在仓库根的 .venv：build_app.sh 固定调用 .venv/bin/pyinstaller
+          # 建在仓库根的 .venv：build.sh 固定调用 .venv/bin/pyinstaller
           python -m venv .venv
           .venv/bin/pip install --upgrade pip
           .venv/bin/pip install -r requirements.txt
@@ -123,9 +123,9 @@ jobs:
       - name: Build (macOS)
         if: runner.os == 'macOS'
         run: |
-          # build_app.sh 产出 .app（含 PyInstaller 后端），build_dmg.sh 再封装成
+          # build.sh 产出 .app（含 PyInstaller 后端），build_dmg.sh 再封装成
           # dmg；两者都落在仓库上一级。
-          ./build_app.sh
+          ./build.sh
           ./build_dmg.sh
 
       - name: Package macOS
@@ -133,7 +133,7 @@ jobs:
         run: |
           # dmg 已在仓库上一级生成，移入仓库 dist/ 供 upload-artifact 收集
           mkdir -p "$GITHUB_WORKSPACE/dist"
-          mv ../x-itrader-client-${{ needs.version.outputs.version }}-macos.dmg "$GITHUB_WORKSPACE/dist/"
+          mv ../X-iTrader-Client-${{ needs.version.outputs.version }}-Mac.dmg "$GITHUB_WORKSPACE/dist/"
 
       # ---------- Windows ----------
 
@@ -207,7 +207,7 @@ jobs:
           # AGPL-3.0 第 4 节：分发目标码时须附带许可证副本
           Copy-Item "LICENSE" "$stage/LICENSE.txt" -Force
 
-          Compress-Archive -Path "$stage/*" -DestinationPath "dist/x-itrader-client-$ver-windows.zip" -Force
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/X-iTrader-Client-$ver-Windows.zip" -Force
         shell: pwsh
 
       - name: Upload artifact
@@ -215,8 +215,8 @@ jobs:
         with:
           name: x-itrader-client-${{ runner.os }}
           path: |
-            dist/x-itrader-client-*-macos.dmg
-            dist/x-itrader-client-*-windows.zip
+            dist/X-iTrader-Client-*-Mac.dmg
+            dist/X-iTrader-Client-*-Windows.zip
 
   release:
     needs: [version, build]

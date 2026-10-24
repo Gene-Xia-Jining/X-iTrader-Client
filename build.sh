@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# 生产打包：Swift 壳（release）+ PyInstaller headless 后端，组装独立可分发
+# macOS 生产打包：Swift 壳（release）+ PyInstaller headless 后端，组装独立可分发
 # 的 X-iTrader-Client.app。
-# 与 build_shell.sh（开发态 bundle，复用仓库 .venv）不同，本脚本产物自包含：
 #
 #   Contents/MacOS/X-iTrader-Client   Swift 壳（CFBundleExecutable）
 #   Contents/Resources/backend/       PyInstaller onedir 后端（backend 可执行 + 依赖）
@@ -9,13 +8,11 @@
 # 后端放 Resources 而非 MacOS：codesign 把 MacOS/ 下的数据目录（*.dist-info、
 # 非 Mach-O 可执行位文件）误判为未签名嵌套代码导致无法签名；Resources 只做
 # 资源封印，可整体通过 ad-hoc 签名。
-# 后端运行时的目标位置是数据根下的 ~/.X-iTrader-Client/runtime/backend/
-# （见 src/infrastructure/paths.py 与 shell AppPaths.swift）；frozen 后端的 workdir
-# 即数据根 ~/.X-iTrader-Client（src/backend/__main__.py frozen 分支 chdir），data/
-# 独立于 app 位置。本脚本当前仍把 backend 打进 bundle 作为过渡，壳的 detectPlan
-# 优先探测 runtime 布局、回退到 Bundle（见 BackendProcess.swift）。
 #
-# 用法: ./build_app.sh
+# 后端启动时 chdir 到数据根 ~/.X-iTrader-Client（src/backend/__main__.py frozen
+# 分支），data/ 独立于 app 位置。
+#
+# 用法: ./build.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 

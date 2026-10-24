@@ -16,9 +16,8 @@ public struct BackendInfo: Codable {
 ///   到同一路径，data/ 与 app 位置无关）；这是重构后的唯一生产布局。
 /// - 生产态（bundle，过渡兼容）：早期构建把 PyInstaller 后端打进 Bundle 的
 ///   Resources/backend/；该回退在打包流程改造完成后可移除。
-/// - 开发态 bundle：Resources/backend_root.txt 内容为业务根目录路径（build_shell.sh 生成）；
-/// - 源码开发态：从本文件编译位置向上查找 src/backend/__main__.py 所在仓库根。
-///   后两种为 python 模式：.venv/bin/python -m src.backend，业务根须含 .venv 与 src/。
+/// - 源码开发态：从本文件编译位置向上查找 src/backend/__main__.py 所在仓库根，
+///   为 python 模式：.venv/bin/python -m src.backend，业务根须含 .venv 与 src/。
 public final class BackendProcess {
     public enum BackendError: LocalizedError, Sendable {
         case layoutNotFound
@@ -189,14 +188,6 @@ public final class BackendProcess {
             forResource: "backend", withExtension: nil, subdirectory: "backend"
         ), FileManager.default.fileExists(atPath: backend.path) {
             return .frozen(executable: backend, workdir: AppPaths.dataRoot)
-        }
-        // 开发态 bundle：build_shell.sh 在 Resources 里放置业务根路径
-        let marker = Bundle.main.url(forResource: "backend_root", withExtension: "txt")
-        if let marker, let root = try? String(contentsOf: marker, encoding: .utf8) {
-            let url = URL(fileURLWithPath: root.trimmingCharacters(in: .whitespacesAndNewlines))
-            if FileManager.default.fileExists(atPath: url.appendingPathComponent("src/backend/__main__.py").path) {
-                return .python(repoRoot: url)
-            }
         }
         // 源码开发态：从源码位置向上找
         var dir = URL(fileURLWithPath: (#filePath as NSString).deletingLastPathComponent)

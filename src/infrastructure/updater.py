@@ -3,8 +3,8 @@
 主源是本仓库的 GitHub Releases（CI 在 push main 时以 src/__init__.py 的
 __version__ 打 tag 并发布）：
 
-- x-itrader-client-{version}-macos.dmg    全量包（内含 X-iTrader-Client.app，拖拽安装）
-- x-itrader-client-{version}-windows.zip  全量包（内含扁平程序目录，根级 X-iTrader.exe 壳
+- X-iTrader-Client-{version}-Mac.dmg      全量包（内含 X-iTrader-Client.app，拖拽安装）
+- X-iTrader-Client-{version}-Windows.zip  全量包（内含扁平程序目录，根级 X-iTrader.exe 壳
                                           + X-iTrader-Backend.exe 后端 + _internal/）
 - x-itrader-client-{version}-src.zip      补丁包（仅当相对上一版本只有 src/ 变化时发布，
                                           全平台共用；src 在打包时外置为普通目录，
@@ -14,6 +14,10 @@ __version__ 打 tag 并发布）：
 ITRADER_UPDATE_SOURCE 覆盖）。检查更新时本地目录与 GitHub 并发查询，
 取版本更高者、同版本优先本地；GitHub 失败（如匿名 API 403 限流）时回落到本地结果。
 显式指定 source 时只查该源。
+
+macOS 的本地源只认 build.sh 直接产出的 X-iTrader-Client.app 目录（版本取自其
+Info.plist），**不扫 dmg**：dmg 是分发物，目录里留着的历史 dmg 会遮住刚打包的
+新版本，导致检查更新误报「已是最新」。Windows 本地源仍为 zip。
 
 全量包两种格式都可解：macOS 用 dmg（hdiutil 挂载后复制 .app），Windows 用 zip；
 补丁包恒为 zip。替换采用 rename→move→Popen→退出 模式：旧安装物整体改名让位，
@@ -47,15 +51,19 @@ RELEASE_PAGE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 DEFAULT_LOCAL_SOURCE = "/Users/xiajining/Desktop/Dev/X-iTrader"
 
 # 当前平台全量包的 asset 名关键字与扩展名
-# （CI 产物 x-itrader-client-{version}-{平台}.dmg/.zip）。
-# macOS 分发 dmg、Windows 分发 zip；扩展名参与匹配，避免把 .zip 全量包误当补丁包。
-_FULL_ASSET_KEYWORDS = {"darwin": ("macos", ".dmg"), "win32": ("windows", ".zip")}
+# （CI 产物 X-iTrader-Client-{version}-Mac.dmg / -Windows.zip）。
+# 匹配前 asset 名已转小写，故 macOS 关键字为 "mac"（对应 -Mac.dmg）。
+# 扩展名参与匹配，避免把 .zip 全量包误当补丁包。
+_FULL_ASSET_KEYWORDS = {"darwin": ("mac", ".dmg"), "win32": ("windows", ".zip")}
 # 补丁包 asset 名关键字（x-itrader-client-{version}-src.zip，恒为 zip）
 _PATCH_ASSET_KEYWORD = "src"
 
 # Windows 全量包根级的壳可执行文件名：程序目录（安装根）即它的父目录。
 # 后端进程是 X-iTrader-Backend.exe，与壳同级；全量更新后重启的对象是壳。
 _WIN_SHELL_EXE = "X-iTrader.exe"
+
+# macOS 本地打包产物目录：build.sh 直接产出的 .app 可当全量包用
+_APP_SUFFIX = ".app"
 
 # 差量更新由旧后端进程直接拉起新后端（壳不参与），新进程需要知道两件事：
 # 1) 它不是壳的子进程，不能启用父进程监控——旧后端退出后它会判成孤儿而自杀；
@@ -144,23 +152,35 @@ def is_local_source(source: str) -> bool:
     return False
 
 
-def find_latest_in_folder(folder: Path) -> ReleaseInfo | None:
-    """从本地目录中扫描最新的客户端更新包（全量 dmg/zip 或补丁 zip）。
+def _app_bundle_version(app: Path) -> str:
+    """读取 .app 的 CFBundleShortVersionString；读不到返回空串（视为不可用版本）。"""
+    try:
+        with (app / "Contents" / "Info.plist").open("rb") as f:
+            data = plistlib.load(f)
+    except (OSError, plistlib.InvalidFileException, ValueError):
+        return ""
+    return str(data.get("CFBundleShortVersionString") or "").strip()
 
-    全量包：macOS 匹配 .dmg，Windows 匹配 .zip；
+
+def find_latest_in_folder(folder: Path) -> ReleaseInfo | None:
+    """从本地目录中扫描最新的客户端更新包。
+
+    全量包：macOS 只认 build.sh 直接产出的 .app 目录（版本取自其 Info.plist），
+    不扫 dmg——目录里的历史 dmg 会遮住刚打包的新版本；Windows 匹配 .zip。
     补丁包：匹配含 src 的 .zip。
     """
     if not folder.exists() or not folder.is_dir():
         return None
 
     if sys.platform == "darwin":
-        pattern_full = re.compile(
-            r"x-itrader-client[_-]v?(\d+(?:\.\d+)+).*(?:macos)?.*\.dmg$", re.IGNORECASE
-        )
+        # 不扫 dmg：本地验证走 .app，dmg 只用于分发，混进来会让版本判断失真
+        pattern_full = None
+        pattern_app = re.compile(r"x-itrader-client.*\.app$", re.IGNORECASE)
     else:
         pattern_full = re.compile(
             r"x-itrader-client[_-]v?(\d+(?:\.\d+)+).*(?:windows)?.*\.zip$", re.IGNORECASE
         )
+        pattern_app = None
 
     pattern_patch = re.compile(
         r"x-itrader-client[_-]v?(\d+(?:\.\d+)+).*src.*\.zip$", re.IGNORECASE
@@ -169,11 +189,18 @@ def find_latest_in_folder(folder: Path) -> ReleaseInfo | None:
     versions: dict[tuple[int, ...], tuple[str, Path | None, Path | None]] = {}
 
     for item in folder.iterdir():
-        if not item.is_file():
+        # .app 目录是 macOS 上唯一的本地全量包形态
+        is_app = (
+            pattern_app is not None
+            and item.is_dir()
+            and item.suffix.lower() == _APP_SUFFIX
+            and pattern_app.search(item.name or "")
+        )
+        if not item.is_file() and not is_app:
             continue
 
         # 补丁包
-        m_patch = pattern_patch.search(item.name)
+        m_patch = pattern_patch.search(item.name) if item.is_file() else None
         if m_patch:
             ver_str = m_patch.group(1)
             parsed = parse_version(ver_str)
@@ -185,15 +212,22 @@ def find_latest_in_folder(folder: Path) -> ReleaseInfo | None:
                 continue
 
         # 全量包
-        m_full = pattern_full.search(item.name)
-        if m_full:
+        if is_app:
+            # 打包产物名固定为 X-iTrader-Client.app，版本只能取自 bundle 自身
+            ver_str = _app_bundle_version(item)
+        elif pattern_full is not None:
+            m_full = pattern_full.search(item.name)
+            if not m_full:
+                continue
             ver_str = m_full.group(1)
-            parsed = parse_version(ver_str)
-            if parsed is not None:
-                curr_ver, curr_full, curr_patch = versions.get(
-                    parsed, (ver_str, None, None)
-                )
-                versions[parsed] = (ver_str, item, curr_patch)
+        else:
+            continue
+        parsed = parse_version(ver_str)
+        if parsed is not None:
+            curr_ver, curr_full, curr_patch = versions.get(
+                parsed, (ver_str, None, None)
+            )
+            versions[parsed] = (ver_str, item, curr_patch)
 
     if not versions:
         return None
@@ -304,14 +338,35 @@ async def fetch_latest_release(
     return _pick_higher(local_release, remote_result)
 
 
+def _copy_app_bundle(src: Path, dst: Path) -> None:
+    """复制 .app 目录到 dst。
+
+    必须用 ditto 而不是 shutil.copytree：Python.framework 内部大量符号链接，
+    ditto 完整保留链接与扩展属性，ad-hoc 签名在复制后仍然有效。
+    """
+    if dst.exists():
+        shutil.rmtree(dst, ignore_errors=True)
+    subprocess.run(["ditto", str(src), str(dst)], check=True)
+
+
 async def download_release(url: str, dest_dir: Path, progress_cb=None) -> Path:
-    """下载更新包（支持本地文件直接复制与网络下载）。"""
+    """下载更新包（支持本地文件/本地 .app 目录与网络下载）。"""
     dest_dir.mkdir(parents=True, exist_ok=True)
     url_path = url.split("?", 1)[0]
-    ext = ".dmg" if url_path.lower().endswith(".dmg") else ".zip"
+    if url_path.lower().endswith(_APP_SUFFIX):
+        ext = _APP_SUFFIX
+    else:
+        ext = ".dmg" if url_path.lower().endswith(".dmg") else ".zip"
     archive_path = dest_dir / f"update{ext}"
 
     local_path = Path(url)
+    if local_path.is_dir() and local_path.suffix.lower() == _APP_SUFFIX:
+        # 本地 .app 直接当全量包：复制一份到暂存区，避免安装时源目录被就地改动
+        await asyncio.to_thread(_copy_app_bundle, local_path, archive_path)
+        if progress_cb is not None:
+            progress_cb(1, 1)
+        return archive_path
+
     if local_path.is_file():
         await asyncio.to_thread(shutil.copy2, str(local_path), str(archive_path))
         if progress_cb is not None:
@@ -389,9 +444,10 @@ def _extract_dmg(dmg_path: Path, extract_root: Path) -> Path:
 def extract_update(archive_path: Path, stage_dir: Path) -> Path:
     """解压更新包到 stage_dir/stage，返回待安装物路径。
 
-    按扩展名分派：.dmg 走 hdiutil 挂载提取（macOS 全量），.zip 走 zipfile。
-    返回值按包类型分别是：mac 全量=X-iTrader-Client.app 目录、win 全量=程序目录
-    （根级含 X-iTrader.exe）、补丁包=src 目录。zipfile 自带 CRC 校验。
+    按扩展名分派：.dmg 走 hdiutil 挂载提取（macOS 全量），.app 是本地打包产物
+    直接改名就位，.zip 走 zipfile。返回值按包类型分别是：mac 全量=X-iTrader-Client.app
+    目录、win 全量=程序目录（根级含 X-iTrader.exe）、补丁包=src 目录。
+    zipfile 自带 CRC 校验。
     """
     extract_root = stage_dir / "stage"
     # 上次中断的残留暂存；清理失败只影响磁盘占用，后续解压会覆盖同名文件
@@ -400,6 +456,13 @@ def extract_update(archive_path: Path, stage_dir: Path) -> Path:
 
     if archive_path.suffix.lower() == ".dmg":
         return _extract_dmg(archive_path, extract_root)
+
+    if archive_path.suffix.lower() == _APP_SUFFIX and archive_path.is_dir():
+        # 暂存区里的 .app 是 download_release 已 ditto 复制好的副本，移到舞台
+        # 直接改名（同一分区），避免再复制一次几十 MB 的 bundle
+        app_dst = extract_root / "X-iTrader-Client.app"
+        shutil.move(str(archive_path), str(app_dst))
+        return app_dst
 
     extract_root_res = extract_root.resolve()
     with zipfile.ZipFile(archive_path) as zf:

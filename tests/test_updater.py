@@ -64,12 +64,12 @@ class VersionCompareTest(unittest.TestCase):
 
 class SelectAssetsTest(unittest.TestCase):
     ASSETS = [
-        {"name": "x-itrader-client-0.0.3-macos.dmg", "browser_download_url": "https://x/macos.dmg"},
-        {"name": "x-itrader-client-0.0.3-windows.zip", "browser_download_url": "https://x/win.zip"},
+        {"name": "X-iTrader-Client-0.0.3-Mac.dmg", "browser_download_url": "https://x/macos.dmg"},
+        {"name": "X-iTrader-Client-0.0.3-Windows.zip", "browser_download_url": "https://x/win.zip"},
         {"name": "x-itrader-client-0.0.3-src.zip", "browser_download_url": "https://x/src.zip"},
     ]
 
-    def test_darwin_selects_macos_dmg_and_patch(self):
+    def test_darwin_selects_mac_dmg_and_patch(self):
         with mock.patch.object(sys, "platform", "darwin"):
             full, patch = updater._select_assets(self.ASSETS)
         self.assertEqual(full, "https://x/macos.dmg")
@@ -88,13 +88,23 @@ class SelectAssetsTest(unittest.TestCase):
         self.assertEqual(patch, "https://x/src.zip")
 
     def test_darwin_does_not_treat_zip_full_as_patch(self):
-        # 若 Release 只有 zip 全量包（旧命名），darwin 不应把它当成补丁包
+        # 若 Release 只有 zip 全量包，darwin 不应把它当成补丁包
         assets = [
-            {"name": "x-itrader-client-0.0.3-macos.zip", "browser_download_url": "https://x/macos.zip"},
+            {"name": "X-iTrader-Client-0.0.3-Mac.zip", "browser_download_url": "https://x/macos.zip"},
         ]
         with mock.patch.object(sys, "platform", "darwin"):
             full, patch = updater._select_assets(assets)
         self.assertEqual(full, "")
+        self.assertEqual(patch, "")
+
+    def test_legacy_macos_naming_still_matches(self):
+        # 旧版本 tag 用的是 x-itrader-client-{v}-macos.dmg 命名，升级过渡期仍要能识别
+        assets = [
+            {"name": "x-itrader-client-0.6.7-macos.dmg", "browser_download_url": "https://x/old.dmg"},
+        ]
+        with mock.patch.object(sys, "platform", "darwin"):
+            full, patch = updater._select_assets(assets)
+        self.assertEqual(full, "https://x/old.dmg")
         self.assertEqual(patch, "")
 
 
@@ -107,8 +117,8 @@ class FetchLatestReleaseTest(unittest.TestCase):
             "assets": assets
             if assets is not None
             else [
-                {"name": "x-itrader-client-0.0.3-macos.dmg", "browser_download_url": "https://x/macos.dmg"},
-                {"name": "x-itrader-client-0.0.3-windows.zip", "browser_download_url": "https://x/win.zip"},
+                {"name": "X-iTrader-Client-0.0.3-Mac.dmg", "browser_download_url": "https://x/macos.dmg"},
+                {"name": "X-iTrader-Client-0.0.3-Windows.zip", "browser_download_url": "https://x/win.zip"},
                 {"name": "x-itrader-client-0.0.3-src.zip", "browser_download_url": "https://x/src.zip"},
             ],
         }
@@ -191,6 +201,16 @@ class ExtractUpdateTest(unittest.TestCase):
         self.assertEqual(item, self.stage / "stage" / "src")
         self.assertTrue((item / "__init__.py").is_file())
 
+    def test_app_bundle_staged_by_move(self):
+        # 本地 .app 已在 download 阶段 ditto 复制到暂存区，这里只改名就位
+        app = self.stage / "update.app"
+        (app / "Contents" / "MacOS").mkdir(parents=True)
+        (app / "Contents" / "MacOS" / "X-iTrader-Client").write_text("bin")
+        item = extract_update(app, self.stage)
+        self.assertEqual(item, self.stage / "stage" / "X-iTrader-Client.app")
+        self.assertTrue((item / "Contents" / "MacOS" / "X-iTrader-Client").is_file())
+        self.assertFalse(app.exists())
+
     def test_invalid_zip_raises(self):
         _make_zip(self.zip_path, {"random.txt": b"x"})
         with self.assertRaises(ValueError):
@@ -224,7 +244,7 @@ class ExtractDmgTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self._tmp.name)
         self.stage = self.dir / "update"
-        self.dmg_path = self.dir / "x-itrader-client-0.0.3-macos.dmg"
+        self.dmg_path = self.dir / "X-iTrader-Client-0.0.3-Mac.dmg"
         self.dmg_path.write_bytes(b"dmg")
 
     def tearDown(self):
@@ -482,18 +502,27 @@ class LocalSourceTest(unittest.TestCase):
         self.assertFalse(updater.is_local_source("Gene-Xia-Jining/X-iTrader-Client"))
         self.assertFalse(updater.is_local_source(""))
 
+    def _make_app(self, root: Path, name: str, version: str) -> Path:
+        app = root / name
+        (app / "Contents").mkdir(parents=True)
+        (app / "Contents" / "Info.plist").write_bytes(
+            plistlib.dumps({"CFBundleShortVersionString": version})
+        )
+        return app
+
     def test_find_latest_picks_highest_version(self):
-        (self.dir / "x-itrader-client-0.6.1-macos.dmg").write_bytes(b"old")
-        (self.dir / "x-itrader-client-0.6.10-macos.dmg").write_bytes(b"new")
+        # macOS 本地源只认 .app 目录，版本取自 Info.plist
+        self._make_app(self.dir, "X-iTrader-Client.app", "0.6.1")
+        app = self._make_app(self.dir, "X-iTrader-Client-2.app", "0.6.10")
         with mock.patch.object(sys, "platform", "darwin"):
             release = updater.find_latest_in_folder(self.dir)
         # 按整数元组比较，0.6.10 高于 0.6.1
         self.assertEqual(release.version, "0.6.10")
-        self.assertEqual(release.full_url, str((self.dir / "x-itrader-client-0.6.10-macos.dmg").resolve()))
+        self.assertEqual(release.full_url, str(app.resolve()))
         self.assertFalse(release.has_patch)
 
     def test_find_latest_pairs_patch_with_full(self):
-        (self.dir / "x-itrader-client-0.6.1-macos.dmg").write_bytes(b"full")
+        self._make_app(self.dir, "X-iTrader-Client.app", "0.6.1")
         (self.dir / "x-itrader-client-0.6.1-src.zip").write_bytes(b"patch")
         with mock.patch.object(sys, "platform", "darwin"):
             release = updater.find_latest_in_folder(self.dir)
@@ -502,39 +531,69 @@ class LocalSourceTest(unittest.TestCase):
         self.assertTrue(release.patch_url.endswith("-src.zip"))
 
     def test_find_latest_platform_suffix(self):
-        # Windows 只认 zip 全量包，macOS 的 dmg 不参与匹配
-        (self.dir / "x-itrader-client-0.6.1-macos.dmg").write_bytes(b"mac")
-        (self.dir / "x-itrader-client-0.6.2-windows.zip").write_bytes(b"win")
+        # Windows 只认 zip 全量包，macOS 的 .app 不参与匹配
+        self._make_app(self.dir, "X-iTrader-Client.app", "0.6.1")
+        (self.dir / "X-iTrader-Client-0.6.2-Windows.zip").write_bytes(b"win")
         with mock.patch.object(sys, "platform", "win32"):
             release = updater.find_latest_in_folder(self.dir)
         self.assertEqual(release.version, "0.6.2")
+
+    def test_find_latest_ignores_dmg_on_macos(self):
+        # 本地源不扫 dmg：目录里残留旧 dmg 时，应只看 .app，不能被旧 dmg 遮住
+        (self.dir / "x-itrader-client-0.6.1-macos.dmg").write_bytes(b"stale")
+        (self.dir / "X-iTrader-Client-0.6.9-Mac.dmg").write_bytes(b"stale")
+        app = self._make_app(self.dir, "X-iTrader-Client.app", "0.7.0")
+        with mock.patch.object(sys, "platform", "darwin"):
+            release = updater.find_latest_in_folder(self.dir)
+        self.assertEqual(release.version, "0.7.0")
+        self.assertEqual(release.full_url, str(app.resolve()))
+
+    def test_find_latest_only_dmg_returns_none_on_macos(self):
+        # 只有 dmg 没有 .app 时，本地源视为没有可用包
+        (self.dir / "X-iTrader-Client-0.7.0-Mac.dmg").write_bytes(b"dmg")
+        with mock.patch.object(sys, "platform", "darwin"):
+            self.assertIsNone(updater.find_latest_in_folder(self.dir))
 
     def test_find_latest_empty_folder(self):
         self.assertIsNone(updater.find_latest_in_folder(self.dir))
         self.assertIsNone(updater.find_latest_in_folder(self.dir / "missing"))
 
+    def test_find_latest_accepts_app_bundle(self):
+        # build.sh 直接产出的 .app 可当全量包，版本取自 Info.plist
+        app = self._make_app(self.dir, "X-iTrader-Client.app", "0.7.0")
+        with mock.patch.object(sys, "platform", "darwin"):
+            release = updater.find_latest_in_folder(self.dir)
+        self.assertEqual(release.version, "0.7.0")
+        self.assertEqual(release.full_url, str(app.resolve()))
+        self.assertFalse(release.has_patch)
+
+    def test_find_latest_ignores_app_without_version(self):
+        # 读不到 Info.plist 版本的目录不能当作可安装的全量包
+        app = self.dir / "X-iTrader-Client.app"
+        (app / "Contents").mkdir(parents=True)
+        with mock.patch.object(sys, "platform", "darwin"):
+            self.assertIsNone(updater.find_latest_in_folder(self.dir))
+
     def test_fetch_from_local_folder(self):
-        dmg = self.dir / "x-itrader-client-0.6.2-macos.dmg"
-        dmg.write_bytes(b"dmg")
+        app = self._make_app(self.dir, "X-iTrader-Client.app", "0.6.2")
         with mock.patch.object(sys, "platform", "darwin"):
             release = asyncio.run(fetch_latest_release(source=str(self.dir)))
         self.assertEqual(release.version, "0.6.2")
-        self.assertEqual(release.full_url, str(dmg.resolve()))
+        self.assertEqual(release.full_url, str(app.resolve()))
 
     def test_fetch_missing_local_folder_raises(self):
         with self.assertRaises(FileNotFoundError):
             asyncio.run(fetch_latest_release(source=str(self.dir / "missing")))
 
     def test_fetch_env_source_overrides_default(self):
-        dmg = self.dir / "x-itrader-client-0.6.3-macos.dmg"
-        dmg.write_bytes(b"dmg")
+        self._make_app(self.dir, "X-iTrader-Client.app", "0.6.3")
         with mock.patch.dict(os.environ, {"ITRADER_UPDATE_SOURCE": str(self.dir)}):
             with mock.patch.object(sys, "platform", "darwin"):
                 release = asyncio.run(fetch_latest_release())
         self.assertEqual(release.version, "0.6.3")
 
     def test_download_copies_local_file(self):
-        src = self.dir / "x-itrader-client-0.6.2-macos.dmg"
+        src = self.dir / "X-iTrader-Client-0.6.2-Mac.dmg"
         src.write_bytes(b"dmg-content")
         stage = self.dir / "stage"
         progress = []
@@ -544,6 +603,21 @@ class LocalSourceTest(unittest.TestCase):
         self.assertEqual(archive, stage / "update.dmg")
         self.assertEqual(archive.read_bytes(), b"dmg-content")
         self.assertEqual(progress, [(1, 1)])
+
+    def test_download_copies_local_app_bundle(self):
+        src = self.dir / "X-iTrader-Client.app"
+        (src / "Contents" / "MacOS").mkdir(parents=True)
+        (src / "Contents" / "MacOS" / "X-iTrader-Client").write_text("bin")
+        stage = self.dir / "stage"
+        with mock.patch.object(updater.subprocess, "run") as run:
+            archive = asyncio.run(download_release(str(src), stage))
+
+        self.assertEqual(archive, stage / "update.app")
+        run.assert_called_once()
+        cmd = run.call_args[0][0]
+        self.assertEqual(cmd[0], "ditto")
+        self.assertEqual(cmd[1], str(src))
+        self.assertEqual(cmd[2], str(stage / "update.app"))
 
 
 class DualSourceFetchTest(unittest.TestCase):
@@ -573,16 +647,20 @@ class DualSourceFetchTest(unittest.TestCase):
             "body": "remote notes",
             "assets": [
                 {
-                    "name": f"x-itrader-client-{version}-macos.dmg",
+                    "name": f"X-iTrader-Client-{version}-Mac.dmg",
                     "browser_download_url": f"https://x/{version}.dmg",
                 }
             ],
         }
 
     def _local(self, version: str) -> Path:
-        path = self.dir / f"x-itrader-client-{version}-macos.dmg"
-        path.write_bytes(b"dmg")
-        return path
+        # macOS 本地源只认 .app 目录（不扫 dmg），版本取自 Info.plist
+        app = self.dir / "X-iTrader-Client.app"
+        (app / "Contents").mkdir(parents=True, exist_ok=True)
+        (app / "Contents" / "Info.plist").write_bytes(
+            plistlib.dumps({"CFBundleShortVersionString": version})
+        )
+        return app
 
     def test_remote_newer_wins_over_local(self):
         # 关键回归：本地残留旧包不能遮住线上新版本
