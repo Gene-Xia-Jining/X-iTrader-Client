@@ -48,8 +48,8 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 | `status` | `{trading_active, server_connected, account_id}` | 引擎状态变化；心跳探测到连通性/失败原因变化时仅含 `{server_online, server_error}` |
 | `trading_started` / `trading_stopped` | `{account_id}` | |
 | `signal_received` | `{signal: {id, symbol, side, price, position, updated_at}}` | 服务器信号到达 |
-| `trade_executed` | `{symbol, target_position}` | 调仓指令已交付 |
-| `trade_failed` | `{symbol, error}` | |
+| `trade_executed` | `{symbol, target_position}` | 调仓已确认到位（实际持仓 = 目标仓位） |
+| `trade_failed` | `{symbol, error}` | 本次调仓失败（超时 / 拒单 / 异常），未成交委托已撤 |
 | `trading_records_updated` | `{kind, account_id, record}` | 账户交易数据变动（资金/持仓/委托/成交），后台常驻 watcher 监听到快期推送后自动广播 |
 | `config_changed` | `{}` | 配置/账户已保存（引擎运行中则下次启动生效） |
 | `token_status` | `{status, records: [...]}` | token 审批状态变化；后台轮询领取成功后广播，壳据此刷新 Token 页 |
@@ -89,7 +89,7 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 
 ## `trading.records` 返回字段
 
-每个账户一项，`account` / `positions` / `orders` / `trades` 均为**当日**快照（TqSdk 只提供当前交易日数据，历史成交需 TqSdk 专业版，这里不提供）。
+每个账户一项。`account` / `positions` / `orders` / `trades` 是**当日**快照——TqSdk 本身只提供当前交易日数据。跨交易日的历史成交由后端在每次取到当日成交时幂等写入本地 SQLite（`trade_history` 表），`date_range` 不为 `today` 时 `trades` 改为查本地库（`all` / `1y` / `30d` / `today`，另兼容 `3d` / `7d`），因此不依赖 TqSdk 专业版。
 
 ```jsonc
 {
@@ -164,12 +164,17 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 
 - 数值字段在 TqSdk 中可能是 `nan`（数据未就绪），后端统一转 `null`，客户端须按可空处理。
 - 时间字段由后端按北京时间（固定 +08:00）格式化成字符串，客户端不再做时区换算。
-- 取数走临时只读会话（建 TqApi → 读 → 关），与 `engine` 会话隔离：自动交易未开启也能查，查询失败不影响正在运行的调仓。
+- 取数有两个来源：
+  - 默认走**常驻监听会话**（`AccountRecordsManager`，每个已配置账户一条 TqApi 会话）：后台 `wait_update` 收到变化时刷新快照并广播 `trading_records_updated`，`trading.records` 直接返回缓存，毫秒级响应；断线后 15 秒自动重试。
+  - 后端未就绪或测试打桩替换了取数函数时，退回**临时只读会话**（建 TqApi → 读 → 关）。
+  - 两种方式都与 `engine` 会话隔离：自动交易未开启也能查，查询失败不影响正在运行的调仓。
 
 ## 约定
 
 - `accounts.save` 密码留空 = 不修改；`accounts.list` 不回传密码。
 - 账户 `strategy` 随引擎订阅上报：`/api/stream?symbols=...&strategy=<id>`，由服务器按该策略计算信号。
 - `engine.start/stop` 与 UI 开关语义绑定（联动 auto_trade）；`engine.set_auto_trade` 用于只改标志。
-- 交易语义：`trade_executed` 仅表示调仓指令已交付柜台（TargetPosTask），不是成交回报。
+- 交易语义：`trade_executed` 表示调仓**已确认到位**——执行器持续推进 `wait_update` 直到 `get_position` 等于 `target_position` 才返回成功。仍不是逐笔成交回报（成交明细见 `trades`），但可以理解为「持仓已经是目标仓位」。判失败时会撤掉本次未成交委托并广播 `trade_failed`。
+- 主连（`KQ.m@` / `KQ.i@`）只能看行情不能下单：执行器用 `quote.underlying_symbol` 换成实际合约后再调仓。
+- 非交易时段（`quote.trading_time` 判定）信号停在 `pending`，不执行也不记失败；拿不到时段表时放行。
 - 配置/账户变更在引擎运行中只生效于下次启动（后端广播 log 事件提示）。

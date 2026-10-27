@@ -87,11 +87,8 @@ struct SimulationView: View {
     @State private var testHintError = false
     // 弹窗（对应 Qt QMessageBox）
     @State private var alert: ActiveAlert?
-    // 常见问题展开状态：存在 UserDefaults，重启后保持上次的展开/收起
+    /// 常见问题展开状态与弹窗都在 FaqCardView 内部，键名保持原样以免丢掉用户已有偏好
     private static let faqExpandedKey = "simulation.faqExpanded"
-    @State private var faqExpanded = UserDefaults.standard.bool(forKey: SimulationView.faqExpandedKey)
-    /// 点开的那条常见问题：非空即弹出详情
-    @State private var faqQuestion: FaqItem?
 
     var body: some View {
         PageContainer {
@@ -99,7 +96,7 @@ struct SimulationView: View {
 
             if tab == .start {
                 startGuide
-                faqCard
+                FaqCardView(items: Self.faqItems, expandedKey: Self.faqExpandedKey)
             } else if tab == .records {
                 AccountInfoView(
                     kind: .sim,
@@ -142,9 +139,6 @@ struct SimulationView: View {
         }
         .sheet(isPresented: $showTokenRecords) {
             tokenRecordsDialog
-        }
-        .sheet(item: $faqQuestion) { item in
-            faqDetail(item)
         }
         // 步骤 6 用自绘弹层而非 sheet：macOS 的 sheet 点空白处不会关闭
         .overlay {
@@ -234,12 +228,7 @@ struct SimulationView: View {
 
     // MARK: - 常见问题（可展开；展开后只列问题，点问题弹窗看详细）
 
-    /// 每条问答：列表里只显示问题，答案在弹窗里展开
-    struct FaqItem: Identifiable {
-        let question: String
-        let answer: String
-        var id: String { question }
-    }
+    private typealias FaqItem = FaqCardView.Item
 
     private static let faqItems: [FaqItem] = [
         FaqItem(
@@ -314,98 +303,6 @@ struct SimulationView: View {
             + "交易执行明细可以在本页「账户信息」tab 查看模拟账户，实盘账户在「实盘交易」页的「账户信息」tab 查看。"
         ),
     ]
-
-    private var faqCard: some View {
-        AppCard {
-            VStack(alignment: .leading, spacing: 0) {
-                // 整行可点：避免只能点小箭头，标题区域也就成了命中区
-                Button {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        faqExpanded.toggle()
-                    }
-                    UserDefaults.standard.set(faqExpanded, forKey: Self.faqExpandedKey)
-                } label: {
-                    HStack(spacing: 8) {
-                        Text("常见问题")
-                            .font(AppTheme.bodyFont.weight(.semibold))
-                            .foregroundColor(AppTheme.ink(scheme))
-                        Spacer(minLength: 12)
-                        Text(faqExpanded ? "收起" : "展开")
-                            .font(AppTheme.dimFont)
-                            .foregroundColor(AppTheme.primary(scheme))
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(AppTheme.primary(scheme))
-                            .rotationEffect(.degrees(faqExpanded ? 180 : 0))
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .pointerCursor()
-
-                if faqExpanded {
-                    VStack(alignment: .leading, spacing: 0) {
-                        HairlineDivider()
-                            .padding(.bottom, 4)
-                        ForEach(Array(Self.faqItems.enumerated()), id: \.offset) { index, item in
-                            // 只列问题，点开弹窗看详细：答案较长，平铺会把卡片撑得很高
-                            Button {
-                                faqQuestion = item
-                            } label: {
-                                HStack(spacing: 8) {
-                                    Text(item.question)
-                                        .font(AppTheme.bodyFont)
-                                        .foregroundColor(AppTheme.ink(scheme))
-                                        .fixedSize(horizontal: false, vertical: true)
-                                    Spacer(minLength: 12)
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundColor(AppTheme.dim(scheme))
-                                }
-                                .padding(.vertical, 8)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .pointerCursor()
-                            if index < Self.faqItems.count - 1 {
-                                HairlineDivider()
-                            }
-                        }
-                    }
-                    .padding(.top, 12)
-                }
-            }
-            .padding(20)
-        }
-    }
-
-    /// 常见问题详情弹窗：问题作标题，答案按正文；「关闭」放在标题行右侧（同其它弹窗）
-    private func faqDetail(_ item: FaqItem) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Text(item.question)
-                    .font(AppTheme.bodyFont.weight(.semibold))
-                    .foregroundColor(AppTheme.ink(scheme))
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 12)
-                AppButton("关闭", variant: .secondary, size: .inline) {
-                    faqQuestion = nil
-                }
-            }
-
-            HairlineDivider()
-
-            Text(item.answer)
-                .font(AppTheme.bodyFont)
-                .foregroundColor(AppTheme.dim(scheme))
-                // 答案多为长段落，默认行距偏挤
-                .lineSpacing(6)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-        }
-        .padding(20)
-        .frame(width: 520)
-    }
 
     // MARK: - 文本与链接
 

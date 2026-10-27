@@ -56,6 +56,8 @@ struct DashboardView: View {
                     .foregroundColor(AppTheme.danger(scheme))
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            FaqCardView(items: Self.faqItems, expandedKey: Self.faqExpandedKey)
         }
         .onAppear(perform: load)
         .onChange(of: appState.accounts) { _ in load() }
@@ -66,6 +68,41 @@ struct DashboardView: View {
             syncFromCache()
         }
     }
+
+    // MARK: - 常见问题
+
+    /// 展开状态单独存键：模拟页那份是 simulation.faqExpanded，两页互不干扰
+    private static let faqExpandedKey = "dashboard.faqExpanded"
+
+    private static let faqItems: [FaqCardView.Item] = [
+        FaqCardView.Item(
+            question: "快期免费版和专业版有什么区别？",
+            answer: "快期是交易终端，「免费 / 收费」由你拿到的安装包决定，而不是账户分两套：\n\n"
+            + "1，单期货公司版本。由期货公司官网提供，只能登录同一家期货公司的账号，可免费使用，"
+            + "基础的行情、下单、持仓与结算功能都有。\n"
+            + "2，全期货公司版本（快期专业版）。由信易科技官网提供，收费产品，注册快期账户后支持 15 天免费试用。\n\n"
+            + "专业版多出来的主要是面向专业交易者的功能：\n"
+            + "1，多账户、多柜台同时登录（CTP、易盛、融航、杰宜斯、恒生等）。\n"
+            + "2，智能交易：大单拆分算法下单、移仓换月、自定义组合、篮子下单。\n"
+            + "3，风险管理：多账户风险预警、实控人分组、电话 / 邮件通知。\n"
+            + "4，数据服务：历史 tick 与任意周期 K 线下载、基本面数据，以及本地 API 与天勤 Python API 取数。\n\n"
+            + "价格以信易科技官网为准（专业版年费含快期专业版 + 天勤量化专业版两个产品）。"
+            + "本客户端只做单账户自动交易，不需要多账户、算法下单这些专业功能，免费版即可跑通。"
+        ),
+        FaqCardView.Item(
+            question: "天勤免费版和专业版有什么区别？",
+            answer: "天勤量化（TqSdk）是 Python 行情与交易库，大部分功能免费；本客户端就用它来登录行情、下单和读取账户。\n\n"
+            + "1，实盘期货公司范围。免费版只能在指定名单内的期货公司做实盘交易；专业版可选更多期货公司。\n"
+            + "2，账户数。免费版和专业版都支持一个快期账户绑定 3 个实盘账户，要更多需另外购买。\n"
+            + "3，行情。免费版已提供全部期货、商品期权和中金所期权行情；专业版额外提供 A 股股票行情、"
+            + "更稳定的行情服务器（免费版先升级、观察后再轮到专业版）。\n"
+            + "4，数据与工具。专业版才有 DataDownloader 历史数据下载（tick 级与任意周期 K 线）、"
+            + "EDB 数据服务（库存、现货、宏观等基本面指标）和股票模拟交易。\n"
+            + "5，服务。专业版年费用户有专属讨论组，工作时间优先答疑。\n\n"
+            + "对使用本客户端的意义：单账户、指定名单内期货公司、期货品种自动交易，免费版完全够用；"
+            + "只有当你所在的期货公司不在免费名单里，或需要历史数据做回测时，才需要专业版。"
+        ),
+    ]
 
     // MARK: - 卡片槽位与拖动占位
 

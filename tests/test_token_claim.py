@@ -106,6 +106,24 @@ class TokenClaimTest(unittest.TestCase):
         self.assertIsNone(fake.token_store.load_token())
         self.assertEqual(fake.claim_calls, 0)
 
+    def test_validate_uncertain_keeps_local_token(self):
+        # 网关 5xx / 网络异常时校验问不出结论，必须保留本地凭据：
+        # 服务器只存 hash，删掉明文就再也取不回来
+        class Flaky(FakeTokenService):
+            async def validate_token(self, token):
+                self.validate_calls += 1
+                raise RuntimeError("Server error '502 Bad Gateway'")
+
+        service, events, db_path = _make_service()
+        fake = Flaky(db_path)
+        fake.token_store.save_token("local-token")
+        _run(service, fake)
+
+        self.assertEqual(fake.validate_calls, 1)
+        self.assertEqual(fake.token_store.load_token(), "local-token")
+        self.assertEqual(fake.claim_calls, 0)
+        self.assertEqual(events, [])
+
     def test_empty_server_url_skips_claim(self):
         service, events, db_path = _make_service(server_url="")
         fake = FakeTokenService(db_path, claim_result={"token_id": "t1", "token": "x"})

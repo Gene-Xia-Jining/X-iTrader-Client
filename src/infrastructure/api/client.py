@@ -221,13 +221,23 @@ class TokenApiService:
             response.raise_for_status()
 
     async def validate_token(self, token: str) -> bool:
+        """校验 token；只有服务器明确否定时才返回 False。
+
+        401/403 是「token 无效/被吊销」的确定答案，其余非 200（5xx、429 等）
+        说明这次问不出结果，必须抛异常而不是返回 False——调用方据此区分
+        「该删本地凭据」和「网络/网关故障，留着稍后再试」。曾因把 502 当成
+        失效而删掉本地唯一一份明文 token，服务器只存 hash，只能重新申请。
+        """
         url = f"{self.server_url}/api/tokens/validate"
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 url,
                 headers={"Authorization": f"Bearer {token}"},
             )
-            return response.status_code == 200
+            if response.status_code in (401, 403):
+                return False
+            response.raise_for_status()
+            return True
 
     async def list_tokens(self):
         url = f"{self.server_url}/api/tokens/list/{self.client_id}"
