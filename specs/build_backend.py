@@ -76,7 +76,13 @@ def ensure_runtime(cache_dir: Path) -> Path:
     python = Path(found.stdout.strip())
     if not python.is_file():
         fail(f"uv python find 返回的解释器不存在: {python}")
-    return python.parent.parent
+    # pbs 的目录布局因平台而异：posix 是 <root>/bin/python3.x，Windows 是
+    # <root>/python.exe。一律取 parent.parent 在 Windows 上会退到缓存目录，
+    # 拷出来的 runtime 里根本没有解释器。
+    root = python.parent.parent if python.parent.name == "bin" else python.parent
+    if not entry_python(root).is_file():
+        fail(f"运行时根目录中找不到解释器: {root}")
+    return root
 
 
 def site_packages_of(runtime: Path) -> Path:
