@@ -35,10 +35,12 @@ from ..domain.events import (
     TradingStoppedEvent,
 )
 from ..infrastructure.api.client import (
+    aclose_health_client,
     check_server_health,
     describe_server_error,
     fetch_server_strategies,
     fetch_server_symbols,
+    reset_health_client,
 )
 from ..infrastructure.proxy import apply_proxy_environment, server_host
 from ..infrastructure.trading.tqsdk_executor import test_account_session, test_tq_auth_connection
@@ -169,6 +171,7 @@ class BackendService:
                 await task
             except asyncio.CancelledError:
                 pass
+        await aclose_health_client()
         await self.bootstrap.shutdown()
 
     # -------- 服务器心跳 --------
@@ -433,6 +436,8 @@ class BackendService:
         """按配置设置代理环境变量（默认不走代理）。"""
         hosts = [server_host(config.server_url)] if config.server_url else []
         apply_proxy_environment(config.proxy_url, hosts)
+        # httpx 只在构造 client 时读代理环境变量，常驻的探测连接必须重建才生效
+        reset_health_client()
 
     async def save_config(self, params: dict) -> dict:
         """保存全局配置（与账户无关的项），未提供的字段沿用当前值。"""

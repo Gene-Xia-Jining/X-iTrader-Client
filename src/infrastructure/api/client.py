@@ -1,5 +1,7 @@
+import asyncio
 import json
 import logging
+import weakref
 from dataclasses import fields
 from typing import Optional, Union
 
@@ -80,16 +82,96 @@ def parse_signal(payload: dict) -> StrategySignal:
         logger.debug("signal_ignored_fields fields=%s", sorted(unknown))
     return StrategySignal(**{k: v for k, v in payload.items() if k in known})
 
-async def check_server_health(server_url: str, timeout: float = 5.0) -> dict:
-    """探测服务器连通性（/api/health 无需认证），失败时抛出异常。"""
+# 健康探测的常驻 client：按 event loop 缓存，进程内复用 TCP/TLS 连接。
+# 实测这台机器到服务器的新建握手要 1-5s（TLS 单独就占 1.4-4.6s），复用连接只要
+# 0.6-2.4s；10s 周期的心跳若每次都冷启动，会周期性把链路慢误判成服务器离线。
+_health_clients: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+# 探测失败后重试一次：复用连接被对端或中间设备回收时首跳必失败，换新连接即恢复；
+# 链路抖动时第二次也常能挤进预算。重试只给半个预算，避免一轮探测拖成两个周期。
+_HEALTH_RETRY_TIMEOUT_RATIO = 0.5
+
+
+def _health_client() -> httpx.AsyncClient:
+    """取当前 event loop 专属的探测 client，首次调用时创建。
+
+    按 loop 缓存而非全局单例：client 绑定 loop，跨 loop 复用会在反复新建
+    loop 的场景（测试里的 asyncio.run）绑定到已关闭的 loop。
+    """
+    loop = asyncio.get_running_loop()
+    client = _health_clients.get(loop)
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(
+            # 心跳间隔 10s，池内连接必须活得比它久，否则每次仍是冷启动
+            limits=httpx.Limits(max_connections=4, keepalive_expiry=60.0),
+        )
+        _health_clients[loop] = client
+    return client
+
+
+def reset_health_client() -> None:
+    """丢弃缓存的探测连接，供代理设置变化后调用。
+
+    httpx 在构造 client 时读取代理环境变量，改了 env 只有重建才生效。
+    """
+    client = _take_health_client()
+    if client is not None:
+        # 同步上下文无法 await，交给 loop 关闭；loop 已停也只是连接随 GC 回收
+        asyncio.get_running_loop().create_task(client.aclose())
+
+
+async def aclose_health_client() -> None:
+    """关闭当前 loop 的探测连接，供后端退出时调用。"""
+    client = _take_health_client()
+    if client is not None:
+        await client.aclose()
+
+
+def _take_health_client() -> Optional[httpx.AsyncClient]:
+    """摘掉当前 loop 缓存的 client 并返回（未建过或已关闭返回 None）。"""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _health_clients.clear()
+        return None
+    client = _health_clients.pop(loop, None)
+    return None if client is None or client.is_closed else client
+
+
+def _health_url(server_url: str) -> str:
     url = server_url.strip()
     if "://" not in url:
         url = "http://" + url
-    url = url.rstrip("/") + "/api/health"
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.get(url)
-        response.raise_for_status()
-        return response.json()
+    return url.rstrip("/") + "/api/health"
+
+
+async def check_server_health(server_url: str, timeout: float = 5.0) -> dict:
+    """探测服务器连通性（/api/health 无需认证），失败时抛出异常。"""
+    url = _health_url(server_url)
+    client = _health_client()
+    try:
+        return await _health_probe(client, url, timeout)
+    except (httpx.TransportError, httpx.HTTPStatusError) as first:
+        if not _health_retryable(first):
+            raise
+        logger.debug("health_probe_retry first=%s", first.__class__.__name__)
+        return await _health_probe(client, url, timeout * _HEALTH_RETRY_TIMEOUT_RATIO)
+
+
+async def _health_probe(client: httpx.AsyncClient, url: str, timeout: float) -> dict:
+    response = await client.get(url, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+def _health_retryable(error: Exception) -> bool:
+    """连接层异常一律可重试；5xx 是服务端瞬时不可用，重试一次也合理。
+
+    4xx 是地址或权限问题，重试无意义；JSON 解析失败（ValueError）重试也无益。
+    """
+    if isinstance(error, httpx.TransportError):
+        return True
+    return isinstance(error, httpx.HTTPStatusError) and error.response.status_code >= 500
 
 
 def describe_server_error(error: Exception) -> str:
