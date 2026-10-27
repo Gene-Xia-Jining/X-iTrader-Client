@@ -8,15 +8,36 @@ from .domain.events import LogEvent, LogLevel
 from .infrastructure.paths import data_root, is_packaged, migrate_legacy_data_root
 
 async def _ensure_token(bs: Bootstrap, request_input) -> bool:
+    """确保有一个可用 token；无效时申请新的（含设备凭据自愈）。
+
+    原先调用的是不存在的 ``request_new_token``，任何走到这个分支的 CLI
+    启动都会 AttributeError；这里改用真实方法并补齐设备登记。
+    """
+    from .infrastructure.api.client import DeviceCredentialError
+
     token_service = bs.token_service
     if token_service.token_store.have_token():
         token = token_service.token_store.load_token()
         if await token_service.validate_token(token):
             return True
         print("⚠️  Token 无效，请求新 token...")
+
+    await bs.ensure_device_registered()
     description = request_input("Enter token description (optional): ").strip()
-    token = await token_service.request_new_token(description)
-    return bool(token)
+    try:
+        result = await token_service.request_token(description)
+    except DeviceCredentialError as exc:
+        if not exc.recoverable:
+            print(f"❌ 设备凭据无效（{exc.code}）：{exc.detail}")
+            return False
+        print("⚠️  设备凭据已失效，正在重新登记本机设备…")
+        if not await bs.recover_device_credentials():
+            print("❌ 重新登记设备失败，请让管理员确认后重试")
+            return False
+        result = await token_service.request_token(description)
+
+    # 服务器只返回申请记录，明文要靠 claim 取（自动批准时才有）
+    return bool(result.get("token_id"))
 
 async def run_headless():
     if is_packaged():
@@ -27,7 +48,10 @@ async def run_headless():
     Path("data").mkdir(parents=True, exist_ok=True)
     bs = Bootstrap()
 
-    await _ensure_token(bs, input)
+    # 没有可用 token 就别往下跑：订阅会被服务器 401 拒掉，界面只会看到连接错误
+    if not await _ensure_token(bs, input):
+        print("没有可用的 API Token，已退出。请先在服务器端批准本设备的申请。")
+        return
 
     def _print_log(evt: LogEvent):
         level_prefix = {

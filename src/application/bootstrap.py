@@ -11,10 +11,20 @@ from ..infrastructure.api.client import (
 from ..infrastructure.api.db_token_store import DbTokenStore
 from ..infrastructure.config.config_service import ConfigService
 from ..infrastructure.db.repositories import SQLiteTradeCommandRepository
+from ..infrastructure.security.device_identity import (
+    DeviceIdentityStore,
+    load_or_create_device_id,
+    read_legacy_client_id,
+)
 from ..infrastructure.trading.tqsdk_executor import TqSdkTradingExecutor
 from .trading_engine import TradingEngine, TradingEngineDeps
 
 def load_or_generate_client_id() -> str:
+    """客户端自报标识（服务器无法验证，仅作展示与历史 token 归属）。
+
+    身份体系上线后，真正的身份是 device_id + device_key（见
+    infrastructure.security.device_identity）；这里保留原语义以兼容旧数据。
+    """
     id_path = Path("data/client_id.txt")
     if id_path.exists():
         return id_path.read_text(encoding="utf-8").strip()
@@ -40,6 +50,7 @@ class Bootstrap:
         self._engines: dict[str, TradingEngine] = {}
         self._token_store: Optional[DbTokenStore] = None
         self._token_service: Optional[TokenApiService] = None
+        self._device_store: Optional[DeviceIdentityStore] = None
 
     @property
     def config(self) -> TradingConfiguration:
@@ -68,14 +79,87 @@ class Bootstrap:
         return self._token_store
 
     @property
+    def device_identity_store(self) -> DeviceIdentityStore:
+        if self._device_store is None:
+            self._device_store = DeviceIdentityStore(self.db_path)
+        return self._device_store
+
+    @property
     def token_service(self) -> TokenApiService:
         if self._token_service is None:
             self._token_service = TokenApiService(
                 server_url=self.config.server_url,
                 token_store=self.token_store,
                 client_id=load_or_generate_client_id(),
+                device_identity_store=self.device_identity_store,
             )
+            # 已有登记结果就直接用（不重复登记）；首次由 ensure_device_registered 完成
+            device_id, device_key = self.device_identity_store.load()
+            if device_id and device_key:
+                self._token_service.set_device_identity(device_id, device_key)
         return self._token_service
+
+    async def ensure_device_registered(self) -> bool:
+        """确保本机已向服务器登记，返回是否可用 device 身份。
+
+        幂等且容错：已登记直接返回 True；旧服务器（无此接口）或网络失败都
+        返回 False，调用方继续走纯 client_id 的旧路径，绝不阻断启动。
+        """
+        store = self.device_identity_store
+        device_id, device_key = store.load()
+        device_id = device_id or load_or_create_device_id()
+
+        service = self.token_service
+        try:
+            payload = await service.register_device(
+                device_id, legacy_client_id=read_legacy_client_id()
+            )
+        except Exception as exc:
+            # 登记失败不阻断交易主链路：token 申请会退回纯 client_id 路径
+            import logging
+            logging.getLogger(__name__).warning(
+                "device_register_failed device_id=%s error=%s", device_id, exc
+            )
+            if device_key:
+                service.set_device_identity(device_id, device_key)
+            return False
+
+        if payload is None:
+            # 旧服务器没有身份体系
+            return False
+        return bool(payload.get("device_key") or device_key)
+
+    async def recover_device_credentials(self) -> bool:
+        """设备凭据被服务端拒绝后重新握手，返回是否拿到新的可用凭据。
+
+        只处理**可恢复**的情形（设备被撤销 / 服务端不认识这台设备）：
+        清掉本地旧密钥后重新登记，服务端对已撤销设备会换发新密钥。
+
+        不可恢复的情形（密钥不匹配等）必须原地报错，绝不能清凭据重登记——
+        那会把「本地数据坏了」变成「静默换一台新身份」，用户的历史记录
+        就此失联，而且每次失败都会再覆盖一次。
+        """
+        import logging
+
+        logger = logging.getLogger(__name__)
+        store = self.device_identity_store
+        device_id, old_key = store.load()
+        device_id = device_id or load_or_create_device_id()
+
+        # 清掉旧密钥：register_device 对「已登记且未撤销」的设备不重发密钥，
+        # 若不清掉，拿到 None 后又会把旧密钥塞回去，等于白跑一趟。
+        store.save(device_id, None)
+        self.token_service.set_device_identity(device_id, None)
+
+        ok = await self.ensure_device_registered()
+        if ok:
+            logger.info("device_credentials_recovered device_id=%s", device_id)
+        else:
+            logger.warning(
+                "device_credentials_recover_failed device_id=%s had_key=%s",
+                device_id, bool(old_key),
+            )
+        return ok
 
     async def init_db(self) -> SQLiteTradeCommandRepository:
         if self._trade_repo is None:

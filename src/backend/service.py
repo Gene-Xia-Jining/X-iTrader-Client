@@ -132,6 +132,8 @@ class BackendService:
         self._token_check_now = asyncio.Event()
         # 已有本地 token 只需校验一次，避免每轮轮询都打服务器
         self._token_validated = False
+        # 设备登记每次进程只尝试一次（失败也不反复打服务器）
+        self._device_registered = False
         # 自动更新状态：已发现的版本 / 下载任务 / 暂存路径 / 包类型
         self._release: Optional[ReleaseInfo] = None
         self._update_task: Optional[asyncio.Task] = None
@@ -234,6 +236,9 @@ class BackendService:
 
         本地已有 token 时只做一次启动校验（无效则清除，交给后续轮询重领），
         之后不再打断，避免每轮都打服务器。
+
+        领 token 之前先确保设备已登记：服务器据此把 token 绑到可验证的设备上
+        （见服务端 doc/IDENTITY.md R2）。登记失败不阻断领取，退回纯 client_id。
         """
         token_service = self.bootstrap.token_service
         store = token_service.token_store
@@ -256,6 +261,10 @@ class BackendService:
         # 服务器不可达时静默跳过，交给心跳恢复后再领（避免每轮刷失败日志）
         if not self._server_online:
             return
+
+        # 幂等：已登记直接返回，未登记才会真的发请求
+        if not self._device_registered:
+            self._device_registered = await self.bootstrap.ensure_device_registered()
 
         if not await self._claim_and_save():
             return
@@ -662,12 +671,49 @@ class BackendService:
         return await self._token_status_payload()
 
     async def request_token(self, params: dict) -> dict:
-        await self.bootstrap.token_service.request_token(
+        await self._request_token_with_recovery(
             params.get("description") or "iTrader 智能交易系统"
         )
         # 立即盯一次审批，不等下个轮询周期
         self._token_check_now.set()
         return {"status": "已提交申请，等待服务器审核"}
+
+    async def _request_token_with_recovery(self, description: str) -> dict:
+        """申请 token；设备凭据被拒时先重新握手再重试一次。
+
+        设备被管理员撤销后，本地旧密钥会被服务端拒绝（401 device_revoked）。
+        这不是故障而是管理员的明确意图，用户预期是「这台机器重新握手」，
+        所以这里静默自愈：重新登记拿新密钥，然后重试一次申请，全程不打扰
+        用户，只在日志里留痕（便于事后追查「凭据什么时候被换过」）。
+
+        只重试一次：若重新登记后仍被拒，说明问题不在可自愈范围内，
+        必须把错误抛出去让用户看到，而不是无限循环。
+        """
+        from ..infrastructure.api.client import DeviceCredentialError
+
+        try:
+            return await self.bootstrap.token_service.request_token(description)
+        except DeviceCredentialError as exc:
+            if not exc.recoverable:
+                # 密钥不匹配：本地数据有问题，清凭据重登记会掩盖真正的原因
+                self._log(
+                    f"设备凭据无效（{exc.code}），请检查本机配置或在服务器端确认设备状态",
+                    LogLevel.ERROR,
+                )
+                raise
+            self._log(
+                f"设备凭据已失效（{exc.code}），正在重新登记本机设备…",
+                LogLevel.WARNING,
+            )
+
+        if not await self.bootstrap.recover_device_credentials():
+            raise RuntimeError(
+                "本机设备凭据已被服务器撤销，重新登记失败。"
+                "请让管理员在服务器「用户」页确认后重试。"
+            )
+
+        self._log("本机设备已重新登记，凭据已更新", LogLevel.SUCCESS)
+        return await self.bootstrap.token_service.request_token(description)
 
     async def delete_token_request(self, params: dict) -> dict:
         """删除一条申请记录并回传刷新后的状态与记录列表。

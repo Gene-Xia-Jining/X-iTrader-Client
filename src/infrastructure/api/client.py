@@ -12,6 +12,61 @@ from ...domain.repositories import TokenStore
 logger = logging.getLogger(__name__)
 
 
+# 服务端 /api/tokens/create 返回的机器可读错误码（见服务端 http_errors.py）
+CODE_DEVICE_KEY_MISSING = "device_key_missing"
+CODE_DEVICE_REVOKED = "device_revoked"
+CODE_DEVICE_KEY_INVALID = "device_key_invalid"
+
+
+class DeviceCredentialError(Exception):
+    """设备凭据相关的服务端拒绝，带机器可读 code。
+
+    为什么要区分：``device_revoked`` 是管理员意图（应重新登记并自愈），
+    ``device_key_invalid`` 说明本地数据坏了（应停下并报错）。两者都表现为
+    401，若合成一个通用 HTTP 错误，客户端只能一律失败，无法自愈。
+    """
+
+    def __init__(self, code: str, detail: str = ""):
+        self.code = code
+        self.detail = detail
+        super().__init__(detail or code)
+
+    @property
+    def recoverable(self) -> bool:
+        """重新登记设备就能恢复（设备被撤销 / 从未登记）。"""
+        return self.code in (CODE_DEVICE_REVOKED, CODE_DEVICE_KEY_MISSING)
+
+
+def raise_device_credential_error(response) -> None:
+    """把服务端 401 转成 DeviceCredentialError（无 code 时按不可恢复处理）。
+
+    旧版服务端不返回 code：此时无法判断原因，一律当作**不可恢复**，
+    宁可停下报错也不盲目重新登记——盲登记会在真正的密钥损坏场景下
+    反复覆盖本地凭据，把可诊断的问题变成静默循环。
+    """
+    code = ""
+    detail = ""
+    try:
+        payload = response.json()
+        code = str(payload.get("code") or "")
+        detail = str(payload.get("detail") or "")
+    except Exception:
+        detail = response.text[:200]
+    if not code:
+        raise response_http_error(response)
+    raise DeviceCredentialError(code, detail)
+
+
+def response_http_error(response):
+    """构造一个与 httpx raise_for_status 等价的异常，供上面兜底使用。"""
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        return exc
+    # 理论上走不到（调用方只在非 2xx 时进来），保底给个可读错误
+    return RuntimeError(f"HTTP {response.status_code}: {response.text[:200]}")
+
+
 def parse_signal(payload: dict) -> StrategySignal:
     """按 StrategySignal 已声明的字段过滤后构造。
 
@@ -161,23 +216,81 @@ def _auth_headers(token_service: Optional["TokenApiService"]) -> dict:
 
 
 class TokenApiService:
-    def __init__(self, server_url: str, token_store: TokenStore, client_id: str):
+    def __init__(
+        self,
+        server_url: str,
+        token_store: TokenStore,
+        client_id: str,
+        device_identity_store=None,
+    ):
         self.server_url = server_url.rstrip("/")
         self.token_store = token_store
         self.client_id = client_id
+        # 设备身份（可选）：提供时 token 申请会带上 device_id + device_key，
+        # 服务器据此把 token 绑定到可验证的设备上（见服务端 doc/IDENTITY.md）
+        self.device_identity_store = device_identity_store
+        self.device_id: Optional[str] = None
+        self.device_key: Optional[str] = None
+
+    def set_device_identity(self, device_id: Optional[str], device_key: Optional[str]) -> None:
+        """登记成功后回填，之后所有 token 申请都带这对凭据。"""
+        self.device_id = device_id
+        self.device_key = device_key
+
+    async def register_device(self, device_id: str, legacy_client_id: Optional[str] = None) -> Optional[dict]:
+        """向服务器登记设备，成功后自动保存 device_key。
+
+        返回服务器响应；失败抛异常由调用方决定是否降级（老服务器没有这个
+        接口，会 404——此时保持旧的纯 client_id 行为即可，不应阻断启动）。
+        """
+        from ..security.device_identity import device_label
+        import platform as _platform
+
+        url = f"{self.server_url}/api/auth/device/register"
+        body = {
+            "device_id": device_id,
+            "device_label": device_label(),
+            "platform": _platform.system().lower(),
+        }
+        if legacy_client_id:
+            body["legacy_client_id"] = legacy_client_id
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(url, json=body)
+            if response.status_code == 404:
+                # 旧版服务器：没有身份体系，退回纯 client_id 路径
+                logger.info("server_has_no_device_registry, fallback to client_id only")
+                return None
+            response.raise_for_status()
+            payload = response.json()
+
+        # 服务器对已登记设备不重发密钥（防止知道 device_id 就冒充），
+        # 此时必须沿用本地已保存的密钥，否则会把内存里的身份抹成 None，
+        # 后续 token 申请就退化成不经校验的纯 client_id 路径。
+        new_key = payload.get("device_key") or self.device_key
+        self.set_device_identity(payload.get("device_id") or self.device_id, new_key)
+        if self.device_identity_store is not None:
+            self.device_identity_store.save(payload.get("device_id"), new_key)
+        return payload
 
     async def request_token(self, description: str = "") -> dict:
-        """Request a token approval; pending tokens are not saved."""
+        """Request a token approval; pending tokens are not saved.
+
+        设备凭据被服务端拒绝时抛 ``DeviceCredentialError``（带 code），
+        由调用方决定是重新登记自愈还是报错；其余非 2xx 仍是 HTTPStatusError。
+        """
         url = f"{self.server_url}/api/tokens/create"
+        body = {
+            "client_id": self.client_id,
+            "description": description,
+            "expires_in_days": 90,
+        }
+        if self.device_id and self.device_key:
+            body["device_id"] = self.device_id
+            body["device_key"] = self.device_key
         async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url,
-                json={
-                    "client_id": self.client_id,
-                    "description": description,
-                    "expires_in_days": 90,
-                },
-            )
+            response = await client.post(url, json=body)
+            if response.status_code == 401:
+                raise_device_credential_error(response)
             response.raise_for_status()
             return response.json()
 
