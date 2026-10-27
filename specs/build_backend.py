@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 SPECS = ROOT / "specs"
@@ -53,14 +54,62 @@ def fail(msg: str) -> None:
     raise SystemExit(1)
 
 
+def _find_python(runtime: Path) -> Optional[Path]:
+    """运行时里的解释器；找不到返回 None（供缓存探测与 entry_python 共用）。"""
+    if os.name == "nt":
+        python = runtime / "python.exe"
+        return python if python.is_file() else None
+    matches = sorted(runtime.glob("bin/python3.*"))
+    matches = [p for p in matches if not p.name.endswith("-config") and p.is_file()]
+    return matches[-1] if matches else None
+
+
+def cached_runtime(cache_dir: Path) -> Optional[Path]:
+    """缓存目录里已有的完整版运行时（解释器齐备），没有则返回 None。
+
+    uv 在缓存目录里维护「主次版本 → 完整版本」的别名（posix 是符号链接，
+    Windows 是 junction）。actions/cache 恢复后，Windows 上的 junction 常常
+    已失效，此时 ``uv python install`` 会先删别名重建，在无效目录上直接抛
+    os error 267 中止整个构建（2026-10-27 的 Windows 发布即因此中断）。
+    缓存里已有可用运行时就不必再问 uv，既绕开这一步也省掉一次网络探测。
+    """
+    for root in sorted(cache_dir.glob(f"cpython-{PYTHON_VERSION}-*")):
+        if root.is_dir() and _find_python(root) is not None:
+            return root
+    return None
+
+
+def discard_stale_alias(cache_dir: Path) -> None:
+    """摘掉 uv 的主次版本别名（如 cpython-3.14-windows-x86_64-none）。
+
+    只在需要重新安装时调用：先自己删掉可能已失效的链接，uv 随后重建它，
+    免得在无效目录上删不动而中止。删除失败不影响后续流程（最坏是 uv 照旧报错）。
+    """
+    alias_version = PYTHON_VERSION.rsplit(".", 1)[0]
+    for alias in cache_dir.glob(f"cpython-{alias_version}-*"):
+        try:
+            alias.unlink()  # posix 符号链接
+        except OSError:
+            try:
+                alias.rmdir()  # Windows junction / 空目录
+            except OSError:
+                continue
+
+
 def ensure_runtime(cache_dir: Path) -> Path:
     """返回 pbs 运行时根目录，必要时下载。
 
     UV_PYTHON_INSTALL_DIR 把运行时钉在仓库内（build/py-runtime），便于 CI 缓存，
     也不污染用户全局的 uv 运行时目录。
     """
+    cached = cached_runtime(cache_dir)
+    if cached is not None:
+        log(f"复用已缓存的 Python {PYTHON_VERSION} 运行时（{cached.name}）")
+        return cached
+
     env = {**os.environ, "UV_PYTHON_INSTALL_DIR": str(cache_dir)}
     log(f"准备 Python {PYTHON_VERSION} 运行时（{cache_dir}）")
+    discard_stale_alias(cache_dir)
     subprocess.run(
         ["uv", "python", "install", PYTHON_VERSION],
         check=True,
@@ -103,13 +152,10 @@ def site_packages_of(runtime: Path) -> Path:
 
 def entry_python(runtime: Path) -> Path:
     """运行时中的解释器可执行文件（壳直接调用它，不改名不复制）。"""
-    if os.name == "nt":
-        return runtime / "python.exe"
-    matches = sorted(runtime.glob("bin/python3.*"))
-    matches = [p for p in matches if not p.name.endswith("-config") and p.is_file()]
-    if not matches:
+    python = _find_python(runtime)
+    if python is None:
         fail(f"运行时中找不到解释器: {runtime}")
-    return matches[-1]
+    return python
 
 
 def install_deps(runtime: Path, site_packages: Path) -> None:
