@@ -32,6 +32,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SPECS = ROOT / "specs"
 
+# Windows 上 stdout/stderr 默认按控制台代码页（cp1252）编码，本脚本的日志是中文，
+# 第一次 print 就 UnicodeEncodeError 把构建打断。日志只求可见，统一按 UTF-8 输出。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 PYTHON_VERSION = "3.14.3"
 
 # 构建期只走国内镜像：PyPI 直连实测极慢（冷缓存首装 7 分钟）。可用环境变量覆盖。
@@ -204,9 +210,13 @@ def verify(output: Path) -> None:
         "print('后端导入链 OK')"
     )
     result = subprocess.run(
-        [str(python), "-E", "-s", "-c", probe, str(output / "code")],
+        # -X utf8：-E 会屏蔽 PYTHONIOENCODING，只能靠命令行开关让子进程按 UTF-8 输出
+        [str(python), "-E", "-s", "-X", "utf8", "-c", probe, str(output / "code")],
         capture_output=True,
         text=True,
+        # 与子进程输出编码一致，避免把编码问题误报成「导入链验证失败」
+        encoding="utf-8",
+        errors="replace",
     )
     if result.returncode != 0:
         print(result.stdout, file=sys.stderr)
