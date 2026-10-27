@@ -83,6 +83,63 @@ class RaiseDeviceErrorTest(unittest.TestCase):
             raise_device_credential_error(resp)
 
 
+class RequestTokenCredentialErrorTest(unittest.TestCase):
+    """走完整请求链路：401 必须变成 DeviceCredentialError 而不是普通 HTTP 错误。
+
+    request_token 需要自己解释 401（设备被撤销要自愈），所以请求层必须允许
+    关掉 raise_for_status；若退回让 httpx 先抛，调用方拿不到 code。
+    """
+
+    def _request(self, response):
+        import asyncio
+        from unittest.mock import patch
+
+        from src.infrastructure.api import client as api_client
+
+        class _FakeClient:
+            is_closed = False
+
+            async def request(self, method, url, timeout=None, **kwargs):
+                return response
+
+        service = api_client.TokenApiService(
+            "http://192.0.2.1:3080", None, "client-x"
+        )
+        with patch.object(api_client, "_shared_client", return_value=_FakeClient()):
+            return asyncio.run(service.request_token("desc"))
+
+    def _response(self, status, payload):
+        import httpx
+
+        request = httpx.Request("POST", "http://192.0.2.1:3080/api/tokens/create")
+        return httpx.Response(status, json=payload, request=request)
+
+    def test_revoked_device_raises_credential_error(self):
+        with self.assertRaises(DeviceCredentialError) as ctx:
+            self._request(
+                self._response(401, {"code": CODE_DEVICE_REVOKED, "detail": "设备凭据已失效"})
+            )
+        self.assertEqual(ctx.exception.code, CODE_DEVICE_REVOKED)
+        self.assertTrue(ctx.exception.recoverable)
+
+    def test_key_invalid_stays_unrecoverable(self):
+        with self.assertRaises(DeviceCredentialError) as ctx:
+            self._request(self._response(401, {"code": CODE_DEVICE_KEY_INVALID}))
+        self.assertFalse(ctx.exception.recoverable)
+
+    def test_401_without_code_falls_back_to_http_error(self):
+        import httpx
+
+        with self.assertRaises(httpx.HTTPStatusError):
+            self._request(self._response(401, {"detail": "Invalid token"}))
+
+    def test_server_error_still_raises_http_error(self):
+        import httpx
+
+        with self.assertRaises(httpx.HTTPStatusError):
+            self._request(self._response(500, {"detail": "boom"}))
+
+
 class RecoverCredentialsTest(unittest.TestCase):
     """recover_device_credentials 必须先清旧密钥，否则登记拿不到新密钥。"""
 

@@ -35,12 +35,12 @@ from ..domain.events import (
     TradingStoppedEvent,
 )
 from ..infrastructure.api.client import (
-    aclose_health_client,
+    aclose_shared_client,
     check_server_health,
     describe_server_error,
     fetch_server_strategies,
     fetch_server_symbols,
-    reset_health_client,
+    reset_shared_client,
 )
 from ..infrastructure.proxy import apply_proxy_environment, server_host
 from ..infrastructure.trading.tqsdk_executor import test_account_session, test_tq_auth_connection
@@ -92,6 +92,88 @@ _START_STAGE_WEIGHTS = {
     "tqsdk": 55,    # 登录 + 网关探测 + TqApi 构造，最慢
     "engines": 30,  # 建会话 + 起信号流
 }
+
+# 进度空档期的爬行：天勤握手、更新包的本地复制与解压都拿不到细粒度进度，
+# 期间若只等真实事件，界面上的百分比会长时间停住，看上去像卡死。
+# 每秒推进 1% 是经验值——肉眼能看出在动，又不至于在真实进度到来前冲得太远。
+_PROGRESS_CREEP_INTERVAL = 1.0
+_PROGRESS_CREEP_STEP = 1
+# 爬行永远不走满 100：100 只留给真实完成事件，否则壳会在操作真正结束前
+# 就切到「已开启 / 已下载」的完成态
+_PROGRESS_CREEP_MAX = 99
+# 下载字节进度在整次更新里的份额：下载完还要解压/复制安装物（本地目录源
+# 复制整个 .app 尤其慢），余下的由解压阶段的爬行填满。若下载直接映射到
+# 100%，解压那几秒数字就会顶在 99% 不动，又是「停住」的观感。
+_UPDATE_DOWNLOAD_SPAN = 85
+
+
+class _ProgressCreep:
+    """在真实进度事件的空档期按固定步长缓慢推进百分比。
+
+    真实进度只前进不后退（取两者较大值），所以界面上的数字始终单调；
+    爬行上限由调用方给出，走到上限即自行停下。
+    """
+
+    def __init__(self, interval: float, step: int, emit) -> None:
+        self._interval = interval
+        self._step = step
+        self._emit = emit  # fn(pct: int) -> None
+        self._pct = 0
+        self._ceiling = 0
+        self._task: Optional[asyncio.Task] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def reset(self) -> None:
+        """开始一次新操作：清空进度并停掉上一次的爬行。"""
+        self._stop()
+        self._pct = 0
+        self._ceiling = 0
+
+    def report(self, pct: Optional[int], ceiling: int) -> int:
+        """记录一次真实进度，返回界面应展示的百分比。
+
+        pct 为 None 表示这一次没有真实进度（如本地复制整个 .app 时拿不到
+        字节数），只是把爬行的上限抬高后继续缓慢推进。
+        """
+        self._ceiling = max(0, min(ceiling, _PROGRESS_CREEP_MAX))
+        if pct is not None:
+            if pct > self._pct:
+                self._pct = pct
+        elif self._pct == 0 and self._ceiling > 0:
+            # 只有上限、没有真实进度时从 1% 起步：0% 的填充宽度为 0，
+            # 用户第一眼看到的是「没开始」
+            self._pct = 1
+        self._ensure_task()
+        return self._pct
+
+    def stop(self) -> None:
+        self._stop()
+
+    def _ensure_task(self) -> None:
+        if self._pct >= self._ceiling:
+            return  # 已到本次上限，没有可爬的空间
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # 不在事件循环里（如单测直接调用）：只报真实值，不爬行
+        if self._task is not None and not self._task.done() and self._loop is loop:
+            return
+        self._loop = loop
+        self._task = loop.create_task(self._crawl())
+
+    async def _crawl(self) -> None:
+        while True:
+            await asyncio.sleep(self._interval)
+            if self._pct >= self._ceiling:
+                return
+            self._pct = min(self._pct + self._step, self._ceiling)
+            self._emit(self._pct)
+
+    def _stop(self) -> None:
+        task, self._task = self._task, None
+        if task is not None and not task.done():
+            task.cancel()
+
 
 # LogLevel（含 SUCCESS 这种只存在于界面的级别）→ 标准 logging 级别
 _LOG_LEVELS = {
@@ -145,6 +227,20 @@ class BackendService:
         self._broadcast_fn = None
         # 本次启动各阶段在总进度里的区间，_begin_start_progress 填充
         self._start_progress_bounds: dict[str, tuple[float, float]] = {}
+        # 最近一次启动进度的阶段与文案：空档期爬行推高百分比时要沿用它们
+        self._start_progress_stage = ""
+        self._start_progress_text = ""
+        # 启动进度的空档期爬行（天勤握手等长阶段没有细粒度进度）
+        self._start_creep = _ProgressCreep(
+            _PROGRESS_CREEP_INTERVAL, _PROGRESS_CREEP_STEP, self._emit_start_creep
+        )
+        # 更新下载进度的空档期爬行（本地目录源与解压阶段拿不到字节进度）
+        self._update_creep = _ProgressCreep(
+            _PROGRESS_CREEP_INTERVAL, _PROGRESS_CREEP_STEP, self._emit_update_progress
+        )
+        # 上一次广播的下载百分比与最近一次真实字节数（爬行推高时沿用）
+        self._update_last_pct = -1
+        self._update_bytes = {"received": 0, "total": 0}
         # update_apply / quit 完成清理后置位，主循环据此优雅退出
         self.exit_requested = asyncio.Event()
 
@@ -163,6 +259,9 @@ class BackendService:
     async def shutdown(self) -> None:
         await self.stop_engines()
         self._records_manager.close()
+        # 进度爬行是常驻小任务，退出前收掉，避免事件循环关闭时留 pending 任务
+        self._start_creep.stop()
+        self._update_creep.stop()
         for task in (self._server_watch_task, self._token_watch_task):
             if task is None:
                 continue
@@ -171,7 +270,7 @@ class BackendService:
                 await task
             except asyncio.CancelledError:
                 pass
-        await aclose_health_client()
+        await aclose_shared_client()
         await self.bootstrap.shutdown()
 
     # -------- 服务器心跳 --------
@@ -436,8 +535,8 @@ class BackendService:
         """按配置设置代理环境变量（默认不走代理）。"""
         hosts = [server_host(config.server_url)] if config.server_url else []
         apply_proxy_environment(config.proxy_url, hosts)
-        # httpx 只在构造 client 时读代理环境变量，常驻的探测连接必须重建才生效
-        reset_health_client()
+        # httpx 只在构造 client 时读代理环境变量，常驻连接必须重建才生效
+        reset_shared_client()
 
     async def save_config(self, params: dict) -> dict:
         """保存全局配置（与账户无关的项），未提供的字段沿用当前值。"""
@@ -787,6 +886,14 @@ class BackendService:
             bounds[stage] = (acc, acc + span)
             acc += span
         self._start_progress_bounds = bounds
+        self._start_creep.reset()
+
+    def _emit_start_creep(self, pct: int) -> None:
+        """空档期由爬行推高百分比：阶段与文案沿用最近一次真实进度。"""
+        self._broadcast(
+            "engine_start_progress",
+            {"stage": self._start_progress_stage, "text": self._start_progress_text, "pct": pct},
+        )
 
     def _start_progress(self, stage: str, text: str, done: int = 0, total: int = 0) -> None:
         """广播启动进度。engine.start 是单次 RPC 调用，过程中壳拿不到任何状态，
@@ -794,16 +901,30 @@ class BackendService:
 
         pct 是折算到整次启动的百分比，-1 表示该阶段没有可展示的进度
         （如停止，没有细分阶段），此时壳只显示文案不画进度条。
+
+        阶段内的真实进度只会在「一项做完」时跳一格；天勤握手这类一项就要
+        几十秒的阶段，两次跳变之间界面会停住不动。因此把下一个真实节点
+        作为上限交给爬行逻辑，让百分比在空档期按 1%/秒 缓慢推进。
         """
-        pct = -1
+        self._start_progress_stage = stage
+        self._start_progress_text = text
         bounds = self._start_progress_bounds.get(stage)
-        if bounds is not None:
-            start, end = bounds
-            ratio = (done / total) if total > 0 else 0.0
-            ratio = max(0.0, min(1.0, ratio))
-            # 下限 1%：阶段刚开始时 ratio 为 0，若如实报 0 则进度条宽度为 0，
-            # 在界面上完全看不见——用户会以为压根没开始
-            pct = max(1, int(round(start + (end - start) * ratio)))
+        if bounds is None:
+            self._start_creep.stop()
+            self._broadcast(
+                "engine_start_progress", {"stage": stage, "text": text, "pct": -1}
+            )
+            return
+        start, end = bounds
+        ratio = (done / total) if total > 0 else 0.0
+        ratio = max(0.0, min(1.0, ratio))
+        # 下限 1%：阶段刚开始时 ratio 为 0，若如实报 0 则进度条宽度为 0，
+        # 在界面上完全看不见——用户会以为压根没开始
+        real = max(1, int(round(start + (end - start) * ratio)))
+        # 下一个真实节点：再做一项（done+1）；已做满时就是阶段终点
+        next_ratio = min(1.0, ((done + 1) / total) if total > 0 else 1.0)
+        ceiling = max(real, int(round(start + (end - start) * next_ratio)))
+        pct = self._start_creep.report(real, ceiling)
         self._broadcast(
             "engine_start_progress", {"stage": stage, "text": text, "pct": pct}
         )
@@ -844,37 +965,42 @@ class BackendService:
 
         # 先算出本次会经过哪些阶段，后续各阶段据此折算成整次启动的百分比
         self._begin_start_progress(target_accounts)
-        issues = await self._preflight_start_checks(target_accounts, kind=kind)
-        if issues:
-            # 拼成多行文案便于日志；结构化 issues 经异常 type 字段回传 UI
-            raise EngineStartBlockedError(issues)
-
-        target_ids = [a.id for a in target_accounts]
-        # 预检通过后启动；启动期失败也按问题列表抛出，由本方法回滚
         try:
-            self.set_auto_trade({"value": True})
-            if inspect.signature(self._start_engines).parameters:
-                await self._start_engines(target_ids)
-            else:
-                await self._start_engines()
-        except EngineStartBlockedError:
-            if inspect.signature(self.stop_engines).parameters:
-                await self.stop_engines(target_ids)
-            else:
-                await self.stop_engines()
-            if not any(e.is_running for e in self._engines.values()):
-                self.set_auto_trade({"value": False})
-            raise
-        except Exception as e:
-            # 启动期非预期异常：同样回滚，避免半启动状态
-            if inspect.signature(self.stop_engines).parameters:
-                await self.stop_engines(target_ids)
-            else:
-                await self.stop_engines()
-            if not any(e.is_running for e in self._engines.values()):
-                self.set_auto_trade({"value": False})
-            raise EngineStartBlockedError([f"启动过程发生未预期错误: {e}"]) from e
-        return self.engine_status()
+            issues = await self._preflight_start_checks(target_accounts, kind=kind)
+            if issues:
+                # 拼成多行文案便于日志；结构化 issues 经异常 type 字段回传 UI
+                raise EngineStartBlockedError(issues)
+
+            target_ids = [a.id for a in target_accounts]
+            # 预检通过后启动；启动期失败也按问题列表抛出，由本方法回滚
+            try:
+                self.set_auto_trade({"value": True})
+                if inspect.signature(self._start_engines).parameters:
+                    await self._start_engines(target_ids)
+                else:
+                    await self._start_engines()
+            except EngineStartBlockedError:
+                if inspect.signature(self.stop_engines).parameters:
+                    await self.stop_engines(target_ids)
+                else:
+                    await self.stop_engines()
+                if not any(e.is_running for e in self._engines.values()):
+                    self.set_auto_trade({"value": False})
+                raise
+            except Exception as e:
+                # 启动期非预期异常：同样回滚，避免半启动状态
+                if inspect.signature(self.stop_engines).parameters:
+                    await self.stop_engines(target_ids)
+                else:
+                    await self.stop_engines()
+                if not any(e.is_running for e in self._engines.values()):
+                    self.set_auto_trade({"value": False})
+                raise EngineStartBlockedError([f"启动过程发生未预期错误: {e}"]) from e
+            return self.engine_status()
+        finally:
+            # 本次启动已结束：停掉空档期爬行，否则它会继续用最后一条阶段文案
+            # 往后推百分比，界面看到的是一个已经结束却还在动的进度条
+            self._start_creep.stop()
 
     async def _preflight_start_checks(
         self, target_accounts: Optional[list[Account]] = None, kind: Optional[str] = None
@@ -1130,21 +1256,47 @@ class BackendService:
         self._update_task = asyncio.create_task(self._download_update(url))
         return {"status": "downloading"}
 
+    def _emit_update_progress(self, pct: int) -> None:
+        """更新进度只有一条广播路径：真实进度与空档期爬行都从这里出去，
+        保证数字单调且不会因两条路径各自判重而重复推送。"""
+        if pct == self._update_last_pct:
+            return
+        self._update_last_pct = pct
+        self._broadcast(
+            "update_progress",
+            {"pct": pct, "received": self._update_bytes["received"], "total": self._update_bytes["total"]},
+        )
+
     async def _download_update(self, url: str) -> None:
         stage_dir = self.workdir / "data" / "update"
-        last_pct = -1
+        # 爬行推高数字时没有新的 received/total 可报，沿用最近一次真实值
+        self._update_last_pct = -1
+        self._update_bytes = {"received": 0, "total": 0}
+        self._update_creep.reset()
+
+        def report(pct: Optional[int], ceiling: int, received: int, total: int) -> None:
+            """上报一次进度：pct=None 表示只有上限（拿不到细粒度进度）。"""
+            self._update_bytes["received"], self._update_bytes["total"] = received, total
+            self._emit_update_progress(self._update_creep.report(pct, ceiling))
+
         try:
+            # 本地目录源（复制整个 .app）与网络下载前无法预知字节数：先让爬行
+            # 跑起来，否则这段等待里胶囊数字完全不动。上限压在下载体份额内，
+            # 真实字节进度到来时随时盖掉它（只进不退）
+            report(None, _UPDATE_DOWNLOAD_SPAN, 0, 0)
+
             def progress(received: int, total: int):
-                nonlocal last_pct
                 if total <= 0:
-                    self._broadcast("update_progress", {"pct": -1, "received": received, "total": total})
+                    # 总大小未知（如服务器未给 content-length）：没有真实进度可折算，
+                    # 保持爬行，数字仍会缓慢推进
                     return
-                pct = min(100, int(received * 100 / total))
-                if pct != last_pct:
-                    last_pct = pct
-                    self._broadcast("update_progress", {"pct": pct, "received": received, "total": total})
+                pct = min(_UPDATE_DOWNLOAD_SPAN, int(received * _UPDATE_DOWNLOAD_SPAN / total))
+                report(pct, _UPDATE_DOWNLOAD_SPAN, received, total)
 
             archive_path = await download_release(url, stage_dir, progress_cb=progress)
+            # 下载完还有解压/复制安装物这一步，同样没有细粒度进度：把上限放开
+            # 到 99 交给爬行填满，用户看到的是「还在装」而不是停在 85%
+            report(None, _PROGRESS_CREEP_MAX, self._update_bytes["received"], self._update_bytes["total"])
             self._staged_item = await asyncio.to_thread(extract_update, archive_path, stage_dir)
         except asyncio.CancelledError:
             self._clear_stage_dir()
@@ -1154,6 +1306,8 @@ class BackendService:
             self._clear_stage_dir()
             self._broadcast("update_failed", {"message": f"下载更新失败: {e}"})
             return
+        finally:
+            self._update_creep.stop()
         self._broadcast(
             "update_ready",
             {

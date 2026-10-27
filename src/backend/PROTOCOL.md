@@ -53,8 +53,8 @@ headless Python 后端与 UI 壳（SwiftUI / CLI）之间的本地通信协议�
 | `trading_records_updated` | `{kind, account_id, record}` | 账户交易数据变动（资金/持仓/委托/成交），后台常驻 watcher 监听到快期推送后自动广播 |
 | `config_changed` | `{}` | 配置/账户已保存（引擎运行中则下次启动生效） |
 | `token_status` | `{status, records: [...]}` | token 审批状态变化；后台轮询领取成功后广播，壳据此刷新 Token 页 |
-| `update_progress` | `{pct, received, total}` | pct=-1 表示总大小未知 |
-| `engine_start_progress` | `{stage, text, pct}` | `engine.start`/`engine.stop` 执行中的进度（该调用返回前过程状态无从获取）。`stage` 依次为 `server`/`accounts`/`tqsdk`/`engines`（stop 为 `stop`，且没有可握手的账户时 `tqsdk` 会被跳过）；`text` 是可直接展示的中文阶段文案，壳自行加前缀；`pct` 是**整次启动**的百分比（按各阶段经验权重折算，起步即 ≥1，正常走到 100），`pct=-1` 表示没有可画的进度（停止操作），壳此时只显示文案。预检被拦时 `pct` 停在拦截点，不会走满 |
+| `update_progress` | `{pct, received, total}` | 下载/解压进度。`pct` 单调不减，下载字节进度只占 0–85（余下份额留给解压/复制安装物），拿不到字节进度时（本地目录源复制 `.app`、解压、服务器未给 `content-length`）由后端按 1%/秒 缓慢推进；`pct` 恒不为 100，真正就绪以 `update_ready` 为准 |
+| `engine_start_progress` | `{stage, text, pct}` | `engine.start`/`engine.stop` 执行中的进度（该调用返回前过程状态无从获取）。`stage` 依次为 `server`/`accounts`/`tqsdk`/`engines`（stop 为 `stop`，且没有可握手的账户时 `tqsdk` 会被跳过）；`text` 是可直接展示的中文阶段文案，壳自行加前缀；`pct` 是**整次启动**的百分比（按各阶段经验权重折算，起步即 ≥1，正常走到 100），`pct=-1` 表示没有可画的进度（停止操作），壳此时只显示文案。阶段内没有新事件时（如天勤握手要等几十秒）后端按 1%/秒 缓慢推进到下一个真实节点，界面上不会停住；预检被拦时 `pct` 停在拦截点，不会走满 |
 | `update_ready` | `{kind, mode}` | kind 是给人看的中文包名（"差量更新包"/"完整更新包"）；mode 为 `"patch"`/`"full"`，壳据此决定装完是重连还是退出 |
 | `update_failed` / `update_cancelled` | `{message}` / `{}` | |
 | `backend_stopping` | `{reason: "quit"\|"update"}` | 后端即将退出，壳应断开并等待 |

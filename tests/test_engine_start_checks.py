@@ -2,12 +2,13 @@
 
 import asyncio
 import tempfile
+import time
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
-from src.backend.service import BackendService, EngineStartBlockedError
+from src.backend.service import BackendService, EngineStartBlockedError, _ProgressCreep
 from src.domain.entities import Account, TradingConfiguration
 
 
@@ -400,6 +401,122 @@ class EngineStartProgressTest(unittest.TestCase):
         asyncio.run(service.engine_stop({"kind": "sim"}))
         stop = [(text, pct) for stage, text, pct in events if stage == "stop"]
         self.assertEqual(stop, [("正在停止模拟自动交易…", -1)])
+
+
+class ProgressCreepTest(unittest.TestCase):
+    """长阶段（天勤握手）没有细粒度进度时，百分比要缓慢推进而不是停住。"""
+
+    def test_creep_advances_one_percent_per_tick(self):
+        emitted: list[int] = []
+        creep = _ProgressCreep(interval=0.01, step=1, emit=emitted.append)
+
+        async def run():
+            self.assertEqual(creep.report(5, 20), 5)  # 真实进度先显示出来
+            await asyncio.sleep(0.05)
+            creep.stop()
+
+        asyncio.run(run())
+        self.assertGreater(len(emitted), 1, "空档期必须有推进")
+        self.assertEqual(emitted, sorted(emitted), f"只能单调前进：{emitted}")
+        self.assertTrue(all(p > 5 for p in emitted), emitted)
+        self.assertLessEqual(max(emitted), 20, f"不能越过下一次真实节点：{emitted}")
+
+    def test_creep_never_reaches_100(self):
+        emitted: list[int] = []
+        creep = _ProgressCreep(interval=0.01, step=10, emit=emitted.append)
+
+        async def run():
+            creep.report(None, 100)  # 只给上限、没有真实进度
+            await asyncio.sleep(0.06)
+            creep.stop()
+
+        asyncio.run(run())
+        self.assertTrue(emitted, "给了上限就应当爬")
+        self.assertLessEqual(max(emitted), 99, f"爬行不能自己走满 100：{emitted}")
+
+    def test_real_progress_wins_over_creep(self):
+        """真实进度跳到爬行值之前也不会回退，反之取较大值。"""
+        creep = _ProgressCreep(interval=0.05, step=1, emit=lambda pct: None)
+        self.assertEqual(creep.report(30, 60), 30)
+        self.assertEqual(creep.report(25, 60), 30, "真实值更小时不能回退")
+        self.assertEqual(creep.report(45, 60), 45)
+
+    def test_creep_stops_at_ceiling(self):
+        emitted: list[int] = []
+        creep = _ProgressCreep(interval=0.01, step=1, emit=emitted.append)
+
+        async def run():
+            creep.report(9, 10)
+            await asyncio.sleep(0.08)
+
+        asyncio.run(run())
+        self.assertEqual(max(emitted), 10)
+        # 到顶后不再推：步长跨过上限也只能停在 10
+        self.assertEqual(emitted.count(10), 1, emitted)
+
+
+class UpdateDownloadProgressTest(unittest.TestCase):
+    """版本号胶囊的下载进度：拿不到字节时也要缓慢推进，不能停住。"""
+
+    def test_local_copy_reports_moving_progress(self):
+        """本地源（复制整个 .app）没有字节进度：期间必须仍有百分比推进。"""
+        events: list[int] = []
+
+        async def slow_copy(url, dest, progress_cb=None):
+            await asyncio.sleep(0.4)  # 模拟 ditto 复制整个 .app 的等待
+            progress_cb(1, 1)
+            return dest / "update.zip"
+
+        def unexpected_extract(*a, **kw):
+            return Path(tempfile.mkdtemp())
+
+        # 爬行间隔调小，测试不必真等 1 秒 tick
+        with patch("src.backend.service._PROGRESS_CREEP_INTERVAL", 0.05), \
+             patch("src.backend.service.download_release", new=slow_copy), \
+             patch("src.backend.service.extract_update", new=unexpected_extract):
+            service = BackendService(Path(tempfile.mkdtemp()))
+
+            def on_broadcast(name, data):
+                if name == "update_progress":
+                    events.append(data["pct"])
+
+            service.attach_broadcast(on_broadcast)
+            asyncio.run(service._download_update("http://127.0.0.1:1/x.zip"))
+
+        self.assertGreaterEqual(len(events), 3, f"空档期应有多帧进度：{events}")
+        self.assertEqual(events, sorted(events), f"只能单调前进：{events}")
+        self.assertTrue(all(p > 0 for p in events), f"起步不能是 0：{events}")
+        self.assertLess(max(events), 100, f"安装物就绪前不能报完成：{events}")
+
+
+class PreflightLongStageProgressTest(unittest.TestCase):
+    """天勤握手期间没有任何真实进度事件，界面必须仍能看出在动。"""
+
+    def test_slow_handshake_keeps_progress_moving(self):
+        events: list[tuple[str, str, int]] = []
+
+        # 握手本身是阻塞网络调用；用 time.sleep 在 to_thread 里模拟天勤那
+        # 几十秒「一条真实进度都没有」的空档（不会卡住事件循环）
+        def slow_session(account, auth):
+            time.sleep(0.4)
+
+        # 爬行间隔调小，测试不必真等 1 秒 tick
+        with patch("src.backend.service._PROGRESS_CREEP_INTERVAL", 0.05), \
+             patch("src.backend.service.check_server_health", new=_health_ok), \
+             patch("src.backend.service.test_account_session", new=slow_session):
+            service = _make_service()
+            service.bootstrap.save_account(_sim_account())
+            service.bootstrap.token_service.token_store.have_token = lambda: True
+            service.attach_broadcast(
+                lambda name, data: events.append((data["stage"], data["text"], data["pct"]))
+                if name == "engine_start_progress" else None
+            )
+            with patch.object(service, "_start_engines", new=_noop):
+                asyncio.run(service.engine_start({}))
+
+        tqsdk = [pct for stage, _, pct in events if stage == "tqsdk" and pct >= 0]
+        self.assertGreaterEqual(len(tqsdk), 3, f"握手期间应有多帧进度：{events}")
+        self.assertEqual(tqsdk, sorted(tqsdk), f"只能单调前进：{tqsdk}")
 
 
 if __name__ == "__main__":

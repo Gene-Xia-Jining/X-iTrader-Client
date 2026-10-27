@@ -82,89 +82,146 @@ def parse_signal(payload: dict) -> StrategySignal:
         logger.debug("signal_ignored_fields fields=%s", sorted(unknown))
     return StrategySignal(**{k: v for k, v in payload.items() if k in known})
 
-# 健康探测的常驻 client：按 event loop 缓存，进程内复用 TCP/TLS 连接。
-# 实测这台机器到服务器的新建握手要 1-5s（TLS 单独就占 1.4-4.6s），复用连接只要
-# 0.6-2.4s；10s 周期的心跳若每次都冷启动，会周期性把链路慢误判成服务器离线。
-_health_clients: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+# 所有 API 请求共用的常驻 client：按 event loop 缓存，进程内复用 TCP/TLS 连接。
+# 实测这台机器到服务器的新建握手要 1-13s（TLS 单独就占 1.4-4.6s，抖动时超过
+# 20s），复用连接只要 0.5-2.4s。若每个请求各自新建连接，5s 默认超时会把绝大多数
+# 请求判成 ConnectTimeout——界面显示「已连接」而 Token/品种/策略全部「获取失败」
+# 就是这么来的：健康探测复用了连接，其它请求没有。
+_shared_clients: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
-# 探测失败后重试一次：复用连接被对端或中间设备回收时首跳必失败，换新连接即恢复；
-# 链路抖动时第二次也常能挤进预算。重试只给半个预算，避免一轮探测拖成两个周期。
-_HEALTH_RETRY_TIMEOUT_RATIO = 0.5
+# 失败后重试一次：复用连接被对端或中间设备回收时首跳必失败，换新连接即恢复；
+# 链路抖动时第二次也常能挤进预算。重试只给半个预算，避免一次请求拖成两倍等待。
+_RETRY_TIMEOUT_RATIO = 0.5
+
+# 业务请求的默认超时：要覆盖冷启动握手（实测最长 13s），而不是 httpx 的 5s。
+# 热连接通常 1-2s，所以只有首跳真的付这个成本。
+DEFAULT_API_TIMEOUT = 15.0
 
 
-def _health_client() -> httpx.AsyncClient:
-    """取当前 event loop 专属的探测 client，首次调用时创建。
+def _shared_client() -> httpx.AsyncClient:
+    """取当前 event loop 专属的 API client，首次调用时创建。
 
     按 loop 缓存而非全局单例：client 绑定 loop，跨 loop 复用会在反复新建
     loop 的场景（测试里的 asyncio.run）绑定到已关闭的 loop。
     """
     loop = asyncio.get_running_loop()
-    client = _health_clients.get(loop)
+    client = _shared_clients.get(loop)
     if client is None or client.is_closed:
         client = httpx.AsyncClient(
-            # 心跳间隔 10s，池内连接必须活得比它久，否则每次仍是冷启动
-            limits=httpx.Limits(max_connections=4, keepalive_expiry=60.0),
+            # 心跳间隔 10s，池内连接必须活得比它久，否则每次仍是冷启动；
+            # 连接数要同时容纳心跳 + 品种/策略/Token 的并发查询
+            limits=httpx.Limits(max_connections=8, keepalive_expiry=60.0),
         )
-        _health_clients[loop] = client
+        _shared_clients[loop] = client
     return client
 
 
-def reset_health_client() -> None:
-    """丢弃缓存的探测连接，供代理设置变化后调用。
+def reset_shared_client() -> None:
+    """丢弃缓存的连接，供代理设置变化后调用。
 
     httpx 在构造 client 时读取代理环境变量，改了 env 只有重建才生效。
     """
-    client = _take_health_client()
+    client = _take_shared_client()
     if client is not None:
         # 同步上下文无法 await，交给 loop 关闭；loop 已停也只是连接随 GC 回收
         asyncio.get_running_loop().create_task(client.aclose())
 
 
-async def aclose_health_client() -> None:
-    """关闭当前 loop 的探测连接，供后端退出时调用。"""
-    client = _take_health_client()
+async def aclose_shared_client() -> None:
+    """关闭当前 loop 的连接，供后端退出时调用。"""
+    client = _take_shared_client()
     if client is not None:
         await client.aclose()
 
 
-def _take_health_client() -> Optional[httpx.AsyncClient]:
+def _take_shared_client() -> Optional[httpx.AsyncClient]:
     """摘掉当前 loop 缓存的 client 并返回（未建过或已关闭返回 None）。"""
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        _health_clients.clear()
+        _shared_clients.clear()
         return None
-    client = _health_clients.pop(loop, None)
+    client = _shared_clients.pop(loop, None)
     return None if client is None or client.is_closed else client
 
 
-def _health_url(server_url: str) -> str:
+def _join_url(server_url: str, path: str) -> str:
     url = server_url.strip()
     if "://" not in url:
         url = "http://" + url
-    return url.rstrip("/") + "/api/health"
+    return url.rstrip("/") + path
+
+
+def _health_url(server_url: str) -> str:
+    return _join_url(server_url, "/api/health")
+
+
+async def _api_request(
+    method: str,
+    url: str,
+    timeout: float = DEFAULT_API_TIMEOUT,
+    retry: bool = False,
+    raise_for_status: bool = True,
+    **kwargs,
+) -> httpx.Response:
+    """用常驻 client 发请求；retry 时对连接层异常与 5xx 重试一次。
+
+    只给读类请求和幂等写入打开 retry：``tokens/create`` 重发会多出一条申请
+    记录，``tokens/claim`` 重发时服务器已把明文取走（第二次 404），会把刚领到
+    的 Token 弄丢——两者都不幂等，宁可失败让用户重试。
+
+    raise_for_status=False 供把 404 当正常业务返回的接口使用（设备登记、
+    领取、删除记录），由调用方自己解释状态码；此时仍然只重试 5xx。
+    """
+    client = _shared_client()
+    budget = timeout
+    attempt = 0
+    while True:
+        error: Optional[Exception] = None
+        try:
+            response = await client.request(method, url, timeout=budget, **kwargs)
+        except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+            error = exc
+        else:
+            if raise_for_status:
+                try:
+                    response.raise_for_status()
+                    return response
+                except httpx.HTTPStatusError as exc:
+                    error = exc
+            elif response.status_code >= 500:
+                error = httpx.HTTPStatusError(
+                    f"HTTP {response.status_code}",
+                    request=response.request,
+                    response=response,
+                )
+            else:
+                return response
+
+        if not retry or attempt or not _retryable(error):
+            raise error
+        logger.debug(
+            "api_request_retry method=%s url=%s first=%s",
+            method,
+            url,
+            error.__class__.__name__,
+        )
+        attempt += 1
+        budget *= _RETRY_TIMEOUT_RATIO
+
+
+async def _get_json(url: str, timeout: float, headers: Optional[dict] = None) -> dict:
+    response = await _api_request("GET", url, timeout=timeout, retry=True, headers=headers or {})
+    return response.json()
 
 
 async def check_server_health(server_url: str, timeout: float = 5.0) -> dict:
     """探测服务器连通性（/api/health 无需认证），失败时抛出异常。"""
     url = _health_url(server_url)
-    client = _health_client()
-    try:
-        return await _health_probe(client, url, timeout)
-    except (httpx.TransportError, httpx.HTTPStatusError) as first:
-        if not _health_retryable(first):
-            raise
-        logger.debug("health_probe_retry first=%s", first.__class__.__name__)
-        return await _health_probe(client, url, timeout * _HEALTH_RETRY_TIMEOUT_RATIO)
+    return await _get_json(url, timeout)
 
 
-async def _health_probe(client: httpx.AsyncClient, url: str, timeout: float) -> dict:
-    response = await client.get(url, timeout=timeout)
-    response.raise_for_status()
-    return response.json()
-
-
-def _health_retryable(error: Exception) -> bool:
+def _retryable(error: Exception) -> bool:
     """连接层异常一律可重试；5xx 是服务端瞬时不可用，重试一次也合理。
 
     4xx 是地址或权限问题，重试无意义；JSON 解析失败（ValueError）重试也无益。
@@ -201,7 +258,7 @@ def describe_server_error(error: Exception) -> str:
 async def fetch_server_symbols(
     server_url: str,
     token_service: Optional["TokenApiService"] = None,
-    timeout: float = 5.0,
+    timeout: float = DEFAULT_API_TIMEOUT,
 ) -> list[dict]:
     """获取服务器支持的交易品种列表（/api/symbols），失败时抛出异常。
 
@@ -223,7 +280,7 @@ async def fetch_server_symbols(
 async def fetch_server_exchanges(
     server_url: str,
     token_service: Optional["TokenApiService"] = None,
-    timeout: float = 5.0,
+    timeout: float = DEFAULT_API_TIMEOUT,
 ) -> list[dict]:
     """获取服务器交易所列表（/api/exchanges），失败时抛出异常。"""
     data = await _get_server_json(server_url, "/api/exchanges", token_service, timeout)
@@ -233,7 +290,7 @@ async def fetch_server_exchanges(
 async def fetch_server_strategies(
     server_url: str,
     token_service: Optional["TokenApiService"] = None,
-    timeout: float = 5.0,
+    timeout: float = DEFAULT_API_TIMEOUT,
 ) -> list[dict]:
     """获取服务器支持的交易策略列表（/api/strategies），失败时抛出异常。
 
@@ -258,21 +315,18 @@ async def submit_server_symbol(
     symbol: str,
     exchange: str,
     token_service: Optional["TokenApiService"] = None,
-    timeout: float = 5.0,
+    timeout: float = DEFAULT_API_TIMEOUT,
 ) -> None:
     """向服务器品种库提交品种并关联交易所（/api/symbols，需认证），失败时抛出异常。"""
-    url = server_url.strip()
-    if "://" not in url:
-        url = "http://" + url
-    url = url.rstrip("/") + "/api/symbols"
+    url = _join_url(server_url, "/api/symbols")
     headers = _auth_headers(token_service)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(
-            url,
-            json={"symbol": symbol, "exchanges": [exchange]},
-            headers=headers,
-        )
-        response.raise_for_status()
+    await _api_request(
+        "POST",
+        url,
+        timeout=timeout,
+        json={"symbol": symbol, "exchanges": [exchange]},
+        headers=headers,
+    )
 
 
 async def _get_server_json(
@@ -281,14 +335,8 @@ async def _get_server_json(
     token_service: Optional["TokenApiService"],
     timeout: float,
 ) -> dict:
-    url = server_url.strip()
-    if "://" not in url:
-        url = "http://" + url
-    url = url.rstrip("/") + path
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.get(url, headers=_auth_headers(token_service))
-        response.raise_for_status()
-        return response.json()
+    url = _join_url(server_url, path)
+    return await _get_json(url, timeout, _auth_headers(token_service))
 
 
 def _auth_headers(token_service: Optional["TokenApiService"]) -> dict:
@@ -336,14 +384,15 @@ class TokenApiService:
         }
         if legacy_client_id:
             body["legacy_client_id"] = legacy_client_id
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(url, json=body)
-            if response.status_code == 404:
-                # 旧版服务器：没有身份体系，退回纯 client_id 路径
-                logger.info("server_has_no_device_registry, fallback to client_id only")
-                return None
-            response.raise_for_status()
-            payload = response.json()
+        response = await _api_request(
+            "POST", url, timeout=10.0, raise_for_status=False, json=body
+        )
+        if response.status_code == 404:
+            # 旧版服务器：没有身份体系，退回纯 client_id 路径
+            logger.info("server_has_no_device_registry, fallback to client_id only")
+            return None
+        response.raise_for_status()
+        payload = response.json()
 
         # 服务器对已登记设备不重发密钥（防止知道 device_id 就冒充），
         # 此时必须沿用本地已保存的密钥，否则会把内存里的身份抹成 None，
@@ -369,19 +418,17 @@ class TokenApiService:
         if self.device_id and self.device_key:
             body["device_id"] = self.device_id
             body["device_key"] = self.device_key
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=body)
-            if response.status_code == 401:
-                raise_device_credential_error(response)
-            response.raise_for_status()
-            return response.json()
+        # 不重试：重发会在服务器上多出一条申请记录。
+        # 401 必须由这里自己解释（设备凭据被拒），不能让 raise_for_status 先抛
+        response = await _api_request("POST", url, raise_for_status=False, json=body)
+        if response.status_code == 401:
+            raise_device_credential_error(response)
+        response.raise_for_status()
+        return response.json()
 
     async def get_token_requests(self) -> dict:
         url = f"{self.server_url}/api/tokens/requests/{self.client_id}"
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            return response.json()
+        return await _get_json(url, DEFAULT_API_TIMEOUT)
 
     async def list_token_requests(self) -> list[dict]:
         """该客户端的 token 申请记录（供 UI 展示），失败时抛出异常。"""
@@ -399,21 +446,22 @@ class TokenApiService:
         body: dict = {"client_id": self.client_id}
         if token_id:
             body["token_id"] = token_id
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=body)
-            if response.status_code == 404:
-                return None
-            response.raise_for_status()
-            return response.json()
+        # 不重试：服务器取走明文后第二次会 404，重试会把刚领到的 Token 弄丢
+        response = await _api_request("POST", url, raise_for_status=False, json=body)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()
 
     async def delete_token_request(self, token_id: str) -> None:
         """删除一条申请记录（含已批准记录）；记录不存在时抛错，避免界面假装成功。"""
         url = f"{self.server_url}/api/tokens/delete"
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json={"token_id": token_id})
-            if response.status_code == 404:
-                raise ValueError("申请记录不存在（可能已被删除）")
-            response.raise_for_status()
+        response = await _api_request(
+            "POST", url, raise_for_status=False, json={"token_id": token_id}
+        )
+        if response.status_code == 404:
+            raise ValueError("申请记录不存在（可能已被删除）")
+        response.raise_for_status()
 
     async def validate_token(self, token: str) -> bool:
         """校验 token；只有服务器明确否定时才返回 False。
@@ -424,22 +472,21 @@ class TokenApiService:
         失效而删掉本地唯一一份明文 token，服务器只存 hash，只能重新申请。
         """
         url = f"{self.server_url}/api/tokens/validate"
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                url,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            if response.status_code in (401, 403):
-                return False
-            response.raise_for_status()
-            return True
+        response = await _api_request(
+            "GET",
+            url,
+            retry=True,
+            raise_for_status=False,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if response.status_code in (401, 403):
+            return False
+        response.raise_for_status()
+        return True
 
     async def list_tokens(self):
         url = f"{self.server_url}/api/tokens/list/{self.client_id}"
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            return response.json()
+        return await _get_json(url, DEFAULT_API_TIMEOUT)
 
     def get_auth_headers(self, token: Optional[str] = None) -> dict:
         if token is None:

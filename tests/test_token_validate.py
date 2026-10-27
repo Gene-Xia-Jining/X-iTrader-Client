@@ -16,18 +16,13 @@ _URL = "http://192.0.2.1:3080/api/tokens/validate"
 
 
 class _StubClient:
-    """替身 AsyncClient：只实现 validate_token 用到的上下文与 get。"""
+    """替身 AsyncClient：只实现 validate_token 用到的 request。"""
 
     def __init__(self, outcome):
         self._outcome = outcome
+        self.is_closed = False
 
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc_info):
-        return False
-
-    async def get(self, url, headers=None):
+    async def request(self, method, url, timeout=None, headers=None, **kwargs):
         if isinstance(self._outcome, Exception):
             raise self._outcome
         return self._outcome
@@ -40,7 +35,7 @@ def _response(status: int) -> httpx.Response:
 def _validate(outcome) -> bool:
     service = TokenApiService("http://192.0.2.1:3080", None, "client-x")
     with patch(
-        "src.infrastructure.api.client.httpx.AsyncClient",
+        "src.infrastructure.api.client._shared_client",
         return_value=_StubClient(outcome),
     ):
         return asyncio.run(service.validate_token("tok"))
