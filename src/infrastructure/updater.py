@@ -4,11 +4,12 @@
 __version__ 打 tag 并发布）：
 
 - X-iTrader-Client-{version}-Mac.dmg      全量包（内含 X-iTrader-Client.app，拖拽安装）
-- X-iTrader-Client-{version}-Windows.zip  全量包（内含扁平程序目录，根级 X-iTrader.exe 壳
-                                          + X-iTrader-Backend.exe 后端 + _internal/）
+- X-iTrader-Client-{version}-Windows.zip  全量包（内含程序目录，根级 X-iTrader.exe 壳
+                                          + backend/runtime/python.exe 后端运行时
+                                          + backend/code/ 源码）
 - x-itrader-client-{version}-src.zip      补丁包（仅当相对上一版本只有 src/ 变化时发布，
-                                          全平台共用；src 在打包时外置为普通目录，
-                                          替换该目录即完成差量更新）
+                                          全平台共用；src 在打包时外置为普通目录
+                                          backend/code/src，替换该目录即完成差量更新）
 
 本地源是同名安装包所在的目录（默认 DEFAULT_LOCAL_SOURCE，可用
 ITRADER_UPDATE_SOURCE 覆盖）。检查更新时本地目录与 GitHub 并发查询，
@@ -22,7 +23,7 @@ Info.plist），**不扫 dmg**：dmg 是分发物，目录里留着的历史 dmg
 全量包两种格式都可解：macOS 用 dmg（hdiutil 挂载后复制 .app），Windows 用 zip；
 补丁包恒为 zip。替换采用 rename→move→Popen→退出 模式：旧安装物整体改名让位，
 新安装物移入原位置，启动新进程后旧进程退出；新进程启动时调用
-cleanup_stale_backups() 清理 .old-* 残留。开发态（非 frozen）仅允许全量替换
+cleanup_stale_backups() 清理 .old-* 残留。开发态（未打包）仅允许全量替换
 上级目录已安装的 .app。
 """
 
@@ -40,6 +41,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
+
+from .paths import is_packaged
 
 GITHUB_REPO = "Gene-Xia-Jining/X-iTrader-Client"
 RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -59,7 +62,8 @@ _FULL_ASSET_KEYWORDS = {"darwin": ("mac", ".dmg"), "win32": ("windows", ".zip")}
 _PATCH_ASSET_KEYWORD = "src"
 
 # Windows 全量包根级的壳可执行文件名：程序目录（安装根）即它的父目录。
-# 后端进程是 X-iTrader-Backend.exe，与壳同级；全量更新后重启的对象是壳。
+# 后端在 backend\runtime\ 下（需要 runtime/ 与 code/ 子树），不再与壳同级；
+# 全量更新后重启的对象是壳。
 _WIN_SHELL_EXE = "X-iTrader.exe"
 
 # macOS 本地打包产物目录：build.sh 直接产出的 .app 可当全量包用
@@ -85,7 +89,12 @@ class ReleaseInfo:
 
 
 def is_frozen() -> bool:
-    return bool(getattr(sys, "frozen", False))
+    """打包态判定的兼容别名（见 paths.is_packaged）。
+
+    名字沿用旧称，但后端已不是 PyInstaller frozen 进程——sys.frozen 恒为
+    False，判定改为读打包入口设置的环境标记。
+    """
+    return is_packaged()
 
 
 def parse_version(text: str) -> tuple[int, ...] | None:
@@ -500,9 +509,31 @@ def extract_update(archive_path: Path, stage_dir: Path) -> Path:
     return item
 
 
+def backend_root() -> Path | None:
+    """后端目录（内含 runtime/ 与 code/），由当前解释器位置推导。
+
+    打包态的布局是固定的两层：
+
+        backend/runtime/python.exe            Windows 解释器
+        backend/runtime/bin/python3.14        macOS 解释器
+        backend/code/backend_entry.py
+        backend/code/src/
+
+    从入口向上找同时含 runtime/ 与 code/ 的目录，比按层数硬编码 parents[n]
+    更稳：mac 是 bin/ 下一层、win 是 runtime/ 下一层，两者不相同。
+    """
+    if not is_packaged():
+        return None
+    exe = Path(sys.executable).resolve()
+    for parent in exe.parents:
+        if (parent / "runtime").is_dir() and (parent / "code").is_dir():
+            return parent
+    return None
+
+
 def app_install_root() -> Path | None:
     """当前安装物的根路径（全量更新的替换对象）：mac=X-iTrader-Client.app，win=程序目录。"""
-    if not is_frozen():
+    if not is_packaged():
         return None
     exe = Path(sys.executable).resolve()
     if sys.platform == "darwin":
@@ -510,23 +541,33 @@ def app_install_root() -> Path | None:
             if parent.name == "X-iTrader-Client.app":
                 return parent
         return None
-    # windows onedir：exe 与 _internal 同级，所在目录即程序目录
-    return exe.parent
+    # Windows 扁平布局：安装根是含壳 X-iTrader.exe 的目录。后端不再与壳同级
+    # （它需要 runtime/ 子树），因此按壳文件定位而不是取 exe 的父目录。
+    for parent in exe.parents:
+        if (parent / _WIN_SHELL_EXE).is_file():
+            return parent
+    return None
 
 
 def src_install_dir() -> Path | None:
-    """打包时外置的 src 包目录（补丁更新的替换对象）。
-
-    macOS bundle 中 Frameworks/src 是指向 Resources/src 的符号链接，
-    解析到真实目录后再做替换，保证补丁落在数据实际所在处。
-    """
-    if not is_frozen():
+    """外置的 src 包目录（补丁更新的替换对象）。"""
+    root = backend_root()
+    if root is None:
         return None
-    meipass = getattr(sys, "_MEIPASS", "")
-    if not meipass:
-        return None
-    path = (Path(meipass) / "src").resolve()
+    path = (root / "code" / "src").resolve()
     return path if path.is_dir() else None
+
+
+def _backend_command() -> list[str]:
+    """拉起后端的完整命令行（解释器 + 入口脚本）。
+
+    pbs 布局下后端是「嵌入式解释器 + 入口脚本」，不是单个可执行文件；
+    -E -s 隔离环境变量与 user site，保证只认包内 site-packages。
+    """
+    root = backend_root()
+    if root is None:
+        raise RuntimeError("无法定位后端目录（runtime/ 与 code/）")
+    return [str(Path(sys.executable)), "-E", "-s", str(root / "code" / "backend_entry.py")]
 
 
 def _swap_directory(new_item: Path, target: Path) -> None:
@@ -552,7 +593,7 @@ def _launch_binary_of(install_root: Path) -> Path:
         binary = install_root / "Contents" / "MacOS" / "X-iTrader-Client"
     else:
         # Windows 扁平布局：安装根（后端 exe 的父目录）根级是壳 X-iTrader.exe，
-        # 全量更新后重启的是壳（由壳再拉起同级的 X-iTrader-Backend.exe）
+        # 全量更新后重启的是壳（由壳再拉起 backend\runtime 下的后端入口）
         binary = install_root / _WIN_SHELL_EXE
     if not binary.is_file():
         raise RuntimeError(f"更新包中未找到可执行文件: {binary}")
@@ -605,10 +646,10 @@ def apply_update_and_restart(stage_item: Path, kind: str) -> Path:
 
     kind: "patch" 只替换外置 src 目录（二进制不变）；"full" 替换整个
     程序目录 / .app。调用方在返回后应尽快退出当前进程。
-    开发态（非 frozen）默认拒绝，避免误改源码/虚拟环境；全量更新时若能唯一定位
+    开发态（非打包）默认拒绝，避免误改源码/虚拟环境；全量更新时若能唯一定位
     上级目录已安装的 .app 则允许替换。
     """
-    if not is_frozen():
+    if not is_packaged():
         if kind == "full":
             candidate = Path(__file__).resolve().parents[3] / "X-iTrader-Client.app"
             if candidate.is_dir():
@@ -629,7 +670,12 @@ def apply_update_and_restart(stage_item: Path, kind: str) -> Path:
         # 后端进程直接拉起的是「另一个后端」，不是 shell：标记 env 让新进程
         # 跳过父进程监控（旧后端马上会退出），并等待 backend.json 释放后再接管
         env = {**os.environ, RESTART_ENV: "1"}
-        subprocess.Popen([str(binary)], cwd=str(binary.parent), close_fds=True, env=env)
+        subprocess.Popen(
+            _backend_command(),
+            cwd=str(binary.parent),
+            close_fds=True,
+            env=env,
+        )
         return binary
 
     target = app_install_root()
@@ -649,16 +695,12 @@ def cleanup_stale_backups() -> None:
 
     仅清理改名让位的旧安装物；删除失败（如被占用）不影响运行，属最佳努力。
     """
-    if not is_frozen():
+    if not is_packaged():
         return
     candidates: list[Path] = []
-    if sys.platform == "darwin":
-        app_root = app_install_root()
-        if app_root is not None:
-            candidates += list(app_root.parent.glob(f"{app_root.name}.old-*"))
-    else:
-        exe = Path(sys.executable)
-        candidates += list(exe.parent.parent.glob(f"{exe.parent.name}.old-*"))
+    app_root = app_install_root()
+    if app_root is not None:
+        candidates += list(app_root.parent.glob(f"{app_root.name}.old-*"))
     src_root = src_install_dir()
     if src_root is not None:
         candidates += list(src_root.parent.glob(f"{src_root.name}.old-*"))

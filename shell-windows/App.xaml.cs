@@ -19,6 +19,24 @@ public partial class App : Application
     public App()
     {
         InitializeComponent();
+
+        // UI 线程上的未处理异常默认会让 WinUI 直接 fail-fast 杀进程：没有弹窗、
+        // 没有日志，用户只看到窗口消失。这里至少留痕，并拦下默认的终止。
+        // 注意这挡不住 XAML 布局循环（那是原生 fail-fast，不走托管异常通道）。
+        UnhandledException += (_, e) =>
+        {
+            try
+            {
+                var path = Path.Combine(AppPaths.DataRoot, "data", "logs", "shell-crash.log");
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.AppendAllText(path, $"[{DateTime.Now:O}] {e.Message}\n{e.Exception}\n\n");
+            }
+            catch
+            {
+                // 日志写不进去也要让 e.Handled 生效，不能再抛
+            }
+            e.Handled = true;
+        };
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)

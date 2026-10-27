@@ -262,27 +262,67 @@ public sealed partial class MainWindow : Window
     // -------- 顶部操作栏 --------
 
     /// <summary>
-    /// 胶囊宽度变化时重算进度填充宽度：文案随阶段变化（如「自动交易：测试天勤连接…」）
-    /// 会让胶囊变宽，而进度是按胶囊实际宽度换算的百分比。
+    /// 胶囊宽度变化时重算进度填充：文案随阶段变化会让胶囊变宽，
+    /// 而进度是按胶囊实际宽度换算的百分比。
+    /// 进度用 RenderTransform 表达、与胶囊尺寸解耦，这里不必（也不能）回写 Width。
     /// </summary>
     private void OnAutoTradePillSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (_state.StartChecking && _state.StartProgressPct >= 0)
-        {
-            AutoTradeProgress.Width = e.NewSize.Width * _state.StartProgressPct / 100;
-        }
+        ApplyAutoTradeProgress(_state.StartChecking ? _state.StartProgressPct : -1);
     }
 
     /// <summary>
-    /// 版本胶囊宽度变化时重算进度填充宽度：文案随阶段变化（如「取消 37%」）
+    /// 版本胶囊宽度变化时重算进度填充：文案随阶段变化（如「取消 37%」）
     /// 会让胶囊变宽，而填充是按胶囊实际宽度换算的百分比。
+    /// 同自动交易胶囊，进度走 RenderTransform，不回写 Width。
     /// </summary>
     private void OnVersionPillSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (_state.UpdatePhase is UpdatePhase.Downloading && _state.UpdateProgress >= 0)
+        ApplyVersionProgress(_state.UpdatePhase is UpdatePhase.Downloading ? _state.UpdateProgress : -1);
+    }
+
+    /// <summary>
+    /// 用 RenderTransform 的 ScaleX 表达启动进度：0~1 对应 0~100%。
+    /// RenderTransform 不参与 measure/arrange，所以进度变化不会反过来改变胶囊宽度，
+    /// 从根本上避开「子元素尺寸撑大父级 → SizeChanged 再改子元素」的布局循环。
+    /// pct &lt; 0 表示不显示（停止或未开始）。
+    /// </summary>
+    private void ApplyAutoTradeProgress(int pct)
+    {
+        if (pct < 0)
         {
-            VersionProgressFill.Width = e.NewSize.Width * _state.UpdateProgress / 100;
+            AutoTradeProgress.Visibility = Visibility.Collapsed;
+            return;
         }
+
+        var clamped = Math.Clamp(pct, 0, 100);
+        if (AutoTradeProgress.RenderTransform is ScaleTransform scale)
+        {
+            scale.ScaleX = clamped / 100.0;
+        }
+        // 未走满时压低不透明度保证文字可读，走满转实色与「开」态衔接
+        AutoTradeProgress.Opacity = clamped >= 100 ? 1.0 : 0.55;
+        AutoTradeProgress.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>
+    /// 用 RenderTransform 的 ScaleX 表达下载进度，机制同 <see cref="ApplyAutoTradeProgress"/>。
+    /// 不透明度恒为 0.55（XAML 里固定）：版本胶囊的文字不转白，走满转实色会让末段文字糊掉。
+    /// </summary>
+    private void ApplyVersionProgress(int pct)
+    {
+        if (pct < 0)
+        {
+            VersionProgressFill.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var clamped = Math.Clamp(pct, 0, 100);
+        if (VersionProgressFill.RenderTransform is ScaleTransform scale)
+        {
+            scale.ScaleX = clamped / 100.0;
+        }
+        VersionProgressFill.Visibility = Visibility.Visible;
     }
 
     private void OnAutoTradeToggled(object sender, RoutedEventArgs e)
@@ -909,15 +949,7 @@ public sealed partial class MainWindow : Window
         // 下载中整颗胶囊从左向右填充；总量未知（-1）时不填充，只显示文案。
         // 不透明度恒为 0.55：版本胶囊的文字随阶段变色（不转白），走满转实色会让
         // 末段文字糊在填充里
-        if (phase is UpdatePhase.Downloading && _state.UpdateProgress >= 0 && VersionButton.ActualWidth > 0)
-        {
-            VersionProgressFill.Width = VersionButton.ActualWidth * _state.UpdateProgress / 100;
-            VersionProgressFill.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            VersionProgressFill.Visibility = Visibility.Collapsed;
-        }
+        ApplyVersionProgress(phase is UpdatePhase.Downloading ? _state.UpdateProgress : -1);
 
         ToolTipService.SetToolTip(VersionButton, tooltip);
     }
@@ -995,19 +1027,8 @@ public sealed partial class MainWindow : Window
         }
 
         // 后端已按各阶段权重折算成整次启动的百分比，从 0 起连续推进。
-        // 进度直接填在胶囊里（整颗从左向右），宽度按胶囊实际宽度换算；
-        // pct<0（如停止操作）不填充，只显示文案
-        if (_state.StartChecking && _state.StartProgressPct >= 0 && AutoTradePill.ActualWidth > 0)
-        {
-            AutoTradeProgress.Width = AutoTradePill.ActualWidth * _state.StartProgressPct / 100;
-            // 未走满时压低不透明度保证文字可读，走满转实色与「开」态衔接
-            AutoTradeProgress.Opacity = _state.StartProgressPct >= 100 ? 1.0 : 0.55;
-            AutoTradeProgress.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            AutoTradeProgress.Visibility = Visibility.Collapsed;
-        }
+        // 进度直接填在胶囊里（整颗从左向右）；pct<0（如停止操作）不填充，只显示文案
+        ApplyAutoTradeProgress(_state.StartChecking ? _state.StartProgressPct : -1);
 
         RefreshButton.IsEnabled = !(_state.SymbolsFetching || _state.StrategiesFetching);
         RefreshButton.Content = _state.SymbolsFetching || _state.StrategiesFetching ? "刷新中…" : "刷新";

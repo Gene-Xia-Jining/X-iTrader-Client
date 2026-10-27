@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .application.bootstrap import Bootstrap
 from .domain.events import LogEvent, LogLevel
-from .infrastructure.paths import data_root, migrate_legacy_data_root
+from .infrastructure.paths import data_root, is_packaged, migrate_legacy_data_root
 
 async def _ensure_token(bs: Bootstrap, request_input) -> bool:
     token_service = bs.token_service
@@ -19,7 +19,7 @@ async def _ensure_token(bs: Bootstrap, request_input) -> bool:
     return bool(token)
 
 async def run_headless():
-    if getattr(sys, "frozen", False):
+    if is_packaged():
         migrate_legacy_data_root()
         workdir = data_root()
         workdir.mkdir(parents=True, exist_ok=True)

@@ -11,11 +11,10 @@ public struct BackendInfo: Codable {
 /// 后端进程管理：定位启动命令、spawn、等待发现文件、健康检查、终止。
 ///
 /// 布局探测（按序取其一）：
-/// - 生产态（runtime）：壳首启下载的解压产物位于 ~/.X-iTrader-Client/runtime/backend/
-///   （见 AppPaths），工作目录为数据根 ~/.X-iTrader-Client（frozen 后端自行 chdir
-///   到同一路径，data/ 与 app 位置无关）；这是重构后的唯一生产布局。
-/// - 生产态（bundle，过渡兼容）：早期构建把 PyInstaller 后端打进 Bundle 的
-///   Resources/backend/；该回退在打包流程改造完成后可移除。
+/// - 生产态：.app 内的 Contents/Resources/backend/（内含 runtime/ 与 code/），
+///   由 build.sh 拼装。启动命令固定为
+///   `runtime/bin/python3.X -E -s code/backend_entry.py`，workdir 为数据根
+///   ~/.X-iTrader-Client（后端自行 chdir 到同一路径，data/ 与 app 位置无关）。
 /// - 源码开发态：从本文件编译位置向上查找 src/backend/__main__.py 所在仓库根，
 ///   为 python 模式：.venv/bin/python -m src.backend，业务根须含 .venv 与 src/。
 public final class BackendProcess {
@@ -33,7 +32,7 @@ public final class BackendProcess {
             case .pythonMissing(let path):
                 return "未找到 Python 解释器: \(path)"
             case .backendMissing(let path):
-                return "未找到打包后端可执行文件: \(path)"
+                return "未找到打包后端: \(path)"
             case .infoTimeout(let path):
                 return "等待 \(path) 超时，后端可能启动失败（详见 \(AppPaths.backendLogFile.path)）"
             case .alreadyRunning:
@@ -42,14 +41,14 @@ public final class BackendProcess {
         }
     }
 
-    /// 启动方式：frozen = bundle 内 PyInstaller 后端；python = .venv 解释器（开发态）
+    /// 启动方式：packaged = .app 内嵌入式运行时；python = .venv 解释器（开发态）
     private enum LaunchPlan {
-        case frozen(executable: URL, workdir: URL)
+        case packaged(python: URL, entry: URL, workdir: URL)
         case python(repoRoot: URL)
 
         var workdir: URL {
             switch self {
-            case .frozen(_, let workdir): return workdir
+            case .packaged(_, _, let workdir): return workdir
             case .python(let repoRoot): return repoRoot
             }
         }
@@ -68,7 +67,7 @@ public final class BackendProcess {
     public var onExit: (() -> Void)?
 
     /// workdirOverride：测试用临时目录隔离 data/；生产环境用默认
-    /// （python 模式 = 业务根，frozen 模式 = 数据根 ~/.X-iTrader-Client）
+    /// （python 模式 = 业务根，packaged 模式 = 数据根 ~/.X-iTrader-Client）
     public init(repoRootOverride: URL? = nil, workdirOverride: URL? = nil) throws {
         self.workdirOverride = workdirOverride
         if let override = repoRootOverride {
@@ -78,9 +77,12 @@ public final class BackendProcess {
         }
         self.repoRoot = plan.workdir
         switch plan {
-        case .frozen(let executable, _):
-            guard FileManager.default.fileExists(atPath: executable.path) else {
-                throw BackendError.backendMissing(executable.path)
+        case .packaged(let python, let entry, _):
+            guard FileManager.default.fileExists(atPath: python.path) else {
+                throw BackendError.pythonMissing(python.path)
+            }
+            guard FileManager.default.fileExists(atPath: entry.path) else {
+                throw BackendError.backendMissing(entry.path)
             }
         case .python(let root):
             let python = Self.pythonURL(repoRoot: root)
@@ -105,9 +107,10 @@ public final class BackendProcess {
 
         let proc = Process()
         switch plan {
-        case .frozen(let executable, _):
-            proc.executableURL = executable
-            proc.arguments = []
+        case .packaged(let python, let entry, _):
+            proc.executableURL = python
+            // -E -s：隔离环境变量与 user site，保证只认包内 site-packages
+            proc.arguments = ["-E", "-s", entry.path]
             proc.currentDirectoryURL = workdir
         case .python(let root):
             proc.executableURL = Self.pythonURL(repoRoot: root)
@@ -176,18 +179,11 @@ public final class BackendProcess {
     }
 
     private static func detectPlan() throws -> LaunchPlan {
-        // 生产态（runtime）：壳首启下载并解压到数据根下的 runtime/backend/，
-        // workdir 为数据根（frozen 后端 chdir 到同一路径）
-        let runtimeBackend = AppPaths.backendExecutable
-        if FileManager.default.fileExists(atPath: runtimeBackend.path) {
-            return .frozen(executable: runtimeBackend, workdir: AppPaths.dataRoot)
-        }
-        // 生产态（bundle，过渡兼容）：早期构建把 PyInstaller 后端打进
-        // Resources/backend/（放 MacOS 会被 codesign 当代码树扫描而无法通过签名）
+        // 生产态：.app 内 Resources/backend/（runtime/ + code/），由 build.sh 拼装
         if let backend = Bundle.main.url(
-            forResource: "backend", withExtension: nil, subdirectory: "backend"
-        ), FileManager.default.fileExists(atPath: backend.path) {
-            return .frozen(executable: backend, workdir: AppPaths.dataRoot)
+            forResource: "backend", withExtension: nil, subdirectory: nil
+        ), let plan = packagedPlan(backendRoot: backend) {
+            return plan
         }
         // 源码开发态：从源码位置向上找
         var dir = URL(fileURLWithPath: (#filePath as NSString).deletingLastPathComponent)
@@ -198,5 +194,27 @@ public final class BackendProcess {
             dir.deleteLastPathComponent()
         }
         throw BackendError.layoutNotFound
+    }
+
+    /// 在 backend 根目录下探测解释器与入口脚本。
+    ///
+    /// 解释器名带版本号（python3.14），所以扫 bin/ 而不是硬编码；这样升级
+    /// 运行时版本不用改壳代码。
+    private static func packagedPlan(backendRoot: URL) -> LaunchPlan? {
+        let fm = FileManager.default
+        let entry = backendRoot.appendingPathComponent("code/backend_entry.py")
+        guard fm.fileExists(atPath: entry.path) else { return nil }
+
+        let binDir = backendRoot.appendingPathComponent("runtime/bin")
+        guard let names = try? fm.contentsOfDirectory(atPath: binDir.path) else { return nil }
+        // 只看 python3 / python3.X 本体：*-config 是编译扩展用的脚本，不是解释器
+        let candidates = names
+            .filter { $0.hasPrefix("python3") && !$0.hasSuffix("-config") }
+            .sorted()
+        guard let name = candidates.last else { return nil }
+
+        let python = binDir.appendingPathComponent(name)
+        guard fm.isExecutableFile(atPath: python.path) else { return nil }
+        return .packaged(python: python, entry: entry, workdir: AppPaths.dataRoot)
     }
 }

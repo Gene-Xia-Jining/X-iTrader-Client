@@ -182,15 +182,15 @@ class ExtractUpdateTest(unittest.TestCase):
         self.assertTrue((item / "Contents" / "MacOS" / "X-iTrader-Client").is_file())
 
     def test_windows_full_zip(self):
-        # Windows 全量包是扁平布局：壳与后端可执行文件同根级，_internal/ 放后端依赖
+        # Windows 全量包：根级壳 + backend\（runtime\ 嵌入式 Python + code\ 源码）
         _make_zip(self.zip_path, {
             "X-iTrader.exe": b"MZ",
-            "X-iTrader-Backend.exe": b"MZ",
-            "_internal/src/__init__.py": b"x",
+            "backend/runtime/python.exe": b"MZ",
+            "backend/code/src/__init__.py": b"x",
         })
         item = extract_update(self.zip_path, self.stage)
         self.assertEqual(item, self.stage / "stage")
-        self.assertTrue((item / "_internal" / "src" / "__init__.py").is_file())
+        self.assertTrue((item / "backend" / "code" / "src" / "__init__.py").is_file())
 
     def test_patch_zip(self):
         _make_zip(self.zip_path, {
@@ -304,7 +304,7 @@ class ExtractDmgTest(unittest.TestCase):
 
 
 class ApplyUpdateTest(unittest.TestCase):
-    """frozen 态替换逻辑：mock sys/Popen，在 tmp 目录内真实执行文件操作。"""
+    """打包态替换逻辑：mock sys/Popen，在 tmp 目录内真实执行文件操作。"""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -313,20 +313,36 @@ class ApplyUpdateTest(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _frozen(self, platform: str, executable: Path, meipass: Path | None = None):
-        """进入 frozen 环境模拟，返回 Popen mock。"""
+    def _packaged(self, platform: str, executable: Path):
+        """进入打包态模拟，返回 Popen mock。
+
+        打包态判定走环境标记（后端不再是 frozen 进程），模拟时直接 patch
+        paths.is_packaged 与 updater 侧的转发名。
+        """
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
+        stack.enter_context(mock.patch.object(updater, "is_packaged", return_value=True))
         stack.enter_context(mock.patch.object(updater, "is_frozen", return_value=True))
         stack.enter_context(mock.patch.object(sys, "platform", platform))
-        if meipass is not None:
-            stack.enter_context(
-                mock.patch.object(sys, "_MEIPASS", str(meipass), create=True)
-            )
         stack.enter_context(mock.patch.object(sys, "executable", str(executable)))
         return stack.enter_context(mock.patch.object(updater.subprocess, "Popen"))
 
-    def test_non_frozen_rejected(self):
+    def _backend_layout(self, root: Path, platform: str = "darwin") -> Path:
+        """在 root 下造出 backend/{runtime,code} 布局，返回解释器路径。"""
+        backend = root / "Contents" / "Resources" / "backend"
+        if platform == "win32":
+            backend = root / "backend"
+            python = backend / "runtime" / "python.exe"
+        else:
+            python = backend / "runtime" / "bin" / "python3.14"
+        python.parent.mkdir(parents=True)
+        python.write_text("bin")
+        (backend / "code" / "src").mkdir(parents=True)
+        (backend / "code" / "src" / "__init__.py").write_text("old")
+        (backend / "code" / "backend_entry.py").write_text("entry")
+        return python
+
+    def test_non_packaged_rejected(self):
         item = self.dir / "stage" / "src"
         item.mkdir(parents=True)
         with self.assertRaises(RuntimeError):
@@ -341,7 +357,7 @@ class ApplyUpdateTest(unittest.TestCase):
         (new_app / "Contents" / "MacOS").mkdir(parents=True)
         (new_app / "Contents" / "MacOS" / "X-iTrader-Client").write_text("new")
 
-        popen = self._frozen("darwin", exe)
+        popen = self._packaged("darwin", exe)
         binary = apply_update_and_restart(new_app, "full")
 
         # macOS 的 /var 是 /private/var 符号链接，路径统一用 resolve 后比较
@@ -358,27 +374,23 @@ class ApplyUpdateTest(unittest.TestCase):
         self.assertTrue(kwargs.get("close_fds"))
 
     def test_full_update_windows(self):
-        # Windows 扁平布局：后端 X-iTrader-Backend.exe 的父目录即安装根，
-        # 根级必须有壳 X-iTrader.exe（全量更新时被替换、之后作为重启目标）
+        # Windows 布局：安装根是含壳 X-iTrader.exe 的目录；后端在 backend\runtime\ 下，
+        # 因此不能取「后端 exe 的父目录」当安装根（那是 backend\runtime）
         progdir = self.dir / "X-iTrader-Client"
-        backend_exe = progdir / "X-iTrader-Backend.exe"
-        shell_exe = progdir / "X-iTrader.exe"
         progdir.mkdir()
-        backend_exe.write_bytes(b"old-backend")
-        shell_exe.write_bytes(b"old-shell")
-        (progdir / "_internal").mkdir()
+        (progdir / "X-iTrader.exe").write_bytes(b"old-shell")
+        backend_exe = self._backend_layout(progdir, "win32")
         new_dir = self.dir / "stage"
         new_dir.mkdir()
         (new_dir / "X-iTrader.exe").write_bytes(b"new-shell")
-        (new_dir / "X-iTrader-Backend.exe").write_bytes(b"new-backend")
-        (new_dir / "_internal").mkdir()
+        (new_dir / "backend").mkdir()
 
-        # sys.executable 是后端进程；安装根取其父目录
-        popen = self._frozen("win32", backend_exe)
+        # sys.executable 是后端解释器（backend\runtime\python.exe）
+        popen = self._packaged("win32", backend_exe)
         binary = apply_update_and_restart(new_dir, "full")
 
-        self.assertEqual(binary.resolve(), shell_exe.resolve())
-        self.assertEqual(shell_exe.read_bytes(), b"new-shell")
+        self.assertEqual(binary.resolve(), (progdir / "X-iTrader.exe").resolve())
+        self.assertEqual((progdir / "X-iTrader.exe").read_bytes(), b"new-shell")
         backups = list(self.dir.glob("X-iTrader-Client.old-*"))
         self.assertEqual(len(backups), 1)
         popen.assert_called_once()
@@ -387,33 +399,31 @@ class ApplyUpdateTest(unittest.TestCase):
         self.assertTrue(kwargs.get("shell"))
 
     def test_patch_update_replaces_src_only(self):
-        meipass = self.dir / "meipass"
-        src = meipass / "src"
-        src.mkdir(parents=True)
-        (src / "__init__.py").write_text("old")
-        exe = self.dir / "app" / "iTrader"
-        exe.parent.mkdir(parents=True)
-        exe.write_text("binary")
+        app = self.dir / "X-iTrader-Client.app"
+        exe = self._backend_layout(app, "darwin")
+        src = app / "Contents" / "Resources" / "backend" / "code" / "src"
         new_src = self.dir / "stage" / "src"
         new_src.mkdir(parents=True)
         (new_src / "__init__.py").write_text("new")
 
-        popen = self._frozen("darwin", exe, meipass=meipass)
+        popen = self._packaged("darwin", exe)
         binary = apply_update_and_restart(new_src, "patch")
 
         self.assertEqual(binary, exe)
         self.assertEqual((src / "__init__.py").read_text(), "new")
-        backups = list(meipass.glob("src.old-*"))
+        backups = list(src.parent.glob("src.old-*"))
         self.assertEqual(len(backups), 1)
         self.assertEqual((backups[0] / "__init__.py").read_text(), "old")
-        popen.assert_called_once_with(
-            [str(exe)],
-            cwd=str(exe.parent),
-            close_fds=True,
-            # 差量更新由旧后端直接拉起新后端：新进程要跳过父进程监控并等待接管
-            env=mock.ANY,
-        )
+        # 差量更新拉起的是「解释器 + 入口脚本」，不再是单个可执行文件
         args, kwargs = popen.call_args
+        cmd = args[0]
+        self.assertEqual(cmd[0], str(exe))
+        self.assertIn("-E", cmd)
+        self.assertIn("-s", cmd)
+        self.assertTrue(cmd[-1].endswith("backend_entry.py"))
+        self.assertEqual(kwargs["cwd"], str(exe.parent))
+        self.assertTrue(kwargs["close_fds"])
+        # 新进程要跳过父进程监控并等待 backend.json 接管
         self.assertEqual(kwargs["env"][updater.RESTART_ENV], "1")
 
     def test_swap_failure_rolls_back(self):
@@ -425,7 +435,7 @@ class ApplyUpdateTest(unittest.TestCase):
         new_app = self.dir / "stage" / "X-iTrader-Client.app"
         new_app.mkdir(parents=True)
 
-        popen = self._frozen("darwin", exe)
+        popen = self._packaged("darwin", exe)
         with self.assertRaises(RuntimeError):
             apply_update_and_restart(new_app, "full")
 
@@ -440,7 +450,10 @@ class CleanupStaleBackupsTest(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name) / "Applications"
         app = root / "X-iTrader-Client.app"
-        (app / "Contents").mkdir(parents=True)
+        # 后端解释器在 .app 内的新布局位置（app_install_root 靠 .app 名定位）
+        exe = app / "Contents" / "Resources" / "backend" / "runtime" / "bin" / "python3.14"
+        exe.parent.mkdir(parents=True)
+        exe.write_text("bin")
         stale = root / "X-iTrader-Client.app.old-123"
         stale.mkdir()
         (stale / "junk").write_text("x")
@@ -448,9 +461,8 @@ class CleanupStaleBackupsTest(unittest.TestCase):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         stack.enter_context(mock.patch.object(sys, "platform", "darwin"))
-        stack.enter_context(
-            mock.patch.object(sys, "executable", str(app / "Contents" / "MacOS" / "X-iTrader-Client"))
-        )
+        stack.enter_context(mock.patch.object(sys, "executable", str(exe)))
+        stack.enter_context(mock.patch.object(updater, "is_packaged", return_value=True))
         stack.enter_context(mock.patch.object(updater, "is_frozen", return_value=True))
         updater.cleanup_stale_backups()
 
@@ -463,7 +475,10 @@ class CleanupStaleBackupsTest(unittest.TestCase):
         root = Path(tmp.name) / "Programs"
         progdir = root / "X-iTrader-Client"
         progdir.mkdir(parents=True)
-        exe = progdir / "X-iTrader-Backend.exe"
+        (progdir / "X-iTrader.exe").write_bytes(b"MZ")
+        # 后端在 backend\runtime\ 下；安装根靠根级壳 exe 定位
+        exe = progdir / "backend" / "runtime" / "python.exe"
+        exe.parent.mkdir(parents=True)
         exe.write_bytes(b"MZ")
         stale = root / "X-iTrader-Client.old-456"
         stale.mkdir()
@@ -475,6 +490,7 @@ class CleanupStaleBackupsTest(unittest.TestCase):
         stack.enter_context(
             mock.patch.object(sys, "executable", str(exe))
         )
+        stack.enter_context(mock.patch.object(updater, "is_packaged", return_value=True))
         stack.enter_context(mock.patch.object(updater, "is_frozen", return_value=True))
         updater.cleanup_stale_backups()
 
@@ -725,6 +741,7 @@ class DevModeFullUpdateTest(unittest.TestCase):
         (new_app / "Contents" / "MacOS" / "X-iTrader-Client").write_text("new")
 
         with (
+            mock.patch.object(updater, "is_packaged", return_value=False),
             mock.patch.object(updater, "is_frozen", return_value=False),
             mock.patch.object(sys, "platform", "darwin"),
             mock.patch.object(updater, "__file__", str(fake_module)),
@@ -739,7 +756,7 @@ class DevModeFullUpdateTest(unittest.TestCase):
     def test_dev_patch_still_rejected(self):
         item = self.dir / "stage" / "src"
         item.mkdir(parents=True)
-        with mock.patch.object(updater, "is_frozen", return_value=False):
+        with mock.patch.object(updater, "is_packaged", return_value=False):
             with self.assertRaises(RuntimeError):
                 apply_update_and_restart(item, "patch")
 

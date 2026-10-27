@@ -17,26 +17,32 @@ internal sealed class BackendInfo
 /// <summary>
 /// 后端进程管理：定位启动命令、spawn、等待发现文件、复用存活实例、终止。
 ///
-/// Windows 上是扁平布局：壳 X-iTrader.exe 与后端 X-iTrader-Backend.exe 同目录
-/// （同一次 dotnet publish + PyInstaller 组装进同一个 zip）。布局探测顺序：
-/// - runtime 布局：%USERPROFILE%\.X-iTrader-Client\runtime\backend\（预留，壳首启
-///   下载后端的形态）。
-/// - 同目录：与壳 exe 同目录的 X-iTrader-Backend.exe；这是当前发布包的实际形态。
+/// Windows 上程序目录的布局：
+/// <code>
+///   X-iTrader.exe                       壳（根级）
+///   backend\runtime\python.exe          嵌入式 Python 与依赖
+///   backend\code\backend_entry.py       源码入口
+/// </code>
+/// 启动命令固定为 <c>backend\runtime\python.exe -E -s backend\code\backend_entry.py</c>。
+/// 布局探测顺序：
+/// - 同目录：与壳 exe 同目录的 backend\ 子树（发布包的实际形态）。
 /// - 开发态：ITRADER_PYTHON 指定解释器 + 仓库根（含 src/backend/__main__.py），
 ///   以 `python -m src.backend` 启动，便于本机调试后端而无需先打包。
 ///
-/// 后端 workdir 固定为数据根（frozen 后端自身也会 chdir 到同一路径），
+/// 后端 workdir 固定为数据根（后端自身也会 chdir 到同一路径），
 /// data/ 与程序安装位置无关。
 /// </summary>
 internal sealed class BackendProcess : IDisposable
 {
-    /// <summary>后端可执行文件名（与壳 exe 同级）。改名需与 specs/backend.spec 同步。</summary>
-    internal const string BackendExeName = "X-iTrader-Backend.exe";
+    /// <summary>后端入口脚本（相对 backend\ 根），与壳的路径约定。</summary>
+    internal const string EntryScriptName = "backend_entry.py";
 
-    private enum LaunchPlanKind { Frozen, Python }
+    private enum LaunchPlanKind { Packaged, Python }
 
     private readonly LaunchPlanKind _kind;
     private readonly string _executable;
+    /// <summary>入口脚本：Packaged 下传给解释器；Python 模式为空（用 -m）。</summary>
+    private readonly string _entryScript;
     private readonly string _repoRoot;
     private Process? _process;
 
@@ -76,6 +82,7 @@ internal sealed class BackendProcess : IDisposable
         {
             _kind = LaunchPlanKind.Python;
             _repoRoot = repoRootOverride;
+            _entryScript = "";
             _executable = PythonPath(_repoRoot);
             if (!File.Exists(_executable))
             {
@@ -84,9 +91,10 @@ internal sealed class BackendProcess : IDisposable
             return;
         }
 
-        var (kind, executable) = DetectPlan();
+        var (kind, executable, entryScript) = DetectPlan();
         _kind = kind;
         _executable = executable;
+        _entryScript = entryScript;
         _repoRoot = "";
         if (!File.Exists(_executable))
         {
@@ -126,6 +134,13 @@ internal sealed class BackendProcess : IDisposable
             psi.ArgumentList.Add("-m");
             psi.ArgumentList.Add("src.backend");
             psi.Environment["PYTHONPATH"] = _repoRoot;
+        }
+        else
+        {
+            // -E -s：隔离环境变量与 user site，保证只认包内 site-packages
+            psi.ArgumentList.Add("-E");
+            psi.ArgumentList.Add("-s");
+            psi.ArgumentList.Add(_entryScript);
         }
 
         // 后端日志默认丢弃（发现文件是主通道）；调 ITRADER_BACKEND_VERBOSE=1 时继承输出便于排障
@@ -271,35 +286,36 @@ internal sealed class BackendProcess : IDisposable
             : Path.Combine(repoRoot, ".venv", "Scripts", "python.exe");
     }
 
-    /// <summary>按序探测可用的启动方式，返回 (类型, 可执行文件路径)。</summary>
-    private static (LaunchPlanKind, string) DetectPlan()
+    /// <summary>按序探测可用的启动方式，返回 (类型, 解释器路径, 入口脚本)。</summary>
+    private static (LaunchPlanKind, string, string) DetectPlan()
     {
-        // 1) runtime 布局：壳首启下载后端运行时后落在这里
-        var runtimeBackend = AppPaths.BackendExecutable;
-        if (File.Exists(runtimeBackend))
+        // 1) 发布包：与壳同级的 backend\（runtime\ + code\），见 specs/build_backend.py
+        var backendRoot = Path.Combine(AppContext.BaseDirectory, "backend");
+        if (PackagedPlan(backendRoot) is { } packaged)
         {
-            return (LaunchPlanKind.Frozen, runtimeBackend);
+            return (LaunchPlanKind.Packaged, packaged.python, packaged.entry);
         }
 
-        // 2) 同目录：发布包的扁平布局（壳与后端同级）
-        var besideShell = Path.Combine(AppContext.BaseDirectory, BackendExeName);
-        if (File.Exists(besideShell))
-        {
-            return (LaunchPlanKind.Frozen, besideShell);
-        }
-
-        // 3) 开发态：从当前目录向上找含 src/backend/__main__.py 的仓库根
+        // 2) 开发态：从当前目录向上找含 src/backend/__main__.py 的仓库根
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         for (var i = 0; i < 8 && dir is not null; i++, dir = dir.Parent)
         {
             if (File.Exists(Path.Combine(dir.FullName, "src", "backend", "__main__.py")))
             {
-                return (LaunchPlanKind.Python, PythonPath(dir.FullName));
+                return (LaunchPlanKind.Python, PythonPath(dir.FullName), "");
             }
         }
 
         throw new BackendException(
-            $"未找到后端。已尝试：\n  {runtimeBackend}\n  {besideShell}");
+            $"未找到后端。已尝试：\n  {backendRoot}\\runtime\\python.exe\n  {backendRoot}\\code\\{EntryScriptName}");
+    }
+
+    /// <summary>在 backend 根下探测解释器与入口脚本；不完整时返回 null。</summary>
+    private static (string python, string entry)? PackagedPlan(string backendRoot)
+    {
+        var python = Path.Combine(backendRoot, "runtime", "python.exe");
+        var entry = Path.Combine(backendRoot, "code", EntryScriptName);
+        return File.Exists(python) && File.Exists(entry) ? (python, entry) : null;
     }
 
     public void Dispose()

@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,32 +7,44 @@ from unittest import mock
 from src.infrastructure import paths
 from src.infrastructure.paths import (
     APP_DIR_NAME,
-    backend_dir,
+    PACKAGED_ENV,
     data_root,
+    is_packaged,
     legacy_data_root,
     migrate_legacy_data_root,
-    runtime_dir,
 )
 
 
 class LayoutTest(unittest.TestCase):
-    """路径常量必须落在数据根之下，且 runtime 与 data 平级分离。"""
+    """数据根必须落在用户主目录下，且与 .app 安装位置无关。"""
 
     def test_root_under_home(self):
         with mock.patch.object(Path, "home", return_value=Path("/home/u")):
             self.assertEqual(data_root(), Path("/home/u") / APP_DIR_NAME)
-            self.assertEqual(runtime_dir(), Path("/home/u") / APP_DIR_NAME / "runtime")
-            self.assertEqual(
-                backend_dir(), Path("/home/u") / APP_DIR_NAME / "runtime" / "backend"
-            )
-
-    def test_backend_dir_is_sibling_of_data(self):
-        # 替换整个后端运行时不应触及业务数据：runtime/backend 与 data/ 平级
-        self.assertEqual(backend_dir().parent, runtime_dir())
-        self.assertEqual(runtime_dir().parent, data_root())
 
     def test_app_dir_name(self):
         self.assertEqual(APP_DIR_NAME, ".X-iTrader-Client")
+
+
+class PackagedFlagTest(unittest.TestCase):
+    """打包态判定：只有生产入口设置的 ITRADER_PACKAGED=1 才算打包态。
+
+    后端已从 PyInstaller frozen 进程换成嵌入式解释器 + 入口脚本，
+    sys.frozen 不再可用，判定统一走环境标记。
+    """
+
+    def test_false_without_env(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(is_packaged())
+
+    def test_true_with_env(self):
+        with mock.patch.dict(os.environ, {PACKAGED_ENV: "1"}):
+            self.assertTrue(is_packaged())
+
+    def test_other_value_is_not_packaged(self):
+        # 只有精确的 "1" 生效，避免误配值把开发态当生产态
+        with mock.patch.dict(os.environ, {PACKAGED_ENV: "yes"}):
+            self.assertFalse(is_packaged())
 
 
 class MigrateTest(unittest.TestCase):

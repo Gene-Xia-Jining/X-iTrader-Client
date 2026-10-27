@@ -1,8 +1,8 @@
 """headless 后端入口：python -m src.backend
 
-启动本地 RPC 服务供 UI 壳（Swift）或 CLI 客户端连接。
-frozen 打包时工作目录为数据根（见 infrastructure.paths.data_root()，与 .app 位置
-无关），开发态用当前目录。
+启动本地 RPC 服务供 UI 壳（Swift / WinUI）或 CLI 客户端连接。
+打包态工作目录为数据根（见 infrastructure.paths），与安装位置无关；
+开发态用当前目录。
 """
 
 import asyncio
@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 from ..infrastructure.logging_setup import log_asyncio_exception, setup_logging
-from ..infrastructure.paths import data_root, migrate_legacy_data_root
+from ..infrastructure.paths import data_root, is_packaged, migrate_legacy_data_root
 
 
 def _watch_parent(parent_pid: int, on_parent_gone) -> None:
@@ -32,7 +32,7 @@ def _watch_parent(parent_pid: int, on_parent_gone) -> None:
 
 
 async def run() -> int:
-    if getattr(sys, "frozen", False):
+    if is_packaged():
         migrate_legacy_data_root()
         workdir = data_root()
         workdir.mkdir(parents=True, exist_ok=True)
@@ -49,7 +49,7 @@ async def run() -> int:
         log_path = None
         print(f"警告：日志初始化失败，本次不落盘: {e}", file=sys.stderr, flush=True)
     logging.getLogger("backend").info(
-        "后端启动 pid=%s cwd=%s frozen=%s", os.getpid(), workdir, getattr(sys, "frozen", False)
+        "后端启动 pid=%s cwd=%s packaged=%s", os.getpid(), workdir, is_packaged()
     )
 
     # 延迟导入：保证 chdir 先于任何 data/ 相对路径的使用

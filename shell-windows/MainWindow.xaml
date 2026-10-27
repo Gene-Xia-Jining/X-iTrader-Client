@@ -36,18 +36,27 @@
                             PointerExited="OnVersionPillPointerExited"
                             SizeChanged="OnVersionPillSizeChanged">
                         <Grid>
-                            <!-- 下载进度：整颗胶囊从左向右填充，宽度即完成百分比
+                            <!-- 下载进度：整颗胶囊从左向右填充，百分比靠 ScaleX 表达
                                  （同「自动交易」胶囊的启动进度）。Border 的 CornerRadius
                                  不裁剪子元素，所以套一层同圆角的 Border 做裁剪 -->
                             <Border CornerRadius="18">
                                 <!-- 填充压低不透明度，让覆盖其上的版本号/百分比文字保持可读：
-                                     版本胶囊的文字随阶段变色（不转白），走满也不转实色 -->
+                                     版本胶囊的文字随阶段变色（不转白），走满也不转实色。
+                                     用 ScaleTransform 而非 Width：本元素在 VersionButton
+                                     内部，Width 会参与测量把胶囊撑宽，SizeChanged 又回头
+                                     改 Width，与「自动交易」胶囊同源，pct=100 时同样有
+                                     布局循环隐患 -->
                                 <Rectangle x:Name="VersionProgressFill"
-                                           HorizontalAlignment="Left"
+                                           HorizontalAlignment="Stretch"
                                            VerticalAlignment="Stretch"
+                                           RenderTransformOrigin="0,0.5"
                                            Opacity="0.55"
                                            Visibility="Collapsed"
-                                           IsHitTestVisible="False" />
+                                           IsHitTestVisible="False">
+                                    <Rectangle.RenderTransform>
+                                        <ScaleTransform ScaleX="0" />
+                                    </Rectangle.RenderTransform>
+                                </Rectangle>
                             </Border>
                             <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
                                         Margin="14,0">
@@ -95,12 +104,21 @@
                             <!-- Border 的 CornerRadius 不裁剪子元素，填充的右边缘会
                                  露出直角；外面套一层同圆角的 Border 做裁剪 -->
                             <Border CornerRadius="18">
-                                <!-- 启动进度：宽度即完成百分比，半透明避免盖住阶段文字 -->
+                                <!-- 启动进度：用 ScaleTransform 表达百分比，不能改 Width。
+                                     本元素在 AutoTradePill 内部，Width 会参与 Border 的测量，
+                                     把胶囊撑宽后 SizeChanged 又回头改 Width，形成布局循环
+                                     （Layout cycle detected → 0xC000027B 闪退）。
+                                     RenderTransform 不参与布局测量，从根上断掉这条反馈回路。 -->
                                 <Rectangle x:Name="AutoTradeProgress"
-                                           HorizontalAlignment="Left"
+                                           HorizontalAlignment="Stretch"
                                            VerticalAlignment="Stretch"
+                                           RenderTransformOrigin="0,0.5"
                                            Visibility="Collapsed"
-                                           IsHitTestVisible="False" />
+                                           IsHitTestVisible="False">
+                                    <Rectangle.RenderTransform>
+                                        <ScaleTransform ScaleX="0" />
+                                    </Rectangle.RenderTransform>
+                                </Rectangle>
                             </Border>
                             <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
                                         Margin="18,0,12,0">

@@ -73,27 +73,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      # 后端拼装脚本与 build.sh 都调 uv（下载 python-build-standalone、装依赖），
+      # 不再需要 setup-python 与 pip：构建期运行时由 uv 钉在 build/py-runtime 下。
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
         with:
-          # 与本地 .venv 一致（3.14），保证 CI 产物与本地验证过的打包结果同源；
-          # Windows 上若个别依赖缺 cp314 wheel 会在此暴露，届时回落 3.13
-          python-version: "3.14"
+          enable-cache: true
 
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
+      - name: Show toolchain
+        shell: bash
         run: |
-          # 建在仓库根的 .venv：build.sh 固定调用 .venv/bin/pyinstaller
-          python -m venv .venv
-          .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install -r requirements.txt
+          uv --version
+          python3 -V 2>/dev/null || python -V
 
-      - name: Install dependencies (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          # 建在仓库根的 .venv：打包步骤固定调用 .venv\Scripts\pyinstaller
-          python -m venv .venv
-          .venv\Scripts\python -m pip install --upgrade pip
-          .venv\Scripts\pip install -r requirements.txt
+      # python-build-standalone 运行时下载约 50~70M，缓存后能省掉每次的下载与解包
+      - name: Restore pbs runtime cache
+        uses: actions/cache@v4
+        with:
+          path: build/py-runtime
+          key: pbs-${{ runner.os }}-${{ hashFiles('specs/build_backend.py') }}-${{ github.run_id }}
+          restore-keys: |
+            pbs-${{ runner.os }}-${{ hashFiles('specs/build_backend.py') }}-
+            pbs-${{ runner.os }}-
 
       # ---------- macOS ----------
 
@@ -123,7 +124,7 @@ jobs:
       - name: Build (macOS)
         if: runner.os == 'macOS'
         run: |
-          # build.sh 产出 .app（含 PyInstaller 后端），build_dmg.sh 再封装成
+          # build.sh 产出 .app（含嵌入式 Python 后端），build_dmg.sh 再封装成
           # dmg；两者都落在仓库上一级。
           ./build.sh
           ./build_dmg.sh
@@ -131,9 +132,9 @@ jobs:
       - name: Package macOS
         if: runner.os == 'macOS'
         run: |
-          # dmg 已在仓库上一级生成，移入仓库 dist/ 供 upload-artifact 收集
-          mkdir -p "$GITHUB_WORKSPACE/dist"
-          mv ../X-iTrader-Client-${{ needs.version.outputs.version }}-Mac.dmg "$GITHUB_WORKSPACE/dist/"
+          # dmg 已在仓库上一级生成，移入仓库 build/ 供 upload-artifact 收集
+          mkdir -p "$GITHUB_WORKSPACE/build"
+          mv ../X-iTrader-Client-${{ needs.version.outputs.version }}-Mac.dmg "$GITHUB_WORKSPACE/build/"
 
       # ---------- Windows ----------
 
@@ -146,10 +147,16 @@ jobs:
       - name: Build backend (Windows)
         if: runner.os == 'Windows'
         run: |
-          # specs/backend.spec 在 win32 下把产物命名为 X-iTrader-Backend
-          .venv\Scripts\pyinstaller --workpath=build/backend --distpath=dist --noconfirm specs/backend.spec
-          if (-not (Test-Path "dist/X-iTrader-Backend/X-iTrader-Backend.exe")) {
-            Write-Error "未找到后端产物 dist/X-iTrader-Backend/X-iTrader-Backend.exe"
+          # 与 macOS 同一条拼装链：嵌入式 Python 运行时 + uv 装依赖 + 源码外置。
+          # 拼装脚本只用标准库，用 uv 的解释器跑即可（CI 不建 .venv）。
+          # 产物 build/backend/{runtime,code}
+          uv run --python 3.14 --no-project -- specs/build_backend.py --output build/backend
+          if (-not (Test-Path "build/backend/runtime/python.exe")) {
+            Write-Error "未找到后端运行时 build/backend/runtime/python.exe"
+            exit 1
+          }
+          if (-not (Test-Path "build/backend/code/backend_entry.py")) {
+            Write-Error "未找到后端入口 build/backend/code/backend_entry.py"
             exit 1
           }
         shell: pwsh
@@ -162,9 +169,9 @@ jobs:
           # 决定，命令行不再覆盖）
           dotnet publish shell-windows/X-iTrader.Shell.csproj `
             -c Release -r win-x64 -p:Platform=x64 `
-            -o dist/shell
-          if (-not (Test-Path "dist/shell/X-iTrader.exe")) {
-            Write-Error "未找到壳产物 dist/shell/X-iTrader.exe"
+            -o build/shell
+          if (-not (Test-Path "build/shell/X-iTrader.exe")) {
+            Write-Error "未找到壳产物 build/shell/X-iTrader.exe"
             exit 1
           }
         shell: pwsh
@@ -177,7 +184,7 @@ jobs:
           # 自包含的拷贝源路径含 build\..\，字符串判定容易静默失效。
           $keep = @('zh-CN','zh-TW','en-us')
           $removed = 0
-          Get-ChildItem "dist/shell" -Recurse -Filter *.mui | ForEach-Object {
+          Get-ChildItem "build/shell" -Recurse -Filter *.mui | ForEach-Object {
             if ($keep -notcontains $_.Directory.Name) {
               Remove-Item $_.FullName -Force
               $removed++
@@ -185,29 +192,35 @@ jobs:
           }
           Write-Host "已裁剪 $removed 个语言资源文件"
 
-          $shellMb = [math]::Round(((Get-ChildItem "dist/shell" -Recurse -File | Measure-Object Length -Sum).Sum / 1MB), 1)
+          $shellMb = [math]::Round(((Get-ChildItem "build/shell" -Recurse -File | Measure-Object Length -Sum).Sum / 1MB), 1)
           Write-Host "壳产物体积: $shellMb MB"
         shell: pwsh
 
       - name: Assemble package (Windows)
         if: runner.os == 'Windows'
         run: |
-          # 扁平布局：壳与后端可执行文件同级，后端依赖放 _internal\
-          # 该形态与 src/infrastructure/updater.py 的 Windows 假设一致
-          # （安装根 = 后端 exe 的父目录，根级有 X-iTrader.exe 作为重启目标）。
+          # 布局：根级壳 X-iTrader.exe + backend\（runtime\ 嵌入式 Python + code\ 源码）。
+          # 与 src/infrastructure/updater.py 的 Windows 假设一致：安装根靠根级
+          # X-iTrader.exe 定位（后端在 backend\runtime\ 下，不再与壳同级）。
           $ver = "${{ needs.version.outputs.version }}"
-          $stage = "dist/pkg"
+          $stage = "build/pkg"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
-          Copy-Item "dist/shell/*" $stage -Recurse -Force
-          Copy-Item "dist/X-iTrader-Backend/X-iTrader-Backend.exe" $stage -Force
-          Copy-Item "dist/X-iTrader-Backend/_internal" $stage -Recurse -Force
+          Copy-Item "build/shell/*" $stage -Recurse -Force
+          Copy-Item "build/backend" "$stage/backend" -Recurse -Force
           # 壳已自包含，不再分发运行环境安装脚本
           Copy-Item "shell-windows/scripts/README.txt" $stage -Force
           # AGPL-3.0 第 4 节：分发目标码时须附带许可证副本
           Copy-Item "LICENSE" "$stage/LICENSE.txt" -Force
 
-          Compress-Archive -Path "$stage/*" -DestinationPath "dist/X-iTrader-Client-$ver-Windows.zip" -Force
+          # 自检：壳、后端解释器、入口脚本三者齐备才算可发布
+          foreach ($p in @("X-iTrader.exe", "backend/runtime/python.exe", "backend/code/backend_entry.py")) {
+            if (-not (Test-Path "$stage/$p")) { Write-Error "成果物缺少 $p"; exit 1 }
+          }
+          $mb = [math]::Round(((Get-ChildItem $stage -Recurse -File | Measure-Object Length -Sum).Sum / 1MB), 1)
+          Write-Host "程序目录体积: $mb MB"
+
+          Compress-Archive -Path "$stage/*" -DestinationPath "build/X-iTrader-Client-$ver-Windows.zip" -Force
         shell: pwsh
 
       - name: Upload artifact
@@ -215,8 +228,8 @@ jobs:
         with:
           name: x-itrader-client-${{ runner.os }}
           path: |
-            dist/X-iTrader-Client-*-Mac.dmg
-            dist/X-iTrader-Client-*-Windows.zip
+            build/X-iTrader-Client-*-Mac.dmg
+            build/X-iTrader-Client-*-Windows.zip
 
   release:
     needs: [version, build]

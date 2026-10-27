@@ -1,33 +1,47 @@
 #!/usr/bin/env bash
-# macOS 生产打包：Swift 壳（release）+ PyInstaller headless 后端，组装独立可分发
-# 的 X-iTrader-Client.app。
+# macOS 生产打包：Swift 壳（release）+ 嵌入式 Python 后端，组装独立可分发的
+# X-iTrader-Client.app。
 #
 #   Contents/MacOS/X-iTrader-Client   Swift 壳（CFBundleExecutable）
-#   Contents/Resources/backend/       PyInstaller onedir 后端（backend 可执行 + 依赖）
+#   Contents/Resources/backend/       后端（runtime/ 嵌入式 Python + code/ 源码）
 #
 # 后端放 Resources 而非 MacOS：codesign 把 MacOS/ 下的数据目录（*.dist-info、
 # 非 Mach-O 可执行位文件）误判为未签名嵌套代码导致无法签名；Resources 只做
 # 资源封印，可整体通过 ad-hoc 签名。
 #
-# 后端启动时 chdir 到数据根 ~/.X-iTrader-Client（src/backend/__main__.py frozen
-# 分支），data/ 独立于 app 位置。
+# 后端由 specs/build_backend.py 拼装（python-build-standalone + uv），不再用
+# PyInstaller：src 需要以普通目录外置以支持差量更新，打包器的静态分析猜依赖
+# 历史上漏收过标准库模块。启动时后端 chdir 到数据根 ~/.X-iTrader-Client
+# （ITRADER_PACKAGED 分支），data/ 独立于 app 位置。
 #
 # 用法: ./build.sh
 set -euo pipefail
 cd "$(dirname "$0")"
+
+# 清理旧位置残留：dist/ 曾是 PyInstaller 时代的产物中间目录，已并入 build/，
+# 整目录移除避免遗留旧产物被误用（与服务端 build.sh 同一处理）
+rm -rf dist
 
 echo "==> swift build -c release"
 (cd shell && swift build -c release)
 BIN_PATH="$(cd shell && swift build -c release --show-bin-path)/iTrader"
 [ -x "$BIN_PATH" ] || { echo "错误: 未找到编译产物 $BIN_PATH"; exit 1; }
 
-echo "==> pyinstaller backend (onedir)"
-./.venv/bin/pyinstaller --workpath=build/backend --distpath=dist --noconfirm specs/backend.spec
-[ -x dist/backend/backend ] || { echo "错误: 未找到后端产物 dist/backend/backend"; exit 1; }
+echo "==> 拼装后端（嵌入式运行时 + uv 装依赖）"
+# 拼装脚本只用标准库：本地优先用 .venv 的解释器，CI（没有 .venv）退回系统 python3
+if [ -x ./.venv/bin/python ]; then
+    PY_BUILD=./.venv/bin/python
+else
+    PY_BUILD=python3
+fi
+"$PY_BUILD" specs/build_backend.py --output build/backend
+[ -d build/backend/runtime ] && [ -d build/backend/code ] || {
+    echo "错误: 后端产物不完整 build/backend/{runtime,code}"; exit 1
+}
 
 VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/__init__.py)"
 # 最终 .app 落到仓库上一级（X-iTrader/，与 X-iTrader-Server 等并列）便于分发；
-# PyInstaller 的 dist/ 中间产物仍留在仓库内（已被 .gitignore 忽略）。
+# 拼装中间产物 build/backend 留在仓库内（已被 .gitignore 忽略）。
 OUT_DIR="$(cd .. && pwd)"
 APP="$OUT_DIR/X-iTrader-Client.app"
 CONTENTS="$APP/Contents"
@@ -36,7 +50,7 @@ echo "==> 组装 $APP ($VERSION)"
 rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp "$BIN_PATH" "$CONTENTS/MacOS/X-iTrader-Client"
-cp -R dist/backend "$CONTENTS/Resources/backend"
+cp -R build/backend "$CONTENTS/Resources/backend"
 # AGPL-3.0 第 4 节：分发目标码时须附带许可证副本
 cp LICENSE "$CONTENTS/Resources/LICENSE"
 
@@ -71,5 +85,9 @@ find "$CONTENTS" -type f -print0 | while IFS= read -r -d '' f; do
     fi
 done
 codesign --force --sign - "$APP"
+# 逐文件签名用 `|| true`，签失败会静默漏过；整体复核一次，避免签坏的应用
+# 拖到运行期才被 Gatekeeper 拦下（本地验证与 CI 发版走同一份脚本）
+codesign --verify --strict "$APP"
+echo "==> 签名校验通过"
 
 echo "完成: $APP"
